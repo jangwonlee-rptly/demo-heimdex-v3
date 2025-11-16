@@ -1,0 +1,38 @@
+# Optional: GitHub Actions workflow to remind about deployment steps
+# This workflow runs on push to main and provides deployment guidance
+
+name: Deploy Reminder
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-reminder:
+    name: Deployment Guidance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Display deployment guidance
+        run: |
+          echo "✅ Code pushed to main branch!"
+          echo ""
+          echo "🚀 Ready to deploy?"
+          echo "=================="
+          echo ""
+          echo "1. Run pre-deployment checks:"
+          echo "   ./scripts/pre-deploy-check.sh"
+          echo ""
+          echo "2. Follow deployment guide:"
+          echo "   See DEPLOYMENT.md for detailed instructions"
+          echo ""
+          echo "3. Use deployment checklist:"
+          echo "   See DEPLOYMENT-CHECKLIST.md"
+          echo ""
+          echo "4. Recommended platform: Railway.app"
+          echo "   https://railway.app"
+          echo ""
+          echo "Need help? Check DEPLOYMENT.md for troubleshooting."

@@ -290,20 +290,43 @@ Check worker logs: `docker-compose logs worker`
 - Verify storage policies allow authenticated uploads
 - Check file size limits
 
+## Production Deployment
+
+Ready to deploy Heimdex? See the comprehensive deployment guide:
+
+📘 **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide with platform comparisons
+
+**Quick Start**:
+1. Run pre-deployment check: `./scripts/pre-deploy-check.sh`
+2. Choose platform (Railway.app recommended)
+3. Follow step-by-step guide in DEPLOYMENT.md
+4. Use [DEPLOYMENT-CHECKLIST.md](DEPLOYMENT-CHECKLIST.md) to track progress
+
+**Recommended Platform**: [Railway.app](https://railway.app)
+- Native Docker Compose support
+- Managed Redis included
+- Automatic GitHub deploys
+- Simple setup, production-ready
+- ~$20-30/month
+
+**Alternative Platforms**: Render.com, DigitalOcean App Platform, Fly.io
+
 ## Production Considerations
 
-For production deployment, consider:
+Key considerations for production deployment:
 
-1. **Environment Variables**: Use secrets management (e.g., AWS Secrets Manager, HashiCorp Vault)
+1. **Environment Variables**: Use platform secrets management (never commit `.env`)
 2. **Database**: Use Supabase connection pooler for better performance
-3. **Storage**: Configure CDN for video delivery
+3. **Storage**: Supabase Storage includes CDN
 4. **Worker Scaling**: Increase Dramatiq worker count for parallel processing
-5. **Monitoring**: Add application monitoring (e.g., Sentry, DataDog)
-6. **Rate Limiting**: Add rate limiting to API endpoints
-7. **Video Validation**: Add file type and size validation
-8. **Graceful Shutdown**: Implement proper signal handling in workers
-9. **Backup**: Regular database backups
-10. **HTTPS**: Use reverse proxy (nginx, Caddy) with SSL certificates
+5. **Monitoring**: Add error tracking (Sentry), uptime monitoring (Better Uptime)
+6. **Rate Limiting**: Add rate limiting to API endpoints if needed
+7. **Video Validation**: File type and size validation already implemented
+8. **Backup**: Supabase provides automatic daily backups (paid plans)
+9. **HTTPS**: Automatic on Railway/Render
+10. **Costs**: Budget ~$20-50/month (infrastructure + OpenAI API usage)
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed guidance on all topics.
 
 ## Technology Stack
 
