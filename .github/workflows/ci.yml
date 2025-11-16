@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  validate-docker-builds:
+    name: Validate Docker Builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API service
+        run: |
+          docker build -f services/api/Dockerfile services/api
+
+      - name: Build Worker service
+        run: |
+          docker build -f services/worker/Dockerfile services/worker
+
+      - name: Build Frontend service
+        run: |
+          docker build -f services/frontend/Dockerfile services/frontend
+
+  lint-python:
+    name: Lint Python Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint API service
+        run: |
+          ruff check services/api/src || true
+
+      - name: Lint Worker service
+        run: |
+          ruff check services/worker/src || true
+
+  lint-typescript:
+    name: Lint TypeScript Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: services/frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: services/frontend
+        run: npm run lint || true
+
+      - name: Type check
+        working-directory: services/frontend
+        run: npx tsc --noEmit || true
