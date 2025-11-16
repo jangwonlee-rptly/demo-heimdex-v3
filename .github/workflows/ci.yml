@@ -28,7 +28,12 @@ jobs:
 
       - name: Build Frontend service
         run: |
-          docker build -f services/frontend/Dockerfile services/frontend
+          docker build \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key \
+            --build-arg NEXT_PUBLIC_API_URL=http://localhost:8000 \
+            -f services/frontend/Dockerfile \
+            services/frontend
 
   lint-python:
     name: Lint Python Code
