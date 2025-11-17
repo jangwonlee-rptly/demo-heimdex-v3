@@ -12,12 +12,14 @@ export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signupSuccess, setSignupSuccess] = useState(false);
   const router = useRouter();
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setSignupSuccess(false);
 
     try {
       if (isSignUp) {
@@ -27,22 +29,19 @@ export default function LoginPage() {
         });
         if (error) throw error;
 
-        // After signup, sign in
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
+        // Show success message instead of auto sign-in
+        setSignupSuccess(true);
+        setIsSignUp(false);
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
-      }
 
-      // Redirect to dashboard (will check for profile)
-      router.push('/dashboard');
+        // Redirect to dashboard (will check for profile)
+        router.push('/dashboard');
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -87,6 +86,15 @@ export default function LoginPage() {
               minLength={6}
             />
           </div>
+
+          {signupSuccess && (
+            <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded">
+              <p className="font-semibold mb-1">Check your email!</p>
+              <p className="text-sm">
+                We've sent you a confirmation email from Supabase. Click the link in the email to complete your registration and activate your account.
+              </p>
+            </div>
+          )}
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
