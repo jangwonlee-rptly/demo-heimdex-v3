@@ -16,7 +16,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY services/worker/pyproject.toml ./
 
 # Install dependencies only (not the package itself)
 RUN uv pip install --system \
@@ -32,13 +32,16 @@ RUN uv pip install --system \
     pydantic>=2.5.0 \
     pydantic-settings>=2.1.0
 
+# Copy shared libraries (required for Dramatiq actors)
+COPY libs/ ./libs/
+
 # Copy application code
-COPY src/ ./src/
+COPY services/worker/src/ ./src/
 
 # Create temp directory
 RUN mkdir -p /tmp/heimdex
 
-# Set Python path
+# Set Python path (includes both /app for src/ and libs/)
 ENV PYTHONPATH=/app
 
 # Run Dramatiq worker

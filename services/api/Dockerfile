@@ -7,7 +7,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY services/api/pyproject.toml ./
 
 # Install dependencies only (not the package itself)
 RUN uv pip install --system \
@@ -24,13 +24,16 @@ RUN uv pip install --system \
     redis>=5.0.0 \
     openai>=1.10.0
 
+# Copy shared libraries (required for Dramatiq actors)
+COPY libs/ ./libs/
+
 # Copy application code
-COPY src/ ./src/
+COPY services/api/src/ ./src/
 
 # Expose port
 EXPOSE 8000
 
-# Set Python path
+# Set Python path (includes both /app and /app for libs/)
 ENV PYTHONPATH=/app
 
 # Run the application
