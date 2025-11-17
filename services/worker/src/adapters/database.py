@@ -25,6 +25,18 @@ class Database:
     def __init__(self, supabase_url: str, supabase_key: str):
         self.client: Client = create_client(supabase_url, supabase_key)
 
+    def get_user_profile(self, user_id: UUID) -> Optional[dict]:
+        """Get user profile by user_id."""
+        response = (
+            self.client.table("user_profiles")
+            .select("*")
+            .eq("user_id", str(user_id))
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0]
+
     def get_video(self, video_id: UUID) -> Optional[dict]:
         """Get video by ID."""
         response = (
@@ -74,6 +86,35 @@ class Database:
 
         self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
 
+    def save_transcript(self, video_id: UUID, transcript: str) -> None:
+        """
+        Save transcript to database as checkpoint.
+
+        This allows us to skip expensive Whisper transcription on retry.
+
+        Args:
+            video_id: Video ID
+            transcript: Full video transcript
+        """
+        logger.info(f"Saving transcript checkpoint for video {video_id} ({len(transcript)} chars)")
+        self.client.table("videos").update({"full_transcript": transcript}).eq("id", str(video_id)).execute()
+
+    def get_cached_transcript(self, video_id: UUID) -> Optional[str]:
+        """
+        Get cached transcript if it exists.
+
+        Args:
+            video_id: Video ID
+
+        Returns:
+            Cached transcript or None if not found
+        """
+        video = self.get_video(video_id)
+        if video and "full_transcript" in video and video["full_transcript"]:
+            logger.info(f"Found cached transcript for video {video_id} ({len(video['full_transcript'])} chars)")
+            return video["full_transcript"]
+        return None
+
     def create_scene(
         self,
         video_id: UUID,
@@ -104,6 +145,46 @@ class Database:
 
         response = self.client.table("video_scenes").insert(data).execute()
         return UUID(response.data[0]["id"])
+
+    def get_scene(self, video_id: UUID, index: int) -> Optional[dict]:
+        """
+        Get a specific scene by video_id and index.
+
+        Args:
+            video_id: Video ID
+            index: Scene index
+
+        Returns:
+            Scene data if exists, None otherwise
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("*")
+            .eq("video_id", str(video_id))
+            .eq("index", index)
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0]
+
+    def get_existing_scene_indices(self, video_id: UUID) -> set[int]:
+        """
+        Get set of scene indices that already exist for a video.
+
+        Args:
+            video_id: Video ID
+
+        Returns:
+            Set of scene indices that have been processed
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("index")
+            .eq("video_id", str(video_id))
+            .execute()
+        )
+        return {row["index"] for row in response.data}
 
     def delete_scenes_for_video(self, video_id: UUID) -> None:
         """Delete all scenes for a video (used for reprocessing)."""

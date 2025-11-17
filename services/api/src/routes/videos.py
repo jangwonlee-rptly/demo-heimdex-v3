@@ -1,5 +1,6 @@
 """Video management endpoints."""
 import logging
+import re
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
@@ -19,6 +20,65 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def sanitize_filename(filename: str, max_length: int = 255) -> str:
+    """
+    Sanitize filename to prevent issues with special characters.
+
+    - Preserves Unicode characters (Korean, etc.)
+    - Removes or replaces problematic characters
+    - Truncates to max length
+
+    Args:
+        filename: Original filename
+        max_length: Maximum allowed length
+
+    Returns:
+        Sanitized filename
+    """
+    # Remove null bytes
+    filename = filename.replace('\x00', '')
+
+    # Replace problematic characters that can cause issues in storage/filesystem
+    # But preserve most Unicode including Korean characters
+    problematic_chars = {
+        '\n': ' ',
+        '\r': ' ',
+        '\t': ' ',
+        '|': '-',
+        '<': '-',
+        '>': '-',
+        ':': '-',
+        '"': "'",
+        '\\': '-',
+        '/': '-',
+        '?': '',
+        '*': '',
+        '\0': '',
+    }
+
+    for old_char, new_char in problematic_chars.items():
+        filename = filename.replace(old_char, new_char)
+
+    # Replace multiple spaces with single space
+    filename = re.sub(r'\s+', ' ', filename)
+
+    # Trim whitespace
+    filename = filename.strip()
+
+    # Truncate to max length (accounting for multibyte UTF-8 characters)
+    if len(filename.encode('utf-8')) > max_length:
+        # Truncate by bytes, then decode
+        filename_bytes = filename.encode('utf-8')[:max_length]
+        # Remove incomplete multibyte sequences at the end
+        filename = filename_bytes.decode('utf-8', errors='ignore')
+
+    # Ensure filename is not empty
+    if not filename or filename == '':
+        filename = 'untitled'
+
+    return filename
+
+
 @router.post("/videos/upload-url", response_model=VideoUploadUrlResponse, status_code=status.HTTP_201_CREATED)
 async def create_upload_url(
     file_extension: str = Query("mp4", description="File extension (e.g., mp4, mov)"),
@@ -31,21 +91,48 @@ async def create_upload_url(
     The client should upload the video file using Supabase client library,
     then call POST /videos/{video_id}/uploaded to trigger processing.
     """
-    user_id = UUID(current_user.user_id)
+    try:
+        user_id = UUID(current_user.user_id)
 
-    # Generate storage path (user_id/video_id.extension)
-    video_id = uuid4()
-    storage_path = f"{user_id}/{video_id}.{file_extension}"
+        # Sanitize filename to handle Unicode and special characters
+        sanitized_filename = sanitize_filename(filename)
 
-    # Create video record in database with filename
-    video = db.create_video(owner_id=user_id, storage_path=storage_path, filename=filename)
+        if sanitized_filename != filename:
+            logger.info(
+                f"Filename was sanitized: original length={len(filename)}, "
+                f"sanitized length={len(sanitized_filename)}"
+            )
 
-    logger.info(f"Created video {video.id} for user {user_id}, filename={filename}, storage_path={storage_path}")
+        # Generate storage path (user_id/video_id.extension)
+        video_id = uuid4()
+        storage_path = f"{user_id}/{video_id}.{file_extension}"
 
-    return VideoUploadUrlResponse(
-        video_id=video.id,
-        storage_path=storage_path,
-    )
+        # Create video record in database with sanitized filename
+        video = db.create_video(
+            owner_id=user_id,
+            storage_path=storage_path,
+            filename=sanitized_filename
+        )
+
+        logger.info(
+            f"Created video {video.id} for user {user_id}, "
+            f"storage_path={storage_path}"
+        )
+
+        return VideoUploadUrlResponse(
+            video_id=video.id,
+            storage_path=storage_path,
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Failed to create upload URL for user {current_user.user_id}: {e}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create upload URL: {str(e)}"
+        )
 
 
 @router.post("/videos/{video_id}/uploaded", status_code=status.HTTP_202_ACCEPTED)
@@ -60,28 +147,42 @@ async def mark_video_uploaded(
     This should be called after the client has successfully uploaded
     the video file to the upload URL.
     """
-    user_id = UUID(current_user.user_id)
+    try:
+        user_id = UUID(current_user.user_id)
 
-    # Get video and verify ownership
-    video = db.get_video(video_id)
-    if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Video not found",
+        # Get video and verify ownership
+        video = db.get_video(video_id)
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video not found",
+            )
+
+        if video.owner_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this video",
+            )
+
+        # Enqueue processing job
+        task_queue.enqueue_video_processing(video_id)
+
+        logger.info(f"Enqueued processing for video {video_id}")
+
+        return {"status": "accepted", "message": "Video queued for processing"}
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(
+            f"Failed to enqueue video {video_id} for processing: {e}",
+            exc_info=True
         )
-
-    if video.owner_id != user_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this video",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to enqueue video for processing: {str(e)}"
         )
-
-    # Enqueue processing job
-    task_queue.enqueue_video_processing(video_id)
-
-    logger.info(f"Enqueued processing for video {video_id}")
-
-    return {"status": "accepted", "message": "Video queued for processing"}
 
 
 @router.post("/videos/{video_id}/process", status_code=status.HTTP_202_ACCEPTED)
@@ -94,28 +195,42 @@ async def trigger_video_processing(
 
     Useful for retrying failed uploads or processing videos that got stuck.
     """
-    user_id = UUID(current_user.user_id)
+    try:
+        user_id = UUID(current_user.user_id)
 
-    # Get video and verify ownership
-    video = db.get_video(video_id)
-    if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Video not found",
+        # Get video and verify ownership
+        video = db.get_video(video_id)
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video not found",
+            )
+
+        if video.owner_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this video",
+            )
+
+        # Enqueue processing job
+        task_queue.enqueue_video_processing(video_id)
+
+        logger.info(f"Manually triggered processing for video {video_id}")
+
+        return {"status": "accepted", "message": "Video queued for processing"}
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(
+            f"Failed to trigger processing for video {video_id}: {e}",
+            exc_info=True
         )
-
-    if video.owner_id != user_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this video",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger video processing: {str(e)}"
         )
-
-    # Enqueue processing job
-    task_queue.enqueue_video_processing(video_id)
-
-    logger.info(f"Manually triggered processing for video {video_id}")
-
-    return {"status": "accepted", "message": "Video queued for processing"}
 
 
 @router.get("/videos", response_model=VideoListResponse)

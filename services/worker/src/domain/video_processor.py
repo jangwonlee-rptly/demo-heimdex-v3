@@ -57,6 +57,11 @@ class VideoProcessor:
             owner_id = UUID(video["owner_id"])
             storage_path = video["storage_path"]
 
+            # Fetch user's preferred language
+            user_profile = db.get_user_profile(owner_id)
+            language = user_profile.get("preferred_language", "ko") if user_profile else "ko"
+            logger.info(f"Processing video in language: {language}")
+
             # Update status to PROCESSING
             db.update_video_status(video_id, VideoStatus.PROCESSING)
 
@@ -88,27 +93,50 @@ class VideoProcessor:
 
             logger.info(f"Detected {len(scenes)} scenes")
 
-            # Step 5: Extract audio and transcribe
-            logger.info("Checking for audio stream")
-            full_transcript = ""
+            # Step 5: Extract audio and transcribe (with caching for idempotency)
+            logger.info("Checking for cached transcript")
+            full_transcript = db.get_cached_transcript(video_id)
 
-            if ffmpeg.has_audio_stream(video_path):
-                logger.info("Extracting and transcribing audio")
-                audio_path = work_dir / "audio.mp3"
-                ffmpeg.extract_audio(video_path, audio_path)
-
-                full_transcript = openai_client.transcribe_audio(audio_path)
-                logger.info(f"Transcription complete: {len(full_transcript)} characters")
+            if full_transcript:
+                logger.info(f"Using cached transcript ({len(full_transcript)} characters)")
             else:
-                logger.warning("No audio stream found, skipping transcription")
+                logger.info("No cached transcript found, checking for audio stream")
                 full_transcript = ""
 
-            # Step 6: Process each scene
+                if ffmpeg.has_audio_stream(video_path):
+                    logger.info("Extracting and transcribing audio (this may take a while...)")
+                    audio_path = work_dir / "audio.mp3"
+                    ffmpeg.extract_audio(video_path, audio_path)
+
+                    full_transcript = openai_client.transcribe_audio(audio_path)
+                    logger.info(f"Transcription complete: {len(full_transcript)} characters")
+
+                    # Save transcript as checkpoint for future retries
+                    db.save_transcript(video_id, full_transcript)
+                else:
+                    logger.warning("No audio stream found, skipping transcription")
+
+            # Step 6: Process each scene (skip already processed scenes for idempotency)
             logger.info(f"Processing {len(scenes)} scenes")
+
+            # Get set of scene indices that have already been processed
+            existing_scene_indices = db.get_existing_scene_indices(video_id)
+            if existing_scene_indices:
+                logger.info(f"Found {len(existing_scene_indices)} already processed scenes, skipping them")
+
+            scenes_processed = 0
+            scenes_skipped = 0
+
             for scene in scenes:
+                # Skip if scene already exists (idempotent retry)
+                if scene.index in existing_scene_indices:
+                    logger.info(f"Scene {scene.index} already exists, skipping processing")
+                    scenes_skipped += 1
+                    continue
+
                 logger.info(f"Processing scene {scene.index + 1}/{len(scenes)}")
 
-                # Build sidecar
+                # Build sidecar with user's preferred language
                 sidecar = sidecar_builder.build_sidecar(
                     scene=scene,
                     video_path=video_path,
@@ -116,6 +144,7 @@ class VideoProcessor:
                     video_id=video_id,
                     owner_id=owner_id,
                     work_dir=work_dir,
+                    language=language,
                 )
 
                 # Save to database
@@ -132,6 +161,12 @@ class VideoProcessor:
                 )
 
                 logger.info(f"Scene {scene.index} saved with id={scene_id}")
+                scenes_processed += 1
+
+            logger.info(
+                f"Scene processing complete: {scenes_processed} processed, "
+                f"{scenes_skipped} skipped (already existed)"
+            )
 
             # Step 7: Upload video thumbnail (use first scene's thumbnail)
             if scenes:

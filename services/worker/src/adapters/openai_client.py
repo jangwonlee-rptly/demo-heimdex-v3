@@ -40,6 +40,7 @@ class OpenAIClient:
         self,
         image_paths: list[Path],
         transcript_segment: Optional[str] = None,
+        language: str = "ko",
     ) -> str:
         """
         Analyze scene visuals using GPT-4o with images.
@@ -47,11 +48,12 @@ class OpenAIClient:
         Args:
             image_paths: List of paths to keyframe images
             transcript_segment: Optional transcript segment for context
+            language: Language for the summary ('ko' or 'en')
 
         Returns:
             Visual summary text
         """
-        logger.info(f"Analyzing {len(image_paths)} keyframes with GPT-4o")
+        logger.info(f"Analyzing {len(image_paths)} keyframes with GPT-4o in language: {language}")
 
         # Encode images to base64
         image_contents = []
@@ -66,10 +68,18 @@ class OpenAIClient:
                     }
                 })
 
-        # Build prompt
-        prompt = "Describe what is happening in this video scene in 1-2 concise sentences. Focus on the main subjects, actions, and visual elements."
+        # Build prompt based on language
+        prompts = {
+            "ko": "이 비디오 장면에서 무슨 일이 일어나고 있는지 1-2문장으로 간결하게 설명하세요. 주요 주제, 행동 및 시각적 요소에 중점을 두세요.",
+            "en": "Describe what is happening in this video scene in 1-2 concise sentences. Focus on the main subjects, actions, and visual elements.",
+        }
+        prompt = prompts.get(language, prompts["ko"])  # Default to Korean
+
         if transcript_segment:
-            prompt += f"\n\nTranscript context: {transcript_segment}"
+            if language == "ko":
+                prompt += f"\n\n대본 컨텍스트: {transcript_segment}"
+            else:
+                prompt += f"\n\nTranscript context: {transcript_segment}"
 
         # Create messages
         messages = [

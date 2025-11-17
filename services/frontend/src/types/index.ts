@@ -5,6 +5,7 @@ export interface UserProfile {
   full_name: string;
   industry?: string;
   job_title?: string;
+  preferred_language: string;
   marketing_consent: boolean;
   marketing_consent_at?: string;
   created_at: string;

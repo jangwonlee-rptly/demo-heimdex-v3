@@ -36,6 +36,7 @@ class Database:
         full_name: str,
         industry: Optional[str] = None,
         job_title: Optional[str] = None,
+        preferred_language: str = "ko",
         marketing_consent: bool = False,
     ) -> UserProfile:
         """Create a new user profile."""
@@ -46,6 +47,7 @@ class Database:
             "full_name": full_name,
             "industry": industry,
             "job_title": job_title,
+            "preferred_language": preferred_language,
             "marketing_consent": marketing_consent,
             "marketing_consent_at": marketing_consent_at.isoformat() if marketing_consent_at else None,
         }
@@ -59,6 +61,7 @@ class Database:
         full_name: Optional[str] = None,
         industry: Optional[str] = None,
         job_title: Optional[str] = None,
+        preferred_language: Optional[str] = None,
         marketing_consent: Optional[bool] = None,
     ) -> Optional[UserProfile]:
         """Update user profile."""
@@ -76,6 +79,8 @@ class Database:
             update_data["industry"] = industry
         if job_title is not None:
             update_data["job_title"] = job_title
+        if preferred_language is not None:
+            update_data["preferred_language"] = preferred_language
         if marketing_consent is not None:
             update_data["marketing_consent"] = marketing_consent
             # Set marketing_consent_at if changing from False to True

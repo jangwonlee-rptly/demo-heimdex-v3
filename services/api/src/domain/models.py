@@ -23,6 +23,7 @@ class UserProfile:
         full_name: str,
         industry: Optional[str] = None,
         job_title: Optional[str] = None,
+        preferred_language: str = "ko",
         marketing_consent: bool = False,
         marketing_consent_at: Optional[datetime] = None,
         created_at: Optional[datetime] = None,
@@ -32,6 +33,7 @@ class UserProfile:
         self.full_name = full_name
         self.industry = industry
         self.job_title = job_title
+        self.preferred_language = preferred_language
         self.marketing_consent = marketing_consent
         self.marketing_consent_at = marketing_consent_at
         self.created_at = created_at
@@ -54,6 +56,7 @@ class Video:
         height: Optional[int] = None,
         video_created_at: Optional[datetime] = None,
         thumbnail_url: Optional[str] = None,
+        full_transcript: Optional[str] = None,
         error_message: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
@@ -69,6 +72,7 @@ class Video:
         self.height = height
         self.video_created_at = video_created_at
         self.thumbnail_url = thumbnail_url
+        self.full_transcript = full_transcript
         self.error_message = error_message
         self.created_at = created_at
         self.updated_at = updated_at

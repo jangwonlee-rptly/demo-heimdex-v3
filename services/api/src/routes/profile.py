@@ -45,6 +45,7 @@ async def get_user_profile(current_user: User = Depends(get_current_user)):
         full_name=profile.full_name,
         industry=profile.industry,
         job_title=profile.job_title,
+        preferred_language=profile.preferred_language,
         marketing_consent=profile.marketing_consent,
         marketing_consent_at=profile.marketing_consent_at,
         created_at=profile.created_at,
@@ -75,6 +76,7 @@ async def create_or_update_user_profile(
             full_name=profile_data.full_name,
             industry=profile_data.industry,
             job_title=profile_data.job_title,
+            preferred_language=profile_data.preferred_language,
             marketing_consent=profile_data.marketing_consent,
         )
     else:
@@ -85,6 +87,7 @@ async def create_or_update_user_profile(
             full_name=profile_data.full_name,
             industry=profile_data.industry,
             job_title=profile_data.job_title,
+            preferred_language=profile_data.preferred_language,
             marketing_consent=profile_data.marketing_consent,
         )
 
@@ -99,6 +102,7 @@ async def create_or_update_user_profile(
         full_name=profile.full_name,
         industry=profile.industry,
         job_title=profile.job_title,
+        preferred_language=profile.preferred_language,
         marketing_consent=profile.marketing_consent,
         marketing_consent_at=profile.marketing_consent_at,
         created_at=profile.created_at,

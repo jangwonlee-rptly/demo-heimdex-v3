@@ -14,6 +14,7 @@ class UserProfileCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
     industry: Optional[str] = Field(None, max_length=255)
     job_title: Optional[str] = Field(None, max_length=255)
+    preferred_language: str = Field("ko", pattern="^(ko|en)$")
     marketing_consent: bool = False
 
 
@@ -23,6 +24,7 @@ class UserProfileUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     industry: Optional[str] = Field(None, max_length=255)
     job_title: Optional[str] = Field(None, max_length=255)
+    preferred_language: Optional[str] = Field(None, pattern="^(ko|en)$")
     marketing_consent: Optional[bool] = None
 
 
@@ -33,6 +35,7 @@ class UserProfileResponse(BaseModel):
     full_name: str
     industry: Optional[str]
     job_title: Optional[str]
+    preferred_language: str
     marketing_consent: bool
     marketing_consent_at: Optional[datetime]
     created_at: datetime

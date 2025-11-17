@@ -48,6 +48,7 @@ class SidecarBuilder:
         video_id: UUID,
         owner_id: UUID,
         work_dir: Path,
+        language: str = "ko",
     ) -> SceneSidecar:
         """
         Build a complete sidecar for a scene.
@@ -59,11 +60,12 @@ class SidecarBuilder:
             video_id: Video ID for thumbnail path
             owner_id: Owner ID for thumbnail path
             work_dir: Working directory for temporary files
+            language: Language for summaries and embeddings ('ko' or 'en')
 
         Returns:
             SceneSidecar object
         """
-        logger.info(f"Building sidecar for {scene}")
+        logger.info(f"Building sidecar for {scene} in language: {language}")
 
         # Extract transcript segment (simple time-based slicing)
         # This is a rough approximation - ideally we'd use word-level timestamps
@@ -76,14 +78,14 @@ class SidecarBuilder:
             video_path, scene, work_dir
         )
 
-        # Analyze visuals with GPT-4o
+        # Analyze visuals with GPT-4o in the specified language
         visual_summary = openai_client.analyze_scene_visuals(
-            keyframe_paths, transcript_segment
+            keyframe_paths, transcript_segment, language=language
         )
 
-        # Build combined text for embedding
+        # Build combined text for embedding in the specified language
         combined_text = SidecarBuilder._build_combined_text(
-            visual_summary, transcript_segment
+            visual_summary, transcript_segment, language=language
         )
 
         # Generate embedding
@@ -202,24 +204,32 @@ class SidecarBuilder:
         return keyframe_paths
 
     @staticmethod
-    def _build_combined_text(visual_summary: str, transcript: str) -> str:
+    def _build_combined_text(visual_summary: str, transcript: str, language: str = "ko") -> str:
         """
         Build combined text optimized for search.
 
         Args:
             visual_summary: Visual description of the scene
             transcript: Transcript segment
+            language: Language for the labels ('ko' or 'en')
 
         Returns:
             Combined text for embedding
         """
         parts = []
 
+        # Language-specific labels
+        labels = {
+            "ko": {"visual": "시각", "audio": "오디오"},
+            "en": {"visual": "Visual", "audio": "Audio"},
+        }
+        lang_labels = labels.get(language, labels["ko"])
+
         if visual_summary:
-            parts.append(f"Visual: {visual_summary}")
+            parts.append(f"{lang_labels['visual']}: {visual_summary}")
 
         if transcript:
-            parts.append(f"Audio: {transcript}")
+            parts.append(f"{lang_labels['audio']}: {transcript}")
 
         combined = " | ".join(parts)
 

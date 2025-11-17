@@ -10,6 +10,7 @@ export default function OnboardingPage() {
   const [fullName, setFullName] = useState('');
   const [industry, setIndustry] = useState('');
   const [jobTitle, setJobTitle] = useState('');
+  const [preferredLanguage, setPreferredLanguage] = useState('ko'); // Default to Korean
   const [marketingConsent, setMarketingConsent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +39,7 @@ export default function OnboardingPage() {
           full_name: fullName,
           industry: industry || null,
           job_title: jobTitle || null,
+          preferred_language: preferredLanguage,
           marketing_consent: marketingConsent,
         }),
       });
@@ -100,6 +102,25 @@ export default function OnboardingPage() {
               className="input w-full"
               placeholder="e.g., Software Engineer, Product Manager"
             />
+          </div>
+
+          <div>
+            <label htmlFor="preferredLanguage" className="block text-sm font-medium text-gray-700 mb-1">
+              Preferred Language <span className="text-red-500">*</span>
+            </label>
+            <p className="text-sm text-gray-500 mb-2">
+              Choose the language for video transcriptions, summaries, and search results
+            </p>
+            <select
+              id="preferredLanguage"
+              value={preferredLanguage}
+              onChange={(e) => setPreferredLanguage(e.target.value)}
+              className="input w-full"
+              required
+            >
+              <option value="ko">한국어 (Korean)</option>
+              <option value="en">English</option>
+            </select>
           </div>
 
           <div className="flex items-start">

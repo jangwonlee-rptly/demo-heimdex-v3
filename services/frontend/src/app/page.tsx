@@ -49,7 +49,7 @@ export default function LandingPage() {
                 Sign In
               </button>
               <button
-                onClick={() => window.location.href = 'mailto:contact@heimdex.com?subject=Demo Request'}
+                onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2 rounded-lg hover:shadow-lg transition transform hover:scale-105"
               >
                 Get Demo
@@ -74,7 +74,7 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = 'mailto:contact@heimdex.com?subject=Demo Request'}
+              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
               Request a Demo
@@ -209,13 +209,13 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = 'mailto:contact@heimdex.com?subject=Demo Request&body=I would like to schedule a demo of Heimdex.%0D%0A%0D%0AName:%0D%0ACompany:%0D%0APhone:%0D%0A'}
+              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="bg-white text-blue-600 px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
               Schedule a Demo
             </button>
             <button
-              onClick={() => window.location.href = 'mailto:contact@heimdex.com?subject=General Inquiry'}
+              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="border-2 border-white text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-white/10 transition"
             >
               Contact Sales

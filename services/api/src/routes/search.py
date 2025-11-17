@@ -28,9 +28,13 @@ async def search_scenes(
     user_id = UUID(current_user.user_id)
     start_time = time.time()
 
+    # Get user's preferred language for logging
+    user_profile = db.get_user_profile(user_id)
+    user_language = user_profile.preferred_language if user_profile else "ko"
+
     logger.info(
-        f"Search request from user {user_id}: query='{request.query}', "
-        f"video_id={request.video_id}, limit={request.limit}"
+        f"Search request from user {user_id} (language: {user_language}): "
+        f"query='{request.query}', video_id={request.video_id}, limit={request.limit}"
     )
 
     # If video_id is provided, verify user has access to it
