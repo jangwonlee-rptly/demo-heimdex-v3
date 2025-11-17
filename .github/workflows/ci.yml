@@ -20,11 +20,11 @@ jobs:
 
       - name: Build API service
         run: |
-          docker build -f services/api/Dockerfile services/api
+          docker build -f services/api/Dockerfile .
 
       - name: Build Worker service
         run: |
-          docker build -f services/worker/Dockerfile services/worker
+          docker build -f services/worker/Dockerfile .
 
       - name: Build Frontend service
         run: |
