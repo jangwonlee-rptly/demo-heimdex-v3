@@ -67,6 +67,7 @@ async def search_scenes(
         limit=request.limit,
         threshold=request.threshold,
         video_id=request.video_id,
+        user_id=user_id,
     )
 
     # Calculate latency

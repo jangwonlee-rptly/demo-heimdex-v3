@@ -193,6 +193,7 @@ class Database:
         limit: int = 10,
         threshold: float = 0.5,
         video_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
     ) -> list[VideoScene]:
         """Search for scenes using vector similarity."""
         # Convert embedding list to pgvector format
@@ -203,6 +204,7 @@ class Database:
             "match_threshold": threshold,
             "match_count": limit,
             "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id) if user_id else None,
         }
 
         response = self.client.rpc("search_scenes_by_embedding", params).execute()
