@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 
+    # Parallel processing configuration
+    max_scene_workers: int = 3  # Max concurrent scenes to process in parallel
+    max_api_concurrency: int = 3  # Max concurrent API calls (respects rate limits)
+
 
 # Global settings instance
 settings = Settings()
