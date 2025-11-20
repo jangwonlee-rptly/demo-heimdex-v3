@@ -23,13 +23,34 @@ class Settings(BaseSettings):
     # Processing configuration
     temp_dir: str = "/tmp/heimdex"
     max_keyframes_per_scene: int = 3
-    scene_detection_threshold: float = 27.0  # pyscenedetect default
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+
+    # Scene detection configuration
+    scene_detector: str = "adaptive"  # Scene detection strategy: "adaptive" or "content"
+    scene_min_len_seconds: float = 1.0  # Minimum scene length in seconds
+
+    # AdaptiveDetector parameters (used when scene_detector="adaptive")
+    scene_adaptive_threshold: float = 3.0  # Adaptive threshold for scene changes
+    scene_adaptive_window_width: int = 2  # Rolling window width for adaptive detection
+    scene_adaptive_min_content_val: float = 15.0  # Minimum content value to trigger detection
+
+    # ContentDetector parameters (used when scene_detector="content")
+    scene_content_threshold: float = 27.0  # Content threshold (pyscenedetect default)
 
     # Parallel processing configuration
     max_scene_workers: int = 3  # Max concurrent scenes to process in parallel
     max_api_concurrency: int = 3  # Max concurrent API calls (respects rate limits)
+
+    # Visual semantics optimization configuration
+    visual_brightness_threshold: float = 15.0  # Min brightness (0-255) for informative frames
+    visual_blur_threshold: float = 100.0  # Min blur score (Laplacian variance) for sharp frames
+    visual_semantics_enabled: bool = True  # Enable/disable visual semantics entirely
+    visual_semantics_model: str = "gpt-4o-mini"  # Model for visual analysis (cheaper variant)
+    visual_semantics_max_tokens: int = 128  # Max tokens for visual analysis response
+    visual_semantics_temperature: float = 0.0  # Temperature for visual analysis (0 = deterministic)
+    visual_semantics_include_entities: bool = True  # Include main_entities in JSON response
+    visual_semantics_include_actions: bool = True  # Include actions in JSON response
 
 
 # Global settings instance

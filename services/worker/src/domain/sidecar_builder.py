@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from .scene_detector import Scene
+from .frame_quality import frame_quality_checker
 from ..adapters.openai_client import openai_client
 from ..adapters.ffmpeg import ffmpeg
 from ..adapters.supabase import storage
@@ -49,9 +50,16 @@ class SidecarBuilder:
         owner_id: UUID,
         work_dir: Path,
         language: str = "ko",
+        video_duration_s: Optional[float] = None,
     ) -> SceneSidecar:
         """
-        Build a complete sidecar for a scene.
+        Build a complete sidecar for a scene with optimized visual semantics.
+
+        This method implements:
+        1. Frame quality pre-filtering to avoid OpenAI calls for bad frames
+        2. Transcript-first strategy (prefer ASR over weak visuals)
+        3. Strict JSON schema prompts for token efficiency
+        4. Configurable visual semantics processing
 
         Args:
             scene: Scene object with time boundaries
@@ -61,47 +69,130 @@ class SidecarBuilder:
             owner_id: Owner ID for thumbnail path
             work_dir: Working directory for temporary files
             language: Language for summaries and embeddings ('ko' or 'en')
+            video_duration_s: Optional video duration for transcript extraction
 
         Returns:
             SceneSidecar object
         """
         logger.info(f"Building sidecar for {scene} in language: {language}")
 
+        # Use scene end time as fallback for video duration
+        if video_duration_s is None:
+            video_duration_s = scene.end_s
+
         # Extract transcript segment (simple time-based slicing)
         # This is a rough approximation - ideally we'd use word-level timestamps
         transcript_segment = SidecarBuilder._extract_transcript_segment(
-            full_transcript, scene, 60.0  # Assume 60s total duration for now
+            full_transcript, scene, video_duration_s
         )
 
-        # Extract keyframes
-        keyframe_paths = SidecarBuilder._extract_keyframes(
-            video_path, scene, work_dir
+        # Check if transcript is meaningful
+        has_meaningful_transcript = (
+            transcript_segment and len(transcript_segment.strip()) > 20
         )
 
-        # Analyze visuals with GPT-4o in the specified language
-        visual_summary = openai_client.analyze_scene_visuals(
-            keyframe_paths, transcript_segment, language=language
-        )
+        # Initialize visual summary
+        visual_summary = ""
+        thumbnail_url = None
+        best_frame_path = None
 
-        # Build combined text for embedding in the specified language
+        # Decide whether to process visual semantics
+        should_process_visuals = settings.visual_semantics_enabled
+
+        if should_process_visuals:
+            # Extract keyframes
+            keyframe_paths = SidecarBuilder._extract_keyframes(
+                video_path, scene, work_dir
+            )
+
+            if keyframe_paths:
+                # Find best quality frame
+                best_frame_path = frame_quality_checker.find_best_frame(keyframe_paths)
+
+                if best_frame_path:
+                    logger.info(
+                        f"Found informative frame for scene {scene.index}, "
+                        f"calling OpenAI for visual analysis"
+                    )
+
+                    # Call optimized visual analysis (single frame, strict JSON)
+                    visual_result = openai_client.analyze_scene_visuals_optimized(
+                        best_frame_path,
+                        transcript_segment if has_meaningful_transcript else None,
+                        language=language,
+                    )
+
+                    # Process result
+                    if visual_result and visual_result.get("status") == "ok":
+                        # Build visual summary from JSON fields
+                        parts = []
+
+                        description = visual_result.get("description", "")
+                        if description:
+                            parts.append(description)
+
+                        # Add entities if available
+                        if settings.visual_semantics_include_entities:
+                            entities = visual_result.get("main_entities", [])
+                            if entities:
+                                if language == "ko":
+                                    parts.append(f"주요 대상: {', '.join(entities)}")
+                                else:
+                                    parts.append(f"Main entities: {', '.join(entities)}")
+
+                        # Add actions if available
+                        if settings.visual_semantics_include_actions:
+                            actions = visual_result.get("actions", [])
+                            if actions:
+                                if language == "ko":
+                                    parts.append(f"행동: {', '.join(actions)}")
+                                else:
+                                    parts.append(f"Actions: {', '.join(actions)}")
+
+                        visual_summary = ". ".join(parts)
+                        logger.info(f"Visual summary: {visual_summary[:100]}...")
+                    else:
+                        logger.info(
+                            f"Visual analysis returned no_content for scene {scene.index}, "
+                            f"skipping visual semantics"
+                        )
+                else:
+                    logger.info(
+                        f"No informative frames found for scene {scene.index}, "
+                        f"skipping OpenAI call (saved tokens)"
+                    )
+
+                # Upload thumbnail (use best frame if available, otherwise first)
+                thumbnail_frame = best_frame_path or keyframe_paths[0]
+                thumbnail_storage_path = (
+                    f"{owner_id}/{video_id}/thumbnails/scene_{scene.index}.jpg"
+                )
+                thumbnail_url = storage.upload_file(
+                    thumbnail_frame,
+                    thumbnail_storage_path,
+                    content_type="image/jpeg",
+                )
+            else:
+                logger.warning(f"No keyframes extracted for scene {scene.index}")
+
+        # Build combined text for embedding (transcript-first strategy)
         combined_text = SidecarBuilder._build_combined_text(
             visual_summary, transcript_segment, language=language
         )
 
+        # If combined text is empty or too short, use a placeholder
+        if len(combined_text.strip()) < 10:
+            if language == "ko":
+                combined_text = "내용 없음"
+            else:
+                combined_text = "No content"
+            logger.warning(
+                f"Scene {scene.index} has no meaningful content "
+                f"(no transcript, no visual summary)"
+            )
+
         # Generate embedding
         embedding = openai_client.create_embedding(combined_text)
-
-        # Upload thumbnail (first keyframe)
-        thumbnail_url = None
-        if keyframe_paths:
-            thumbnail_storage_path = (
-                f"{owner_id}/{video_id}/thumbnails/scene_{scene.index}.jpg"
-            )
-            thumbnail_url = storage.upload_file(
-                keyframe_paths[0],
-                thumbnail_storage_path,
-                content_type="image/jpeg",
-            )
 
         logger.info(f"Sidecar built for scene {scene.index}")
 

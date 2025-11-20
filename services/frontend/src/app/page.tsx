@@ -83,7 +83,7 @@ export default function LandingPage() {
               onClick={() => router.push('/login')}
               className="border-2 border-gray-300 text-gray-700 px-8 py-4 rounded-lg text-lg font-semibold hover:border-gray-400 hover:bg-gray-50 transition"
             >
-              Sign In
+              Get Started
             </button>
           </div>
         </div>

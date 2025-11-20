@@ -33,6 +33,7 @@ class VideoProcessor:
         work_dir: Path,
         language: str,
         total_scenes: int,
+        video_duration_s: float,
     ) -> tuple[bool, str, int]:
         """
         Process a single scene (used for parallel execution).
@@ -46,6 +47,7 @@ class VideoProcessor:
             work_dir: Working directory
             language: Language for processing
             total_scenes: Total number of scenes (for logging)
+            video_duration_s: Video duration in seconds
 
         Returns:
             Tuple of (success, scene_id or error_message, scene_index)
@@ -64,6 +66,7 @@ class VideoProcessor:
                     owner_id=owner_id,
                     work_dir=work_dir,
                     language=language,
+                    video_duration_s=video_duration_s,
                 )
 
             # Save to database (outside semaphore to reduce lock time)
@@ -152,12 +155,11 @@ class VideoProcessor:
 
             # Step 4: Detect scenes
             logger.info("Detecting scenes")
-            scenes = scene_detector.detect_scenes(video_path)
-
-            if not scenes:
-                logger.warning("No scenes detected, creating single scene for entire video")
-                from .scene_detector import Scene
-                scenes = [Scene(index=0, start_s=0.0, end_s=metadata.duration_s)]
+            scenes = scene_detector.detect_scenes(
+                video_path,
+                video_duration_s=metadata.duration_s,
+                fps=metadata.frame_rate,
+            )
 
             logger.info(f"Detected {len(scenes)} scenes")
 
@@ -220,6 +222,7 @@ class VideoProcessor:
                             work_dir,
                             language,
                             len(scenes),
+                            metadata.duration_s,
                         ): scene
                         for scene in scenes_to_process
                     }
