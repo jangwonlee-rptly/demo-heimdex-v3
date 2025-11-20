@@ -10,6 +10,8 @@ from ..domain.schemas import (
     VideoUploadedRequest,
     VideoResponse,
     VideoListResponse,
+    VideoDetailsResponse,
+    VideoSceneResponse,
 )
 from ..adapters.database import db
 from ..adapters.supabase import storage
@@ -299,4 +301,73 @@ async def get_video(
         error_message=video.error_message,
         created_at=video.created_at,
         updated_at=video.updated_at,
+    )
+
+
+@router.get("/videos/{video_id}/details", response_model=VideoDetailsResponse)
+async def get_video_details(
+    video_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get detailed information for a specific video, including all scenes.
+
+    This endpoint returns comprehensive video data for the details page:
+    - Video metadata (filename, duration, resolution, etc.)
+    - Full transcript (if available)
+    - All scenes with their summaries, transcripts, and thumbnails
+    """
+    user_id = UUID(current_user.user_id)
+
+    # Get video and verify ownership
+    video = db.get_video(video_id)
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found",
+        )
+
+    if video.owner_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this video",
+        )
+
+    # Get all scenes for the video
+    scenes = db.get_video_scenes(video_id)
+
+    return VideoDetailsResponse(
+        video=VideoResponse(
+            id=video.id,
+            owner_id=video.owner_id,
+            storage_path=video.storage_path,
+            status=video.status,
+            filename=video.filename,
+            duration_s=video.duration_s,
+            frame_rate=video.frame_rate,
+            width=video.width,
+            height=video.height,
+            video_created_at=video.video_created_at,
+            thumbnail_url=video.thumbnail_url,
+            error_message=video.error_message,
+            created_at=video.created_at,
+            updated_at=video.updated_at,
+        ),
+        full_transcript=video.full_transcript,
+        scenes=[
+            VideoSceneResponse(
+                id=scene.id,
+                video_id=scene.video_id,
+                index=scene.index,
+                start_s=scene.start_s,
+                end_s=scene.end_s,
+                transcript_segment=scene.transcript_segment,
+                visual_summary=scene.visual_summary,
+                combined_text=scene.combined_text,
+                thumbnail_url=scene.thumbnail_url,
+                created_at=scene.created_at,
+            )
+            for scene in scenes
+        ],
+        total_scenes=len(scenes),
     )

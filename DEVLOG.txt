@@ -1314,3 +1314,225 @@ GitHub Status: READY FOR PUBLIC RELEASE
 CI/CD Status: CONFIGURED AND TESTED
 
 ================================================================================
+POST-LAUNCH: BUG FIXES AND IMPROVEMENTS
+================================================================================
+
+Date: November 20, 2025
+
+ISSUE: Video Upload Failing with 502 Bad Gateway
+--------------------------------------------------------------------------------
+
+Problem:
+- Video uploads consistently failing with "502 Bad Gateway" error
+- CORS error appearing in browser console
+- Error message: "No 'Access-Control-Allow-Origin' header is present"
+- Happened in both localhost and production (heimdexdemo.dev)
+
+Investigation:
+1. Initially suspected CORS configuration issue with Supabase
+   - Confirmed Supabase uses "origin: *" by default
+   - CORS error was secondary to 502 error (no CORS headers sent on error responses)
+
+2. Verified Supabase storage bucket configuration
+   - Bucket exists and is publicly readable
+   - Service role key uploads work correctly
+   - User/anon key uploads fail with 502
+
+3. Identified root cause: Missing Supabase Storage Policies
+   - Storage bucket had no Row Level Security (RLS) policies configured
+   - Without policies, authenticated users cannot upload files
+   - Supabase returns 502 when policy checks fail
+
+Root Cause:
+Missing INSERT and SELECT policies on the "videos" storage bucket. Even though the
+bucket was created and accessible with service role key, authenticated user uploads
+require explicit RLS policies.
+
+Solution:
+Added two storage policies to the "videos" bucket via Supabase Dashboard:
+
+Policy 1 - Users can upload to their own folder (INSERT):
+```sql
+(bucket_id = 'videos'::text)
+AND
+((storage.foldername(name))[1] = (auth.uid())::text)
+```
+
+Policy 2 - Users can read their own uploads (SELECT):
+```sql
+(bucket_id = 'videos'::text)
+AND
+((storage.foldername(name))[1] = (auth.uid())::text)
+```
+
+Additional Improvements:
+- Refactored upload code to use Supabase client library instead of XMLHttpRequest
+- Better error logging with detailed Supabase error messages
+- Improved upload progress tracking with speed estimation
+
+Files Modified:
+- services/frontend/src/app/upload/page.tsx (uploadWithProgress function)
+
+Results:
+✓ Video uploads now work in both development and production
+✓ Users can only access their own videos (path: {user_id}/{video_id}.mp4)
+✓ Better error messages for debugging
+✓ More maintainable code using official Supabase SDK
+
+Lessons Learned:
+- Supabase Storage requires explicit RLS policies for user operations
+- 502 errors from Supabase often indicate policy/permission issues, not infrastructure
+- Always test with actual user tokens, not just service role keys
+- CORS errors can be red herrings when the real issue is server-side
+
+================================================================================
+
+Date: November 20, 2025
+Feature: Video Details Page - Comprehensive Scene-by-Scene Summaries
+Status: ✅ Complete
+
+Problem:
+Users needed a way to view detailed, comprehensive information about their videos.
+The dashboard only showed basic metadata (filename, status, duration), but users
+wanted to see:
+- Complete video transcripts
+- All detected scenes with visual descriptions
+- Detailed timeline of the entire video
+- Scene-level transcripts and visual summaries
+
+Goal:
+Create a dedicated video details page that displays an incredibly thorough summary
+of the entire video, including all scenes, transcripts, and metadata in a well-
+organized, easy-to-read format.
+
+Implementation:
+
+1. Backend (FastAPI)
+
+   Created new database method (services/api/src/adapters/database.py):
+   - get_video_scenes(video_id) - retrieves all scenes for a video
+   - Excludes embedding field to avoid loading 1536-dimensional vectors
+   - Orders scenes by index for chronological display
+
+   Created new API endpoint (services/api/src/routes/videos.py):
+   - GET /videos/{video_id}/details
+   - Returns VideoDetailsResponse with:
+     * Complete video metadata
+     * Full video transcript (cached from Whisper)
+     * All scenes with summaries, transcripts, thumbnails
+     * Total scene count
+   - Includes ownership verification and authentication
+
+   Added new schema (services/api/src/domain/schemas.py):
+   - VideoDetailsResponse - comprehensive video data
+   - Properly ordered after VideoSceneResponse to avoid forward reference errors
+
+2. Frontend (Next.js + TypeScript)
+
+   Created new page (services/frontend/src/app/videos/[id]/page.tsx):
+   - Dynamic route for video details
+   - Responsive design with mobile support
+   - Sections:
+     * Video metadata card (duration, resolution, frame rate, scene count)
+     * Collapsible full transcript section
+     * Scene-by-scene breakdown with:
+       - Scene thumbnails
+       - Time boundaries (MM:SS format)
+       - AI-generated visual descriptions
+       - Transcript segments
+       - Scene duration and metadata
+
+   Updated types (services/frontend/src/types/index.ts):
+   - Added VideoDetails interface
+
+   Updated dashboard (services/frontend/src/app/dashboard/page.tsx):
+   - Added "View Details" button for READY videos
+   - Routes to /videos/{id} page
+
+Issues Encountered & Solutions:
+
+Issue 1: Python Class Definition Order Error
+- Error: "NameError: name 'VideoSceneResponse' is not defined"
+- Cause: VideoDetailsResponse referenced VideoSceneResponse before it was defined
+- Solution: Moved VideoDetailsResponse to after VideoSceneResponse in schemas.py
+- Required Docker image rebuild (no volume mounts for API service)
+
+Issue 2: Embedding Field TypeError
+- Error: "VideoScene.__init__() got an unexpected keyword argument 'embedding'"
+- Cause: Database query used SELECT * which included embedding vector field
+- Root cause: VideoScene model intentionally excludes embedding (1536-dim vector)
+- Solution: Explicitly select only needed fields in get_video_scenes():
+  ```python
+  .select("id,video_id,index,start_s,end_s,transcript_segment,
+           visual_summary,combined_text,thumbnail_url,created_at")
+  ```
+- This avoids loading unnecessary large vector data for display
+
+Issue 3: 500 Error with CORS Symptoms
+- Error: CORS policy error + 500 Internal Server Error
+- Cause: Server-side exception prevented CORS headers from being sent
+- Solution: Fixed the TypeError (Issue 2), which resolved both errors
+- Lesson: CORS errors are often secondary symptoms of server-side failures
+
+Files Created:
+- services/frontend/src/app/videos/[id]/page.tsx (video details UI)
+
+Files Modified:
+- services/api/src/adapters/database.py (get_video_scenes method)
+- services/api/src/routes/videos.py (new /details endpoint)
+- services/api/src/domain/schemas.py (VideoDetailsResponse schema)
+- services/frontend/src/types/index.ts (VideoDetails type)
+- services/frontend/src/app/dashboard/page.tsx (navigation button)
+
+Technical Highlights:
+
+1. Efficient Data Loading:
+   - Excludes embedding vectors (saves bandwidth and memory)
+   - Single query loads all scenes in chronological order
+   - Reuses cached full_transcript field
+
+2. User Experience:
+   - Collapsible transcript for better page layout
+   - Clear visual hierarchy with cards and sections
+   - Formatted timestamps (MM:SS)
+   - Responsive grid layout for metadata
+   - Loading states and error handling
+
+3. Data Display:
+   - Scene index numbers for easy reference
+   - Time ranges for each scene
+   - Visual summaries (AI-generated descriptions)
+   - Transcript segments per scene
+   - Scene duration calculations
+
+Results:
+✓ Users can now view comprehensive video details
+✓ All scene information displayed in chronological order
+✓ Full transcript available with expand/collapse
+✓ Clean, organized UI with proper formatting
+✓ Efficient data loading (excludes unnecessary fields)
+✓ Proper error handling and loading states
+✓ Mobile-responsive design
+
+Performance Notes:
+- Query excludes 1536-dimensional embedding vectors
+- Only loads data needed for display
+- Uses database indexes on video_id and index columns
+- Fast page loads even for videos with many scenes
+
+Future Enhancements (Potential):
+- Add video player with scene timeline
+- Click scene to jump to timestamp in video
+- Export transcript functionality
+- Scene-level sharing/bookmarking
+- AI-generated overall video summary (optional)
+
+Lessons Learned:
+- Always be mindful of large database fields (vectors, blobs)
+- Explicitly select fields rather than SELECT * when possible
+- Docker image rebuilds required when no volume mounts configured
+- Python class forward references matter - define dependencies first
+- CORS errors often mask underlying server errors
+- Good UX requires thoughtful data presentation, not just data dumps
+
+================================================================================

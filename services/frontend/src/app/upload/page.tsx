@@ -41,73 +41,55 @@ export default function UploadPage() {
   };
 
   /**
-   * Upload file to Supabase storage with progress tracking using XMLHttpRequest
+   * Upload file to Supabase storage with progress tracking
+   * Uses Supabase client library for better reliability and automatic auth handling
    */
-  const uploadWithProgress = (
+  const uploadWithProgress = async (
     storagePath: string,
     file: File,
     onProgress: (progress: number, bytesUploaded: number, speed: number) => void
   ): Promise<void> => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Get Supabase storage URL and auth token
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const token = await getAccessToken();
+    const startTime = Date.now();
+    const totalSize = file.size;
 
-        if (!supabaseUrl || !token) {
-          throw new Error('Missing Supabase configuration');
-        }
+    // Simulate progress updates since Supabase JS client doesn't expose native progress yet
+    // We'll show gradual progress and complete when upload finishes
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      // Estimate progress based on file size and elapsed time
+      // Assume minimum 2 seconds, scale with file size (slower for larger files)
+      const estimatedDuration = Math.max(2000, totalSize / (1024 * 500)); // ~500KB/s estimate
+      const estimatedProgress = Math.min(95, (elapsed / estimatedDuration) * 100);
+      const bytesUploaded = (estimatedProgress / 100) * totalSize;
+      const speed = elapsed > 0 ? bytesUploaded / (elapsed / 1000) : 0;
 
-        const uploadUrl = `${supabaseUrl}/storage/v1/object/videos/${storagePath}`;
+      onProgress(estimatedProgress, bytesUploaded, speed);
+    }, 100);
 
-        const xhr = new XMLHttpRequest();
-
-        // Track upload progress
-        let startTime = Date.now();
-        let lastLoaded = 0;
-        let lastTime = startTime;
-
-        xhr.upload.addEventListener('progress', (e) => {
-          if (e.lengthComputable) {
-            const percentage = (e.loaded / e.total) * 100;
-            const currentTime = Date.now();
-            const timeDiff = (currentTime - lastTime) / 1000; // seconds
-            const bytesDiff = e.loaded - lastLoaded;
-            const speed = timeDiff > 0 ? bytesDiff / timeDiff : 0;
-
-            lastLoaded = e.loaded;
-            lastTime = currentTime;
-
-            onProgress(percentage, e.loaded, speed);
-          }
+    try {
+      // Upload using Supabase client - handles auth, CORS, and policies automatically
+      const { data, error } = await supabase.storage
+        .from('videos')
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: false,
         });
 
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
-          }
-        });
+      clearInterval(progressInterval);
 
-        xhr.addEventListener('error', () => {
-          reject(new Error('Network error during upload'));
-        });
-
-        xhr.addEventListener('abort', () => {
-          reject(new Error('Upload aborted'));
-        });
-
-        xhr.open('POST', uploadUrl);
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        xhr.setRequestHeader('cache-control', '3600');
-        xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
-
-        xhr.send(file);
-      } catch (err) {
-        reject(err);
+      if (error) {
+        console.error('Supabase upload error:', error);
+        throw new Error(error.message || 'Upload failed');
       }
-    });
+
+      // Complete at 100%
+      const actualSpeed = totalSize / ((Date.now() - startTime) / 1000);
+      onProgress(100, totalSize, actualSpeed);
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      console.error('Upload error:', err);
+      throw err;
+    }
   };
 
   const handleUpload = async () => {
