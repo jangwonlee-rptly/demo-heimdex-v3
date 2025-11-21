@@ -49,3 +49,10 @@ export interface SearchResult {
   total: number;
   latency_ms: number;
 }
+
+export interface VideoDetails {
+  video: Video;
+  full_transcript?: string;
+  scenes: VideoScene[];
+  total_scenes: number;
+}

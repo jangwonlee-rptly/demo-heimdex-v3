@@ -4,6 +4,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Semaphore
+from typing import Optional
 from uuid import UUID
 
 from .scene_detector import scene_detector
@@ -34,6 +35,7 @@ class VideoProcessor:
         language: str,
         total_scenes: int,
         video_duration_s: float,
+        video_filename: Optional[str] = None,
     ) -> tuple[bool, str, int]:
         """
         Process a single scene (used for parallel execution).
@@ -48,6 +50,7 @@ class VideoProcessor:
             language: Language for processing
             total_scenes: Total number of scenes (for logging)
             video_duration_s: Video duration in seconds
+            video_filename: Optional video filename for metadata inclusion
 
         Returns:
             Tuple of (success, scene_id or error_message, scene_index)
@@ -67,6 +70,7 @@ class VideoProcessor:
                     work_dir=work_dir,
                     language=language,
                     video_duration_s=video_duration_s,
+                    video_filename=video_filename,
                 )
 
             # Save to database (outside semaphore to reduce lock time)
@@ -127,6 +131,7 @@ class VideoProcessor:
 
             owner_id = UUID(video["owner_id"])
             storage_path = video["storage_path"]
+            filename = video.get("filename")  # Extract filename for metadata-aware search
 
             # Fetch user's preferred language
             user_profile = db.get_user_profile(owner_id)
@@ -143,15 +148,27 @@ class VideoProcessor:
 
             # Step 3: Extract metadata
             logger.info("Extracting video metadata")
-            metadata = ffmpeg.probe_video(video_path)
-            db.update_video_metadata(
-                video_id=video_id,
-                duration_s=metadata.duration_s,
-                frame_rate=metadata.frame_rate,
-                width=metadata.width,
-                height=metadata.height,
-                video_created_at=metadata.created_at,
-            )
+            try:
+                metadata = ffmpeg.probe_video(video_path)
+                logger.info(
+                    f"Extracted metadata: duration={metadata.duration_s:.2f}s, "
+                    f"resolution={metadata.width}x{metadata.height}, "
+                    f"fps={metadata.frame_rate:.2f}"
+                )
+                db.update_video_metadata(
+                    video_id=video_id,
+                    duration_s=metadata.duration_s,
+                    frame_rate=metadata.frame_rate,
+                    width=metadata.width,
+                    height=metadata.height,
+                    video_created_at=metadata.created_at,
+                )
+                logger.info("Video metadata updated successfully")
+            except Exception as e:
+                logger.error(f"Failed to extract or update video metadata: {e}", exc_info=True)
+                # Don't fail the entire processing - continue without metadata
+                # But log the error for debugging
+                raise
 
             # Step 4: Detect scenes
             logger.info("Detecting scenes")
@@ -223,6 +240,7 @@ class VideoProcessor:
                             language,
                             len(scenes),
                             metadata.duration_s,
+                            filename,
                         ): scene
                         for scene in scenes_to_process
                     }

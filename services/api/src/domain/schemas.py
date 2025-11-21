@@ -125,6 +125,15 @@ class SearchResponse(BaseModel):
     latency_ms: int
 
 
+class VideoDetailsResponse(BaseModel):
+    """Schema for detailed video information with all scenes."""
+
+    video: VideoResponse
+    full_transcript: Optional[str]
+    scenes: list[VideoSceneResponse]
+    total_scenes: int
+
+
 # User Info Schemas
 class UserInfoResponse(BaseModel):
     """Schema for basic user info from JWT."""

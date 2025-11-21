@@ -164,14 +164,24 @@ export default function DashboardPage() {
                         </p>
                       )}
 
-                      {video.status === 'PENDING' && (
-                        <button
-                          onClick={() => handleProcessVideo(video.id)}
-                          className="btn btn-primary btn-sm mt-3"
-                        >
-                          Start Processing
-                        </button>
-                      )}
+                      <div className="flex gap-2 mt-3">
+                        {video.status === 'PENDING' && (
+                          <button
+                            onClick={() => handleProcessVideo(video.id)}
+                            className="btn btn-primary btn-sm"
+                          >
+                            Start Processing
+                          </button>
+                        )}
+                        {video.status === 'READY' && (
+                          <button
+                            onClick={() => router.push(`/videos/${video.id}`)}
+                            className="btn btn-primary btn-sm"
+                          >
+                            View Details
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {video.thumbnail_url && (

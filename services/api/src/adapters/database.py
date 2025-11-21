@@ -186,6 +186,24 @@ class Database:
         row["status"] = VideoStatus(row["status"])
         return Video(**row)
 
+    def get_video_scenes(self, video_id: UUID) -> list[VideoScene]:
+        """Get all scenes for a video, ordered by index."""
+        response = (
+            self.client.table("video_scenes")
+            .select("id,video_id,index,start_s,end_s,transcript_segment,visual_summary,combined_text,thumbnail_url,created_at")
+            .eq("video_id", str(video_id))
+            .order("index", desc=False)
+            .execute()
+        )
+
+        scenes = []
+        for row in response.data:
+            # Convert string UUIDs to UUID objects
+            row["id"] = UUID(row["id"])
+            row["video_id"] = UUID(row["video_id"])
+            scenes.append(VideoScene(**row))
+        return scenes
+
     # Search operations
     def search_scenes(
         self,
