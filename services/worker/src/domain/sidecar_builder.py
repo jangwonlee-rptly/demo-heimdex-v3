@@ -51,6 +51,7 @@ class SidecarBuilder:
         work_dir: Path,
         language: str = "ko",
         video_duration_s: Optional[float] = None,
+        video_filename: Optional[str] = None,
     ) -> SceneSidecar:
         """
         Build a complete sidecar for a scene with optimized visual semantics.
@@ -70,6 +71,7 @@ class SidecarBuilder:
             work_dir: Working directory for temporary files
             language: Language for summaries and embeddings ('ko' or 'en')
             video_duration_s: Optional video duration for transcript extraction
+            video_filename: Optional video filename for metadata inclusion
 
         Returns:
             SceneSidecar object
@@ -177,7 +179,7 @@ class SidecarBuilder:
 
         # Build combined text for embedding (transcript-first strategy)
         combined_text = SidecarBuilder._build_combined_text(
-            visual_summary, transcript_segment, language=language
+            visual_summary, transcript_segment, language=language, video_filename=video_filename
         )
 
         # If combined text is empty or too short, use a placeholder
@@ -295,7 +297,12 @@ class SidecarBuilder:
         return keyframe_paths
 
     @staticmethod
-    def _build_combined_text(visual_summary: str, transcript: str, language: str = "ko") -> str:
+    def _build_combined_text(
+        visual_summary: str,
+        transcript: str,
+        language: str = "ko",
+        video_filename: Optional[str] = None,
+    ) -> str:
         """
         Build combined text optimized for search.
 
@@ -303,6 +310,7 @@ class SidecarBuilder:
             visual_summary: Visual description of the scene
             transcript: Transcript segment
             language: Language for the labels ('ko' or 'en')
+            video_filename: Optional video filename for metadata inclusion
 
         Returns:
             Combined text for embedding
@@ -311,8 +319,8 @@ class SidecarBuilder:
 
         # Language-specific labels
         labels = {
-            "ko": {"visual": "시각", "audio": "오디오"},
-            "en": {"visual": "Visual", "audio": "Audio"},
+            "ko": {"visual": "시각", "audio": "오디오", "metadata": "메타데이터", "filename": "파일명"},
+            "en": {"visual": "Visual", "audio": "Audio", "metadata": "Metadata", "filename": "Filename"},
         }
         lang_labels = labels.get(language, labels["ko"])
 
@@ -321,6 +329,10 @@ class SidecarBuilder:
 
         if transcript:
             parts.append(f"{lang_labels['audio']}: {transcript}")
+
+        # Add metadata section with filename
+        if video_filename:
+            parts.append(f"{lang_labels['metadata']}: {lang_labels['filename']}: {video_filename}")
 
         combined = " | ".join(parts)
 
