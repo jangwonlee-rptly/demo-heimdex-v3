@@ -11,6 +11,7 @@ class OpenAIClient:
     """OpenAI API client wrapper."""
 
     def __init__(self):
+        """Initialize the OpenAI client."""
         self.client = OpenAI(api_key=settings.openai_api_key)
         self.embedding_model = "text-embedding-3-small"
         self.embedding_dimensions = 1536
@@ -23,7 +24,7 @@ class OpenAIClient:
             text: Text to embed
 
         Returns:
-            List of floats representing the embedding vector
+            list[float]: List of floats representing the embedding vector
         """
         response = self.client.embeddings.create(
             model=self.embedding_model,

@@ -92,6 +92,17 @@ async def create_upload_url(
 
     The client should upload the video file using Supabase client library,
     then call POST /videos/{video_id}/uploaded to trigger processing.
+
+    Args:
+        file_extension: The file extension of the video (default: "mp4").
+        filename: The original filename of the video.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        VideoUploadUrlResponse: Contains the video ID and storage path.
+
+    Raises:
+        HTTPException: If creating the upload URL or video record fails.
     """
     try:
         user_id = UUID(current_user.user_id)
@@ -148,6 +159,20 @@ async def mark_video_uploaded(
 
     This should be called after the client has successfully uploaded
     the video file to the upload URL.
+
+    Args:
+        video_id: The UUID of the video.
+        request: The request body (empty).
+        current_user: The authenticated user (injected).
+
+    Returns:
+        dict: Status message indicating the video was queued.
+
+    Raises:
+        HTTPException:
+            - 404: If the video is not found.
+            - 403: If the user is not authorized to access the video.
+            - 500: If enqueuing the task fails.
     """
     try:
         user_id = UUID(current_user.user_id)
@@ -196,6 +221,19 @@ async def trigger_video_processing(
     Manually trigger processing for a pending video.
 
     Useful for retrying failed uploads or processing videos that got stuck.
+
+    Args:
+        video_id: The UUID of the video.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        dict: Status message indicating the video was queued.
+
+    Raises:
+        HTTPException:
+            - 404: If the video is not found.
+            - 403: If the user is not authorized to access the video.
+            - 500: If enqueuing the task fails.
     """
     try:
         user_id = UUID(current_user.user_id)
@@ -237,7 +275,14 @@ async def trigger_video_processing(
 
 @router.get("/videos", response_model=VideoListResponse)
 async def list_videos(current_user: User = Depends(get_current_user)):
-    """List all videos for the current user."""
+    """List all videos for the current user.
+
+    Args:
+        current_user: The authenticated user (injected).
+
+    Returns:
+        VideoListResponse: A list of videos and the total count.
+    """
     user_id = UUID(current_user.user_id)
     videos = db.list_videos(user_id)
 
@@ -270,7 +315,20 @@ async def get_video(
     video_id: UUID,
     current_user: User = Depends(get_current_user),
 ):
-    """Get details for a specific video."""
+    """Get details for a specific video.
+
+    Args:
+        video_id: The UUID of the video.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        VideoResponse: The video details.
+
+    Raises:
+        HTTPException:
+            - 404: If the video is not found.
+            - 403: If the user is not authorized to access the video.
+    """
     user_id = UUID(current_user.user_id)
 
     video = db.get_video(video_id)
@@ -316,6 +374,18 @@ async def get_video_details(
     - Video metadata (filename, duration, resolution, etc.)
     - Full transcript (if available)
     - All scenes with their summaries, transcripts, and thumbnails
+
+    Args:
+        video_id: The UUID of the video.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        VideoDetailsResponse: Detailed video information including all scenes.
+
+    Raises:
+        HTTPException:
+            - 404: If the video is not found.
+            - 403: If the user is not authorized to access the video.
     """
     user_id = UUID(current_user.user_id)
 

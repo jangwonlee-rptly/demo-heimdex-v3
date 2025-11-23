@@ -9,6 +9,14 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Search page component.
+ *
+ * Allows users to search for video scenes using natural language.
+ * Displays results with scene details and allows playback of selected scenes.
+ *
+ * @returns {JSX.Element} The search page.
+ */
 export default function SearchPage() {
   const { t } = useLanguage();
   const [query, setQuery] = useState('');

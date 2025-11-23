@@ -32,7 +32,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        """Parse CORS origins into a list."""
+        """Parse CORS origins into a list.
+
+        Returns:
+            list[str]: A list of allowed origin URLs for CORS configuration.
+        """
         return [origin.strip() for origin in self.api_cors_origins.split(",")]
 
 

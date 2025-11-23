@@ -268,9 +268,20 @@ Query logs with metadata and latency tracking.
 
 - `TEMP_DIR`: Working directory for video processing (default: /tmp/heimdex)
 - `MAX_KEYFRAMES_PER_SCENE`: Max keyframes to extract (default: 3)
-- `SCENE_DETECTION_THRESHOLD`: PySceneDetect threshold (default: 27.0)
-- `EMBEDDING_MODEL`: OpenAI embedding model (default: text-embedding-3-small)
+- `SCENE_DETECTOR`: Scene detection strategy (`adaptive` or `content`, default: `adaptive`)
+- `SCENE_MIN_LEN_SECONDS`: Minimum scene length in seconds (default: 1.0)
+- `SCENE_ADAPTIVE_THRESHOLD`: Threshold for adaptive detector (default: 3.0)
+- `SCENE_CONTENT_THRESHOLD`: Threshold for content detector (default: 27.0)
+- `MAX_SCENE_WORKERS`: Max concurrent scenes to process in parallel (default: 3)
+- `VISUAL_SEMANTICS_MODEL`: Model for visual analysis (default: `gpt-4o-mini`)
+- `EMBEDDING_MODEL`: OpenAI embedding model (default: `text-embedding-3-small`)
 - `EMBEDDING_DIMENSIONS`: Vector dimensions (default: 1536)
+
+### Frontend Service
+
+- `NEXT_PUBLIC_SUPABASE_URL`: Supabase project URL
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Supabase anonymous public key
+- `NEXT_PUBLIC_API_URL`: API service URL (default: `http://localhost:8000`)
 
 ## Troubleshooting
 

@@ -9,6 +9,12 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Format seconds into HH:MM:SS or MM:SS.
+ *
+ * @param {number} [seconds] - The duration in seconds.
+ * @returns {string} Formatted duration string.
+ */
 function formatDuration(seconds?: number): string {
   if (!seconds) return 'N/A';
   const hours = Math.floor(seconds / 3600);
@@ -21,12 +27,24 @@ function formatDuration(seconds?: number): string {
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Format seconds into MM:SS.
+ *
+ * @param {number} seconds - The timestamp in seconds.
+ * @returns {string} Formatted timestamp string.
+ */
 function formatTimestamp(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Format date string into localized date.
+ *
+ * @param {string} [dateString] - The ISO date string.
+ * @returns {string} Formatted date string.
+ */
 function formatDate(dateString?: string): string {
   if (!dateString) return 'N/A';
   return new Date(dateString).toLocaleDateString('en-US', {
@@ -38,6 +56,14 @@ function formatDate(dateString?: string): string {
   });
 }
 
+/**
+ * Video details page.
+ *
+ * Displays comprehensive information about a video including metadata, full transcript,
+ * and a scene-by-scene breakdown with visual summaries and transcript segments.
+ *
+ * @returns {JSX.Element} The video details page.
+ */
 export default function VideoDetailsPage() {
   const { t } = useLanguage();
   const [videoDetails, setVideoDetails] = useState<VideoDetails | null>(null);

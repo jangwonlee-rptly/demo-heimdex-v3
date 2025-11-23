@@ -9,6 +9,14 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * User dashboard component.
+ *
+ * Displays the user's profile, uploaded videos, and quick actions.
+ * Handles initial data fetching and redirection for unauthenticated users or users without profiles.
+ *
+ * @returns {JSX.Element} The dashboard page.
+ */
 export default function DashboardPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);

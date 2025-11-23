@@ -28,6 +28,18 @@ class SceneSidecar:
         embedding: list[float],
         thumbnail_url: Optional[str] = None,
     ):
+        """Initialize SceneSidecar.
+
+        Args:
+            index: The scene index.
+            start_s: Start time in seconds.
+            end_s: End time in seconds.
+            transcript_segment: The transcript segment for the scene.
+            visual_summary: The visual summary of the scene.
+            combined_text: The combined text for embedding.
+            embedding: The embedding vector.
+            thumbnail_url: The URL of the scene thumbnail (optional).
+        """
         self.index = index
         self.start_s = start_s
         self.end_s = end_s

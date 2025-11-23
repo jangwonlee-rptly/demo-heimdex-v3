@@ -31,7 +31,7 @@ def get_current_user(
         credentials: HTTP Bearer token from request header
 
     Returns:
-        User object with user_id and email
+        User: User object with user_id and email
 
     Raises:
         HTTPException: If token is invalid or expired

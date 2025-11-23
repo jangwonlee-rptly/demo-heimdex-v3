@@ -12,6 +12,7 @@ class SupabaseStorage:
     """Supabase storage client wrapper."""
 
     def __init__(self):
+        """Initialize the Supabase storage client."""
         self.client: Client = create_client(
             settings.supabase_url,
             settings.supabase_service_role_key,
@@ -27,7 +28,7 @@ class SupabaseStorage:
             file_extension: File extension (default: mp4)
 
         Returns:
-            Tuple of (upload_url, storage_path)
+            tuple[str, str]: Tuple of (upload_url, storage_path)
         """
         # Generate unique storage path
         video_id = uuid4()
@@ -48,7 +49,7 @@ class SupabaseStorage:
             storage_path: Path to the file in storage
 
         Returns:
-            Public URL
+            str: Public URL
         """
         return self.client.storage.from_(self.bucket_name).get_public_url(storage_path)
 
@@ -60,7 +61,7 @@ class SupabaseStorage:
             storage_path: Path to the file in storage
 
         Returns:
-            File contents as bytes
+            bytes: File contents as bytes
         """
         return self.client.storage.from_(self.bucket_name).download(storage_path)
 
@@ -74,7 +75,7 @@ class SupabaseStorage:
             content_type: MIME type of the file
 
         Returns:
-            Public URL of uploaded file
+            str: Public URL of uploaded file
         """
         self.client.storage.from_(self.bucket_name).upload(
             storage_path,

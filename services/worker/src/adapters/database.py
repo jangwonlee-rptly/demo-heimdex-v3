@@ -23,10 +23,23 @@ class Database:
     """Database connection and query handler using Supabase client."""
 
     def __init__(self, supabase_url: str, supabase_key: str):
+        """Initialize the database client.
+
+        Args:
+            supabase_url: The URL of the Supabase instance.
+            supabase_key: The API key for accessing Supabase.
+        """
         self.client: Client = create_client(supabase_url, supabase_key)
 
     def get_user_profile(self, user_id: UUID) -> Optional[dict]:
-        """Get user profile by user_id."""
+        """Get user profile by user_id.
+
+        Args:
+            user_id: The UUID of the user.
+
+        Returns:
+            Optional[dict]: The user profile data if found, otherwise None.
+        """
         response = (
             self.client.table("user_profiles")
             .select("*")
@@ -38,7 +51,14 @@ class Database:
         return response.data[0]
 
     def get_video(self, video_id: UUID) -> Optional[dict]:
-        """Get video by ID."""
+        """Get video by ID.
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            Optional[dict]: The video data if found, otherwise None.
+        """
         response = (
             self.client.table("videos")
             .select("*")
@@ -56,7 +76,16 @@ class Database:
         status: str,
         error_message: Optional[str] = None,
     ) -> None:
-        """Update video status."""
+        """Update video status.
+
+        Args:
+            video_id: The UUID of the video.
+            status: The new status.
+            error_message: Optional error message.
+
+        Returns:
+            None: This function does not return a value.
+        """
         update_data = {
             "status": status,
             "error_message": error_message,
@@ -74,7 +103,20 @@ class Database:
         video_created_at: Optional[datetime] = None,
         thumbnail_url: Optional[str] = None,
     ) -> None:
-        """Update video metadata."""
+        """Update video metadata.
+
+        Args:
+            video_id: The UUID of the video.
+            duration_s: Duration of the video in seconds.
+            frame_rate: Frame rate of the video.
+            width: Width of the video resolution.
+            height: Height of the video resolution.
+            video_created_at: Creation timestamp from video metadata.
+            thumbnail_url: URL of the video thumbnail.
+
+        Returns:
+            None: This function does not return a value.
+        """
         update_data = {
             "duration_s": duration_s,
             "frame_rate": frame_rate,
@@ -95,6 +137,9 @@ class Database:
         Args:
             video_id: Video ID
             transcript: Full video transcript
+
+        Returns:
+            None: This function does not return a value.
         """
         logger.info(f"Saving transcript checkpoint for video {video_id} ({len(transcript)} chars)")
         self.client.table("videos").update({"full_transcript": transcript}).eq("id", str(video_id)).execute()
@@ -127,7 +172,22 @@ class Database:
         embedding: list[float],
         thumbnail_url: Optional[str] = None,
     ) -> UUID:
-        """Create a video scene record."""
+        """Create a video scene record.
+
+        Args:
+            video_id: The UUID of the video.
+            index: The scene index.
+            start_s: Start time of the scene in seconds.
+            end_s: End time of the scene in seconds.
+            transcript_segment: The transcript segment for the scene.
+            visual_summary: The visual summary of the scene.
+            combined_text: The combined text for embedding.
+            embedding: The embedding vector.
+            thumbnail_url: The URL of the scene thumbnail.
+
+        Returns:
+            UUID: The UUID of the created scene.
+        """
         # Convert embedding list to pgvector format
         embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
@@ -187,7 +247,14 @@ class Database:
         return {row["index"] for row in response.data}
 
     def delete_scenes_for_video(self, video_id: UUID) -> None:
-        """Delete all scenes for a video (used for reprocessing)."""
+        """Delete all scenes for a video (used for reprocessing).
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.client.table("video_scenes").delete().eq("video_id", str(video_id)).execute()
 
 

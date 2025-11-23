@@ -29,6 +29,19 @@ class UserProfile:
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
+        """Initialize UserProfile.
+
+        Args:
+            user_id: UUID of the user.
+            full_name: Full name of the user.
+            industry: Industry of the user (optional).
+            job_title: Job title of the user (optional).
+            preferred_language: Preferred language of the user.
+            marketing_consent: Whether the user has consented to marketing.
+            marketing_consent_at: Timestamp when marketing consent was given.
+            created_at: Timestamp when the profile was created.
+            updated_at: Timestamp when the profile was last updated.
+        """
         self.user_id = user_id
         self.full_name = full_name
         self.industry = industry
@@ -61,6 +74,25 @@ class Video:
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
+        """Initialize Video.
+
+        Args:
+            id: UUID of the video.
+            owner_id: UUID of the user who owns the video.
+            storage_path: Path to the video file in storage.
+            status: Current processing status of the video.
+            filename: Original filename of the uploaded video (optional).
+            duration_s: Duration of the video in seconds (optional).
+            frame_rate: Frame rate of the video (optional).
+            width: Width of the video resolution (optional).
+            height: Height of the video resolution (optional).
+            video_created_at: Creation timestamp from video metadata (optional).
+            thumbnail_url: URL to the video thumbnail (optional).
+            full_transcript: Full transcript of the video (optional).
+            error_message: Error message if processing failed (optional).
+            created_at: Timestamp when the video record was created.
+            updated_at: Timestamp when the video record was last updated.
+        """
         self.id = id
         self.owner_id = owner_id
         self.storage_path = storage_path
@@ -95,6 +127,21 @@ class VideoScene:
         similarity: Optional[float] = None,  # For search results
         created_at: Optional[datetime] = None,
     ):
+        """Initialize VideoScene.
+
+        Args:
+            id: UUID of the scene.
+            video_id: UUID of the parent video.
+            index: Sequential index of the scene in the video.
+            start_s: Start time of the scene in seconds.
+            end_s: End time of the scene in seconds.
+            transcript_segment: Transcript text for this scene (optional).
+            visual_summary: Visual description of this scene (optional).
+            combined_text: Combined text used for embedding generation (optional).
+            thumbnail_url: URL to the scene thumbnail (optional).
+            similarity: Similarity score for search results (optional).
+            created_at: Timestamp when the scene was created.
+        """
         self.id = id
         self.video_id = video_id
         self.index = index

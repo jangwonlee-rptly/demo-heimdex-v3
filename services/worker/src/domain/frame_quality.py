@@ -25,6 +25,14 @@ class FrameQualityResult:
         blur_score: float,
         reason: Optional[str] = None,
     ):
+        """Initialize FrameQualityResult.
+
+        Args:
+            is_informative: Whether the frame is considered informative.
+            brightness: Average brightness of the frame (0-255).
+            blur_score: Laplacian variance blur score (higher is sharper).
+            reason: Reason why the frame is not informative (optional).
+        """
         self.is_informative = is_informative
         self.brightness = brightness
         self.blur_score = blur_score

@@ -13,6 +13,7 @@ class SupabaseStorage:
     """Supabase storage client wrapper."""
 
     def __init__(self):
+        """Initialize the Supabase storage client."""
         self.client: Client = create_client(
             settings.supabase_url,
             settings.supabase_service_role_key,
@@ -27,6 +28,9 @@ class SupabaseStorage:
         Args:
             storage_path: Path to the file in storage
             local_path: Local file path to save to
+
+        Returns:
+            None: This function does not return a value.
         """
         logger.info(f"Downloading {storage_path} to {local_path}")
         file_bytes = self.client.storage.from_(self.bucket_name).download(storage_path)
@@ -48,7 +52,7 @@ class SupabaseStorage:
             content_type: MIME type of the file
 
         Returns:
-            Public URL of uploaded file
+            str: Public URL of uploaded file
 
         Raises:
             Exception: If upload fails and file doesn't already exist

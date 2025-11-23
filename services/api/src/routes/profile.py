@@ -19,7 +19,14 @@ router = APIRouter()
 
 @router.get("/me", response_model=UserInfoResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
-    """Get basic user info from JWT."""
+    """Get basic user info from JWT.
+
+    Args:
+        current_user: The authenticated user (injected).
+
+    Returns:
+        UserInfoResponse: Basic user information including ID and email.
+    """
     return UserInfoResponse(
         user_id=current_user.user_id,
         email=current_user.email,
@@ -32,7 +39,11 @@ async def get_user_profile(current_user: User = Depends(get_current_user)):
     """
     Get the current user's profile.
 
-    Returns None if profile doesn't exist (first-time user).
+    Args:
+        current_user: The authenticated user (injected).
+
+    Returns:
+        Optional[UserProfileResponse]: The user's profile data, or None if it doesn't exist.
     """
     user_id = UUID(current_user.user_id)
     profile = db.get_user_profile(user_id)
@@ -62,6 +73,16 @@ async def create_or_update_user_profile(
     Create or update the current user's profile.
 
     This endpoint handles both profile creation (onboarding) and updates.
+
+    Args:
+        profile_data: The profile data to create or update.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        UserProfileResponse: The created or updated profile data.
+
+    Raises:
+        HTTPException: If the profile creation/update fails.
     """
     user_id = UUID(current_user.user_id)
 

@@ -1,5 +1,11 @@
+/**
+ * Video processing status enum.
+ */
 export type VideoStatus = 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED';
 
+/**
+ * User profile interface matching the database schema.
+ */
 export interface UserProfile {
   user_id: string;
   full_name: string;
@@ -12,6 +18,9 @@ export interface UserProfile {
   updated_at: string;
 }
 
+/**
+ * Video metadata interface.
+ */
 export interface Video {
   id: string;
   owner_id: string;
@@ -29,6 +38,9 @@ export interface Video {
   updated_at: string;
 }
 
+/**
+ * Video scene interface representing a detected scene.
+ */
 export interface VideoScene {
   id: string;
   video_id: string;
@@ -39,10 +51,13 @@ export interface VideoScene {
   visual_summary?: string;
   combined_text?: string;
   thumbnail_url?: string;
-  similarity?: number;
+  similarity?: number; // Present only in search results
   created_at: string;
 }
 
+/**
+ * Search result interface from the search API.
+ */
 export interface SearchResult {
   query: string;
   results: VideoScene[];
@@ -50,6 +65,9 @@ export interface SearchResult {
   latency_ms: number;
 }
 
+/**
+ * Detailed video information including all scenes.
+ */
 export interface VideoDetails {
   video: Video;
   full_transcript?: string;

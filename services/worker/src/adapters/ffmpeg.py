@@ -20,6 +20,15 @@ class VideoMetadata:
         frame_rate: float,
         created_at: Optional[datetime] = None,
     ):
+        """Initialize VideoMetadata.
+
+        Args:
+            duration_s: Duration of the video in seconds.
+            width: Width of the video resolution.
+            height: Height of the video resolution.
+            frame_rate: Frame rate of the video.
+            created_at: Creation timestamp from video metadata.
+        """
         self.duration_s = duration_s
         self.width = width
         self.height = height

@@ -15,11 +15,24 @@ class Database:
     """Database connection and query handler using Supabase client."""
 
     def __init__(self, supabase_url: str, supabase_key: str):
+        """Initialize the database client.
+
+        Args:
+            supabase_url: The URL of the Supabase instance.
+            supabase_key: The API key for accessing Supabase.
+        """
         self.client: Client = create_client(supabase_url, supabase_key)
 
     # User Profile operations
     def get_user_profile(self, user_id: UUID) -> Optional[UserProfile]:
-        """Get user profile by user_id."""
+        """Get user profile by user_id.
+
+        Args:
+            user_id: The UUID of the user.
+
+        Returns:
+            Optional[UserProfile]: The user profile if found, otherwise None.
+        """
         response = (
             self.client.table("user_profiles")
             .select("*")
@@ -39,7 +52,19 @@ class Database:
         preferred_language: str = "ko",
         marketing_consent: bool = False,
     ) -> UserProfile:
-        """Create a new user profile."""
+        """Create a new user profile.
+
+        Args:
+            user_id: The UUID of the user.
+            full_name: The user's full name.
+            industry: The user's industry (optional).
+            job_title: The user's job title (optional).
+            preferred_language: The user's preferred language (default: "ko").
+            marketing_consent: Whether the user consented to marketing emails (default: False).
+
+        Returns:
+            UserProfile: The created user profile.
+        """
         marketing_consent_at = datetime.utcnow() if marketing_consent else None
 
         data = {
@@ -64,7 +89,19 @@ class Database:
         preferred_language: Optional[str] = None,
         marketing_consent: Optional[bool] = None,
     ) -> Optional[UserProfile]:
-        """Update user profile."""
+        """Update user profile.
+
+        Args:
+            user_id: The UUID of the user.
+            full_name: The new full name (optional).
+            industry: The new industry (optional).
+            job_title: The new job title (optional).
+            preferred_language: The new preferred language (optional).
+            marketing_consent: The new marketing consent status (optional).
+
+        Returns:
+            Optional[UserProfile]: The updated user profile if successful, otherwise None.
+        """
         # First, get the existing profile to check marketing_consent
         existing = self.get_user_profile(user_id)
         if not existing:
@@ -103,7 +140,16 @@ class Database:
 
     # Video operations
     def create_video(self, owner_id: UUID, storage_path: str, filename: Optional[str] = None) -> Video:
-        """Create a new video record."""
+        """Create a new video record.
+
+        Args:
+            owner_id: The UUID of the user who owns the video.
+            storage_path: The path where the video is stored.
+            filename: The original filename of the uploaded video (optional).
+
+        Returns:
+            Video: The created video record.
+        """
         data = {
             "owner_id": str(owner_id),
             "storage_path": storage_path,
@@ -120,7 +166,14 @@ class Database:
         return Video(**row)
 
     def get_video(self, video_id: UUID) -> Optional[Video]:
-        """Get video by ID."""
+        """Get video by ID.
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            Optional[Video]: The video record if found, otherwise None.
+        """
         response = (
             self.client.table("videos")
             .select("*")
@@ -139,7 +192,14 @@ class Database:
         return Video(**row)
 
     def list_videos(self, owner_id: UUID) -> list[Video]:
-        """List all videos for a user."""
+        """List all videos for a user.
+
+        Args:
+            owner_id: The UUID of the user.
+
+        Returns:
+            list[Video]: A list of videos owned by the user, ordered by creation time.
+        """
         response = (
             self.client.table("videos")
             .select("*")
@@ -163,7 +223,16 @@ class Database:
         status: VideoStatus,
         error_message: Optional[str] = None,
     ) -> Optional[Video]:
-        """Update video status."""
+        """Update video status.
+
+        Args:
+            video_id: The UUID of the video.
+            status: The new status of the video.
+            error_message: An error message if the status is FAILED (optional).
+
+        Returns:
+            Optional[Video]: The updated video record if successful, otherwise None.
+        """
         update_data = {
             "status": status.value,
             "error_message": error_message,
@@ -187,7 +256,14 @@ class Database:
         return Video(**row)
 
     def get_video_scenes(self, video_id: UUID) -> list[VideoScene]:
-        """Get all scenes for a video, ordered by index."""
+        """Get all scenes for a video, ordered by index.
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            list[VideoScene]: A list of scenes for the video.
+        """
         response = (
             self.client.table("video_scenes")
             .select("id,video_id,index,start_s,end_s,transcript_segment,visual_summary,combined_text,thumbnail_url,created_at")
@@ -213,7 +289,18 @@ class Database:
         video_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
     ) -> list[VideoScene]:
-        """Search for scenes using vector similarity."""
+        """Search for scenes using vector similarity.
+
+        Args:
+            query_embedding: The vector embedding of the search query.
+            limit: Maximum number of results to return (default: 10).
+            threshold: Similarity threshold (0.0 to 1.0, default: 0.5).
+            video_id: Filter by specific video ID (optional).
+            user_id: Filter by specific user ID (optional).
+
+        Returns:
+            list[VideoScene]: A list of matching video scenes.
+        """
         # Convert embedding list to pgvector format
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
@@ -236,7 +323,18 @@ class Database:
         latency_ms: int,
         video_id: Optional[UUID] = None,
     ) -> None:
-        """Log a search query for analytics."""
+        """Log a search query for analytics.
+
+        Args:
+            user_id: The UUID of the user making the query.
+            query_text: The search query text.
+            results_count: Number of results returned.
+            latency_ms: Search latency in milliseconds.
+            video_id: The specific video ID searched, if any (optional).
+
+        Returns:
+            None: This function does not return a value.
+        """
         data = {
             "user_id": str(user_id),
             "video_id": str(video_id) if video_id else None,

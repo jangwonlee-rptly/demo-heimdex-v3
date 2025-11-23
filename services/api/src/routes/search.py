@@ -24,6 +24,19 @@ async def search_scenes(
 
     The search is performed using semantic similarity between the query
     and scene embeddings. Results are ordered by relevance.
+
+    Args:
+        request: Search request parameters including query text, filters, and limits.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        SearchResponse: Search results including matching scenes, total count, and latency.
+
+    Raises:
+        HTTPException:
+            - 404: If the specified video is not found.
+            - 403: If the user is not authorized to access the video.
+            - 500: If embedding generation fails.
     """
     user_id = UUID(current_user.user_id)
     start_time = time.time()

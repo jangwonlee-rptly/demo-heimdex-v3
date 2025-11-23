@@ -32,11 +32,19 @@ class Scene:
     """Represents a detected scene."""
 
     def __init__(self, index: int, start_s: float, end_s: float):
+        """Initialize Scene.
+
+        Args:
+            index: The scene index (0-based).
+            start_s: Start time in seconds.
+            end_s: End time in seconds.
+        """
         self.index = index
         self.start_s = start_s
         self.end_s = end_s
 
     def __repr__(self):
+        """Return a string representation of the Scene."""
         return f"Scene({self.index}, {self.start_s:.2f}s-{self.end_s:.2f}s)"
 
 

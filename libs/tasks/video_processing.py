@@ -32,6 +32,9 @@ def process_video(video_id: str) -> None:
     Args:
         video_id: UUID of the video to process (as string)
 
+    Returns:
+        None: This function does not return a value.
+
     Raises:
         ImportError: If worker dependencies are not available (shouldn't happen in worker)
         Exception: If video processing fails
