@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { VideoDetails } from '@/types';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +39,7 @@ function formatDate(dateString?: string): string {
 }
 
 export default function VideoDetailsPage() {
+  const { t } = useLanguage();
   const [videoDetails, setVideoDetails] = useState<VideoDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +75,7 @@ export default function VideoDetailsPage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-          <p className="mt-4 text-gray-600">Loading video details...</p>
+          <p className="mt-4 text-gray-600">{t.videoDetails.loading}</p>
         </div>
       </div>
     );
@@ -86,11 +89,11 @@ export default function VideoDetailsPage() {
             onClick={() => router.push('/dashboard')}
             className="btn btn-secondary mb-6"
           >
-            ← Back to Dashboard
+            ← {t.videoDetails.backToDashboard}
           </button>
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-            <p className="font-medium">Error</p>
-            <p className="text-sm mt-1">{error || 'Video not found'}</p>
+            <p className="font-medium">{t.common.error}</p>
+            <p className="text-sm mt-1">{error || t.videoDetails.notFound}</p>
           </div>
         </div>
       </div>
@@ -104,12 +107,15 @@ export default function VideoDetailsPage() {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="btn btn-secondary mb-4"
-          >
-            ← Back to Dashboard
-          </button>
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="btn btn-secondary"
+            >
+              ← {t.videoDetails.backToDashboard}
+            </button>
+            <LanguageToggle />
+          </div>
           <h1 className="text-3xl font-bold text-gray-900">
             {video.filename || `Video ${video.id.substring(0, 8)}`}
           </h1>
@@ -122,20 +128,20 @@ export default function VideoDetailsPage() {
             }`}>
               {video.status}
             </span>
-            <span>Uploaded {formatDate(video.created_at)}</span>
+            <span>{t.videoDetails.uploadedAt}: {formatDate(video.created_at)}</span>
           </div>
         </div>
 
         {/* Video Metadata Card */}
         <div className="card mb-6">
-          <h2 className="text-xl font-semibold mb-4">Video Information</h2>
+          <h2 className="text-xl font-semibold mb-4">{t.videoDetails.videoInfo}</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <p className="text-sm text-gray-600">Duration</p>
+              <p className="text-sm text-gray-600">{t.dashboard.duration}</p>
               <p className="font-semibold">{formatDuration(video.duration_s)}</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Resolution</p>
+              <p className="text-sm text-gray-600">{t.dashboard.resolution}</p>
               <p className="font-semibold">
                 {video.width && video.height ? `${video.width} × ${video.height}` : 'N/A'}
               </p>
@@ -147,7 +153,7 @@ export default function VideoDetailsPage() {
               </p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total Scenes</p>
+              <p className="text-sm text-gray-600">{t.videoDetails.scenes}</p>
               <p className="font-semibold">{total_scenes}</p>
             </div>
           </div>
@@ -163,7 +169,7 @@ export default function VideoDetailsPage() {
         {full_transcript && (
           <div className="card mb-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Full Transcript</h2>
+              <h2 className="text-xl font-semibold">{t.videoDetails.transcript}</h2>
               <button
                 onClick={() => setExpandedTranscript(!expandedTranscript)}
                 className="text-sm text-primary-600 hover:text-primary-700 font-medium"
@@ -210,7 +216,7 @@ export default function VideoDetailsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-lg font-semibold text-gray-900">
-                      Scene {scene.index + 1}
+                      {t.videoDetails.sceneNumber} {scene.index + 1}
                     </h3>
                     <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
                       {formatTimestamp(scene.start_s)} - {formatTimestamp(scene.end_s)}
@@ -221,7 +227,7 @@ export default function VideoDetailsPage() {
                   {scene.visual_summary && (
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                        Visual Description
+                        {t.videoDetails.visualSummary}
                       </h4>
                       <p className="text-gray-700 leading-relaxed">
                         {scene.visual_summary}
@@ -233,7 +239,7 @@ export default function VideoDetailsPage() {
                   {scene.transcript_segment && (
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                        Transcript
+                        {t.videoDetails.transcript}
                       </h4>
                       <p className="text-gray-600 italic leading-relaxed">
                         "{scene.transcript_segment}"
@@ -257,7 +263,7 @@ export default function VideoDetailsPage() {
           <div className="card text-center py-12">
             <p className="text-gray-600">
               {video.status === 'READY'
-                ? 'No scenes detected in this video.'
+                ? t.videoDetails.noScenes
                 : 'Video is still being processed. Scenes will appear once processing is complete.'}
             </p>
           </div>

@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +17,7 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const { t } = useLanguage();
 
   useEffect(() => {
     // Check if user is authenticated
@@ -55,16 +58,19 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="absolute top-4 right-4">
+        <LanguageToggle />
+      </div>
       <div className="card max-w-2xl w-full">
-        <h1 className="text-3xl font-bold mb-2">Welcome to Heimdex</h1>
+        <h1 className="text-3xl font-bold mb-2">{t.onboarding.title}</h1>
         <p className="text-gray-600 mb-8">
-          Let&apos;s get you set up. Please complete your profile to continue.
+          {t.onboarding.subtitle}
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
-              Full Name <span className="text-red-500">*</span>
+              {t.onboarding.fullName} <span className="text-red-500">{t.onboarding.fullNameRequired}</span>
             </label>
             <input
               id="fullName"
@@ -78,7 +84,7 @@ export default function OnboardingPage() {
 
           <div>
             <label htmlFor="industry" className="block text-sm font-medium text-gray-700 mb-1">
-              Industry
+              {t.onboarding.industry}
             </label>
             <input
               id="industry"
@@ -86,13 +92,13 @@ export default function OnboardingPage() {
               value={industry}
               onChange={(e) => setIndustry(e.target.value)}
               className="input w-full"
-              placeholder="e.g., Technology, Healthcare, Education"
+              placeholder={t.onboarding.industryPlaceholder}
             />
           </div>
 
           <div>
             <label htmlFor="jobTitle" className="block text-sm font-medium text-gray-700 mb-1">
-              Job Title
+              {t.onboarding.jobTitle}
             </label>
             <input
               id="jobTitle"
@@ -100,16 +106,16 @@ export default function OnboardingPage() {
               value={jobTitle}
               onChange={(e) => setJobTitle(e.target.value)}
               className="input w-full"
-              placeholder="e.g., Software Engineer, Product Manager"
+              placeholder={t.onboarding.jobTitlePlaceholder}
             />
           </div>
 
           <div>
             <label htmlFor="preferredLanguage" className="block text-sm font-medium text-gray-700 mb-1">
-              Preferred Language <span className="text-red-500">*</span>
+              {t.onboarding.preferredLanguage} <span className="text-red-500">{t.onboarding.preferredLanguageRequired}</span>
             </label>
             <p className="text-sm text-gray-500 mb-2">
-              Choose the language for video transcriptions, summaries, and search results
+              {t.onboarding.preferredLanguageHelp}
             </p>
             <select
               id="preferredLanguage"
@@ -132,7 +138,7 @@ export default function OnboardingPage() {
               className="mt-1 mr-3"
             />
             <label htmlFor="marketingConsent" className="text-sm text-gray-700">
-              I agree to receive product updates and marketing communications from Heimdex
+              {t.onboarding.marketingConsent}
             </label>
           </div>
 
@@ -147,7 +153,7 @@ export default function OnboardingPage() {
             className="btn btn-primary w-full"
             disabled={loading || !fullName}
           >
-            {loading ? 'Saving...' : 'Complete Setup'}
+            {loading ? t.onboarding.saving : t.onboarding.completeSetup}
           </button>
         </form>
       </div>

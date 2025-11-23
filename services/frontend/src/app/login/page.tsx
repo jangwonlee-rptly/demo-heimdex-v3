@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +16,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [signupSuccess, setSignupSuccess] = useState(false);
   const router = useRouter();
+  const { t } = useLanguage();
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,16 +54,19 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="absolute top-4 right-4">
+        <LanguageToggle />
+      </div>
       <div className="card max-w-md w-full">
-        <h1 className="text-3xl font-bold text-center mb-2">Heimdex</h1>
+        <h1 className="text-3xl font-bold text-center mb-2">{t.auth.appTitle}</h1>
         <p className="text-gray-600 text-center mb-8">
-          Vector Native Video Archive
+          {t.auth.appSubtitle}
         </p>
 
         <form onSubmit={handleAuth} className="space-y-4">
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-              Email
+              {t.common.email}
             </label>
             <input
               id="email"
@@ -74,7 +80,7 @@ export default function LoginPage() {
 
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-              Password
+              {t.common.password}
             </label>
             <input
               id="password"
@@ -89,9 +95,9 @@ export default function LoginPage() {
 
           {signupSuccess && (
             <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded">
-              <p className="font-semibold mb-1">Check your email!</p>
+              <p className="font-semibold mb-1">{t.auth.signupSuccessTitle}</p>
               <p className="text-sm">
-                We've sent you a confirmation email from Supabase. Click the link in the email to complete your registration and activate your account.
+                {t.auth.signupSuccessMessage}
               </p>
             </div>
           )}
@@ -107,7 +113,7 @@ export default function LoginPage() {
             className="btn btn-primary w-full"
             disabled={loading}
           >
-            {loading ? 'Loading...' : isSignUp ? 'Sign Up' : 'Sign In'}
+            {loading ? t.common.loading : isSignUp ? t.auth.signUpButton : t.auth.signInButton}
           </button>
         </form>
 
@@ -117,8 +123,8 @@ export default function LoginPage() {
             className="text-primary-600 hover:text-primary-700 text-sm"
           >
             {isSignUp
-              ? 'Already have an account? Sign In'
-              : "Don't have an account? Sign Up"}
+              ? t.auth.toggleSignIn
+              : t.auth.toggleSignUp}
           </button>
         </div>
       </div>

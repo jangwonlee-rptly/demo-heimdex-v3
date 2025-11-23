@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { UserProfile, Video } from '@/types';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +14,7 @@ export default function DashboardPage() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const { t } = useLanguage();
 
   useEffect(() => {
     const init = async () => {
@@ -75,7 +78,7 @@ export default function DashboardPage() {
 
     return (
       <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status]}`}>
-        {status}
+        {t.dashboard.status[status]}
       </span>
     );
   };
@@ -83,7 +86,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
+        <div className="text-lg">{t.common.loading}</div>
       </div>
     );
   }
@@ -94,17 +97,20 @@ export default function DashboardPage() {
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-3xl font-bold">Heimdex Dashboard</h1>
+            <h1 className="text-3xl font-bold">{t.dashboard.title}</h1>
             <p className="text-gray-600 mt-1">
-              Welcome back, {profile?.full_name}
+              {t.dashboard.welcome}, {profile?.full_name}
             </p>
           </div>
-          <button
-            onClick={handleSignOut}
-            className="btn btn-secondary"
-          >
-            Sign Out
-          </button>
+          <div className="flex items-center gap-4">
+            <LanguageToggle />
+            <button
+              onClick={handleSignOut}
+              className="btn btn-secondary"
+            >
+              {t.common.signOut}
+            </button>
+          </div>
         </div>
 
         {/* Actions */}
@@ -113,24 +119,24 @@ export default function DashboardPage() {
             onClick={() => router.push('/upload')}
             className="btn btn-primary"
           >
-            Upload Video
+            {t.dashboard.uploadVideo}
           </button>
           <button
             onClick={() => router.push('/search')}
             className="btn btn-secondary"
           >
-            Search Videos
+            {t.dashboard.searchVideos}
           </button>
         </div>
 
         {/* Videos List */}
         <div className="card">
-          <h2 className="text-xl font-semibold mb-4">Your Videos</h2>
+          <h2 className="text-xl font-semibold mb-4">{t.dashboard.yourVideos}</h2>
 
           {videos.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
-              <p className="text-lg mb-2">No videos yet</p>
-              <p>Upload your first video to get started!</p>
+              <p className="text-lg mb-2">{t.dashboard.noVideos}</p>
+              <p>{t.dashboard.uploadFirst}</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -150,17 +156,17 @@ export default function DashboardPage() {
 
                       <div className="text-sm text-gray-600 space-y-1">
                         {video.duration_s && (
-                          <p>Duration: {Math.round(video.duration_s)}s</p>
+                          <p>{t.dashboard.duration}: {Math.round(video.duration_s)}s</p>
                         )}
                         {video.width && video.height && (
-                          <p>Resolution: {video.width}x{video.height}</p>
+                          <p>{t.dashboard.resolution}: {video.width}x{video.height}</p>
                         )}
-                        <p>Uploaded: {new Date(video.created_at).toLocaleString()}</p>
+                        <p>{t.dashboard.uploaded}: {new Date(video.created_at).toLocaleString()}</p>
                       </div>
 
                       {video.error_message && (
                         <p className="text-sm text-red-600 mt-2">
-                          Error: {video.error_message}
+                          {t.dashboard.error}: {video.error_message}
                         </p>
                       )}
 
@@ -170,7 +176,7 @@ export default function DashboardPage() {
                             onClick={() => handleProcessVideo(video.id)}
                             className="btn btn-primary btn-sm"
                           >
-                            Start Processing
+                            {t.dashboard.startProcessing}
                           </button>
                         )}
                         {video.status === 'READY' && (
@@ -178,7 +184,7 @@ export default function DashboardPage() {
                             onClick={() => router.push(`/videos/${video.id}`)}
                             className="btn btn-primary btn-sm"
                           >
-                            View Details
+                            {t.dashboard.viewDetails}
                           </button>
                         )}
                       </div>

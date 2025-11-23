@@ -4,10 +4,13 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
 export default function SearchPage() {
+  const { t } = useLanguage();
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult | null>(null);
@@ -74,22 +77,25 @@ export default function SearchPage() {
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-7xl mx-auto">
-        <button
-          onClick={() => router.push('/dashboard')}
-          className="btn btn-secondary mb-6"
-        >
-          ← Back to Dashboard
-        </button>
+        <div className="flex items-center justify-between mb-6">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="btn btn-secondary"
+          >
+            ← {t.common.back}
+          </button>
+          <LanguageToggle />
+        </div>
 
         <div className="card mb-6">
-          <h1 className="text-2xl font-bold mb-4">Search Videos</h1>
+          <h1 className="text-2xl font-bold mb-4">{t.search.title}</h1>
 
           <form onSubmit={handleSearch} className="flex gap-4">
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search for scenes... (e.g., 'person talking', 'outdoor scene')"
+              placeholder={t.search.searchPlaceholder}
               className="input flex-1"
             />
             <button
@@ -97,13 +103,13 @@ export default function SearchPage() {
               disabled={searching || !query.trim()}
               className="btn btn-primary"
             >
-              {searching ? 'Searching...' : 'Search'}
+              {searching ? t.search.searching : t.search.searchButton}
             </button>
           </form>
 
           {results && (
             <div className="mt-4 text-sm text-gray-600">
-              Found {results.total} results in {results.latency_ms}ms
+              {results.total} {t.search.resultsFound} ({results.latency_ms}ms)
             </div>
           )}
         </div>
@@ -121,7 +127,7 @@ export default function SearchPage() {
 
             {results && results.results.length === 0 && (
               <div className="text-center py-12 text-gray-500">
-                <p>No results found</p>
+                <p>{t.search.noResults}</p>
                 <p className="text-sm mt-2">Try adjusting your search query</p>
               </div>
             )}
@@ -149,7 +155,7 @@ export default function SearchPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-xs font-medium text-gray-500">
-                            Scene {scene.index + 1}
+                            {t.search.scene} {scene.index + 1}
                           </span>
                           <span className="text-xs text-gray-400">
                             {scene.start_s.toFixed(1)}s - {scene.end_s.toFixed(1)}s
@@ -203,9 +209,9 @@ export default function SearchPage() {
                 </video>
 
                 <div className="bg-gray-50 p-4 rounded-lg">
-                  <h3 className="font-medium mb-2">Scene {selectedScene.index + 1}</h3>
+                  <h3 className="font-medium mb-2">{t.search.scene} {selectedScene.index + 1}</h3>
                   <p className="text-sm text-gray-600 mb-2">
-                    Time: {selectedScene.start_s.toFixed(1)}s - {selectedScene.end_s.toFixed(1)}s
+                    {t.search.timestamp}: {selectedScene.start_s.toFixed(1)}s - {selectedScene.end_s.toFixed(1)}s
                   </p>
                   {selectedScene.visual_summary && (
                     <div className="mb-3">

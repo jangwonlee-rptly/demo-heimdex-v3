@@ -3,12 +3,15 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
 export default function LandingPage() {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const { t } = useLanguage();
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -25,7 +28,7 @@ export default function LandingPage() {
   if (isCheckingAuth) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
+        <div className="text-lg">{t.common.loading}</div>
       </div>
     );
   }
@@ -42,17 +45,18 @@ export default function LandingPage() {
               </span>
             </div>
             <div className="flex items-center gap-4">
+              <LanguageToggle />
               <button
                 onClick={() => router.push('/login')}
                 className="text-gray-700 hover:text-gray-900 px-4 py-2 rounded-lg hover:bg-gray-100 transition"
               >
-                Sign In
+                {t.common.signIn}
               </button>
               <button
                 onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2 rounded-lg hover:shadow-lg transition transform hover:scale-105"
               >
-                Get Demo
+                {t.landing.getDemo}
               </button>
             </div>
           </div>
@@ -63,27 +67,27 @@ export default function LandingPage() {
       <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto text-center">
           <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold text-gray-900 mb-6">
-            Search Your Videos
+            {t.landing.heroTitle1}
             <br />
             <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Like Never Before
+              {t.landing.heroTitle2}
             </span>
           </h1>
           <p className="text-xl sm:text-2xl text-gray-600 mb-12 max-w-3xl mx-auto">
-            Heimdex is a vector-native video archive platform that lets you search your entire video library using natural language. Find exactly what you're looking for, instantly.
+            {t.landing.heroDescription}
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
               onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
-              Request a Demo
+              {t.landing.requestDemo}
             </button>
             <button
               onClick={() => router.push('/login')}
               className="border-2 border-gray-300 text-gray-700 px-8 py-4 rounded-lg text-lg font-semibold hover:border-gray-400 hover:bg-gray-50 transition"
             >
-              Get Started
+              {t.landing.getStarted}
             </button>
           </div>
         </div>
@@ -93,10 +97,10 @@ export default function LandingPage() {
       <section className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-bold text-center text-gray-900 mb-4">
-            Powerful Features
+            {t.landing.featuresTitle}
           </h2>
           <p className="text-xl text-gray-600 text-center mb-16 max-w-2xl mx-auto">
-            Everything you need to manage and search your video archive
+            {t.landing.featuresSubtitle}
           </p>
 
           <div className="grid md:grid-cols-3 gap-8">
@@ -108,10 +112,10 @@ export default function LandingPage() {
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                Natural Language Search
+                {t.landing.feature1Title}
               </h3>
               <p className="text-gray-600">
-                Search your videos using everyday language. Ask questions like "show me the meeting where we discussed the budget" and get instant results.
+                {t.landing.feature1Description}
               </p>
             </div>
 
@@ -123,10 +127,10 @@ export default function LandingPage() {
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                Lightning Fast Processing
+                {t.landing.feature2Title}
               </h3>
               <p className="text-gray-600">
-                Advanced AI extracts audio, transcribes content, and creates searchable embeddings automatically. Your videos are ready to search in minutes.
+                {t.landing.feature2Description}
               </p>
             </div>
 
@@ -138,10 +142,10 @@ export default function LandingPage() {
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                Secure & Private
+                {t.landing.feature3Title}
               </h3>
               <p className="text-gray-600">
-                Your videos stay secure with enterprise-grade encryption and access controls. Self-hosted options available for maximum privacy.
+                {t.landing.feature3Description}
               </p>
             </div>
           </div>
@@ -152,10 +156,10 @@ export default function LandingPage() {
       <section className="py-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-bold text-center text-gray-900 mb-4">
-            How It Works
+            {t.landing.howItWorksTitle}
           </h2>
           <p className="text-xl text-gray-600 text-center mb-16 max-w-2xl mx-auto">
-            Get started in three simple steps
+            {t.landing.howItWorksSubtitle}
           </p>
 
           <div className="grid md:grid-cols-3 gap-12">
@@ -164,10 +168,10 @@ export default function LandingPage() {
                 1
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                Upload Your Videos
+                {t.landing.step1Title}
               </h3>
               <p className="text-gray-600">
-                Drag and drop your video files or connect your existing video storage.
+                {t.landing.step1Description}
               </p>
             </div>
 
@@ -176,10 +180,10 @@ export default function LandingPage() {
                 2
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                AI Processing
+                {t.landing.step2Title}
               </h3>
               <p className="text-gray-600">
-                Our AI automatically transcribes and indexes your content for semantic search.
+                {t.landing.step2Description}
               </p>
             </div>
 
@@ -188,10 +192,10 @@ export default function LandingPage() {
                 3
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                Search & Discover
+                {t.landing.step3Title}
               </h3>
               <p className="text-gray-600">
-                Find exactly what you need using natural language queries.
+                {t.landing.step3Description}
               </p>
             </div>
           </div>
@@ -202,23 +206,23 @@ export default function LandingPage() {
       <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-r from-blue-600 to-purple-600">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-4xl font-bold text-white mb-6">
-            Ready to Transform Your Video Archive?
+            {t.landing.ctaTitle}
           </h2>
           <p className="text-xl text-blue-100 mb-8">
-            Join organizations that are already using Heimdex to unlock the value in their video content.
+            {t.landing.ctaDescription}
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
               onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="bg-white text-blue-600 px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
-              Schedule a Demo
+              {t.landing.scheduleDemo}
             </button>
             <button
               onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
               className="border-2 border-white text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-white/10 transition"
             >
-              Contact Sales
+              {t.landing.contactSales}
             </button>
           </div>
         </div>
@@ -230,9 +234,9 @@ export default function LandingPage() {
           <div className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent mb-4">
             Heimdex
           </div>
-          <p className="mb-4">Vector Native Video Archive Platform</p>
+          <p className="mb-4">{t.landing.footerTagline}</p>
           <p className="text-sm">
-            © 2025 Heimdex. All rights reserved.
+            {t.landing.footerCopyright}
           </p>
         </div>
       </footer>

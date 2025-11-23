@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest, getAccessToken } from '@/lib/supabase';
+import { useLanguage } from '@/lib/i18n';
+import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +18,7 @@ interface UploadProgress {
 }
 
 export default function UploadPage() {
+  const { t } = useLanguage();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
@@ -180,15 +183,18 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-2xl mx-auto">
-        <button
-          onClick={() => router.push('/dashboard')}
-          className="btn btn-secondary mb-6"
-        >
-          ← Back to Dashboard
-        </button>
+        <div className="flex items-center justify-between mb-6">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="btn btn-secondary"
+          >
+            ← {t.upload.backToDashboard}
+          </button>
+          <LanguageToggle />
+        </div>
 
         <div className="card">
-          <h1 className="text-2xl font-bold mb-2">Upload Video</h1>
+          <h1 className="text-2xl font-bold mb-2">{t.upload.title}</h1>
           <p className="text-gray-600 mb-6">
             Upload a video to process and make it searchable
           </p>
@@ -219,7 +225,7 @@ export default function UploadPage() {
 
             {file && !uploading && (
               <div className="bg-gray-50 p-4 rounded-lg">
-                <p className="text-sm font-medium text-gray-700">Selected file:</p>
+                <p className="text-sm font-medium text-gray-700">{t.upload.selectedFile}:</p>
                 <p className="text-sm text-gray-600">{file.name}</p>
                 <p className="text-sm text-gray-600">
                   Size: {(file.size / 1024 / 1024).toFixed(2)} MB
@@ -273,7 +279,7 @@ export default function UploadPage() {
 
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-                <p className="font-medium">Upload failed</p>
+                <p className="font-medium">{t.upload.uploadError}</p>
                 <p className="text-sm mt-1">{error}</p>
               </div>
             )}
@@ -283,7 +289,7 @@ export default function UploadPage() {
               disabled={!file || uploading}
               className="btn btn-primary w-full"
             >
-              {uploading ? 'Uploading...' : 'Upload Video'}
+              {uploading ? t.upload.uploading : t.upload.uploadButton}
             </button>
 
             <div className="text-sm text-gray-600">
