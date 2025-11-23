@@ -15,6 +15,7 @@ class OpenAIClient:
     """OpenAI API client wrapper."""
 
     def __init__(self):
+        """Initialize the OpenAI client."""
         self.client = OpenAI(api_key=settings.openai_api_key)
 
     def transcribe_audio(self, audio_file_path: Path) -> str:
@@ -25,7 +26,7 @@ class OpenAIClient:
             audio_file_path: Path to audio file
 
         Returns:
-            Transcription text
+            str: Transcription text
         """
         logger.info(f"Transcribing audio from {audio_file_path}")
         with open(audio_file_path, "rb") as audio_file:
@@ -52,7 +53,7 @@ class OpenAIClient:
             language: Language for the summary ('ko' or 'en')
 
         Returns:
-            Visual summary text
+            str: Visual summary text
         """
         logger.info(f"Analyzing {len(image_paths)} keyframes with GPT-4o in language: {language}")
 
@@ -124,7 +125,7 @@ class OpenAIClient:
             language: Language for the summary ('ko' or 'en')
 
         Returns:
-            Dict with structure:
+            Optional[dict]: Dict with structure:
             {
                 "status": "ok" | "no_content",
                 "description": "short Korean/English description",
@@ -267,7 +268,7 @@ Rules:
             text: Text to embed
 
         Returns:
-            List of floats representing the embedding vector
+            list[float]: List of floats representing the embedding vector
         """
         response = self.client.embeddings.create(
             model=settings.embedding_model,

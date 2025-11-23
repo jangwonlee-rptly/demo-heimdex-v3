@@ -8,6 +8,14 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Login and sign-up page.
+ *
+ * Handles email/password authentication using Supabase Auth.
+ * Toggles between sign-in and sign-up modes.
+ *
+ * @returns {JSX.Element} The login page.
+ */
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

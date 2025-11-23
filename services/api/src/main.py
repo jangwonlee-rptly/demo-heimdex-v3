@@ -17,7 +17,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup and shutdown events."""
+    """Lifespan context manager for startup and shutdown events.
+
+    Args:
+        app: The FastAPI application instance.
+
+    Yields:
+        None: Control is yielded back to the application.
+    """
     # Startup
     logger.info("Starting Heimdex API service")
     logger.info(f"CORS origins: {settings.cors_origins_list}")
@@ -52,7 +59,11 @@ app.include_router(search.router, tags=["Search"])
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
+    """Root endpoint.
+
+    Returns:
+        dict: Service information including name, version, and status.
+    """
     return {
         "service": "Heimdex API",
         "version": "0.1.0",

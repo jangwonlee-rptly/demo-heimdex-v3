@@ -7,6 +7,13 @@ export const metadata: Metadata = {
   description: 'Search your videos with natural language',
 };
 
+/**
+ * Root layout component for the application.
+ *
+ * @param {Object} props - Component props.
+ * @param {React.ReactNode} props.children - The child components to render.
+ * @returns {JSX.Element} The root HTML structure.
+ */
 export default function RootLayout({
   children,
 }: {

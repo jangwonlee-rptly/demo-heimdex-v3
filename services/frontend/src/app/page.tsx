@@ -8,6 +8,14 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Landing page component.
+ *
+ * Handles initial authentication check and redirects to dashboard if logged in.
+ * Otherwise displays the landing page content.
+ *
+ * @returns {JSX.Element} The landing page.
+ */
 export default function LandingPage() {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);

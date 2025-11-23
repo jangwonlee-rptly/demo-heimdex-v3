@@ -53,7 +53,7 @@ class VideoProcessor:
             video_filename: Optional video filename for metadata inclusion
 
         Returns:
-            Tuple of (success, scene_id or error_message, scene_index)
+            tuple[bool, str, int]: Tuple of (success, scene_id or error_message, scene_index)
         """
         try:
             logger.info(f"Processing scene {scene.index + 1}/{total_scenes}")
@@ -112,6 +112,9 @@ class VideoProcessor:
 
         Args:
             video_id: ID of the video to process
+
+        Returns:
+            None: This function does not return a value.
 
         Raises:
             Exception: If processing fails

@@ -6,7 +6,9 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholde
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
- * Get the current access token for API requests
+ * Get the current access token for API requests.
+ *
+ * @returns {Promise<string | null>} The access token if a session exists, or null.
  */
 export async function getAccessToken(): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession();
@@ -14,7 +16,13 @@ export async function getAccessToken(): Promise<string | null> {
 }
 
 /**
- * Make an authenticated API request
+ * Make an authenticated API request.
+ *
+ * @template T
+ * @param {string} endpoint - The API endpoint to call (e.g., "/videos").
+ * @param {RequestInit} [options={}] - Fetch options including method, body, etc.
+ * @returns {Promise<T>} The response data parsed as JSON.
+ * @throws {Error} If the API request fails (non-2xx status).
  */
 export async function apiRequest<T>(
   endpoint: string,

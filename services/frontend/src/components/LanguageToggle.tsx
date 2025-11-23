@@ -2,6 +2,11 @@
 
 import { useLanguage } from '@/lib/i18n';
 
+/**
+ * A component to toggle between English and Korean languages.
+ *
+ * @returns {JSX.Element} The language toggle button.
+ */
 export default function LanguageToggle() {
   const { language, setLanguage } = useLanguage();
 

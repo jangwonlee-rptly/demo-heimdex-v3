@@ -54,7 +54,11 @@ class VideoUploadUrlResponse(BaseModel):
 
 
 class VideoUploadedRequest(BaseModel):
-    """Schema for marking video as uploaded."""
+    """Schema for marking video as uploaded.
+
+    This schema is currently empty as no additional data is required
+    when marking a video as uploaded.
+    """
 
     pass  # No additional fields needed
 

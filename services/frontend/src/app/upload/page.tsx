@@ -17,6 +17,14 @@ interface UploadProgress {
   speed?: number; // bytes per second
 }
 
+/**
+ * Video upload page.
+ *
+ * Allows users to select and upload a video file.
+ * Handles file selection, upload progress tracking, and API interaction for processing.
+ *
+ * @returns {JSX.Element} The upload page.
+ */
 export default function UploadPage() {
   const { t } = useLanguage();
   const [file, setFile] = useState<File | null>(null);

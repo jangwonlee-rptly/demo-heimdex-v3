@@ -8,6 +8,14 @@ import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * User onboarding page.
+ *
+ * Collects profile information from new users such as full name, industry, and job title.
+ * Creates a user profile in the backend.
+ *
+ * @returns {JSX.Element} The onboarding page.
+ */
 export default function OnboardingPage() {
   const [fullName, setFullName] = useState('');
   const [industry, setIndustry] = useState('');
