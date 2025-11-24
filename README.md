@@ -8,6 +8,7 @@ A production-ready demo application that enables semantic search across videos u
 - **User Onboarding**: First-time user profile setup with marketing consent tracking
 - **Video Upload**: Upload videos to Supabase Storage with progress tracking
 - **Automated Processing**: Background worker processes videos into searchable scenes
+- **Real-time Updates**: Dashboard automatically updates when video processing completes
 - **Scene Detection**: Automatic scene boundary detection using PySceneDetect
 - **AI Transcription**: Speech-to-text using OpenAI Whisper
 - **Visual Analysis**: GPT-4o analyzes keyframes for visual context
@@ -99,6 +100,11 @@ Execute the SQL migrations in order in the Supabase SQL Editor:
 1. `infra/migrations/001_initial_schema.sql`
 2. `infra/migrations/002_enable_pgvector.sql`
 3. `infra/migrations/003_create_indexes.sql`
+4. `infra/migrations/004_add_filename_column.sql`
+5. `infra/migrations/005_add_preferred_language.sql`
+6. `infra/migrations/006_add_transcript_cache.sql`
+7. `infra/migrations/007_add_user_filter_to_search.sql`
+8. `infra/migrations/008_enable_realtime.sql` - **Required for real-time dashboard updates**
 
 ### 3. Create Storage Bucket
 
