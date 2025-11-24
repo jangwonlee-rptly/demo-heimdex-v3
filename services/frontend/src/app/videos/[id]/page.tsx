@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
-import type { VideoDetails } from '@/types';
+import type { VideoDetails, VideoScene } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import LanguageToggle from '@/components/LanguageToggle';
 
@@ -70,6 +70,11 @@ export default function VideoDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedTranscript, setExpandedTranscript] = useState(false);
+  const [expandedSummary, setExpandedSummary] = useState(false);
+  const [viewMode, setViewMode] = useState<'details' | 'transcript'>('details');
+  const [selectedScene, setSelectedScene] = useState<VideoScene | null>(null);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const router = useRouter();
   const params = useParams();
   const videoId = params.id as string;
@@ -95,6 +100,17 @@ export default function VideoDetailsPage() {
 
     init();
   }, [router, videoId]);
+
+  const handleSceneClick = (scene: VideoScene) => {
+    setSelectedScene(scene);
+
+    // Wait for video to load and seek to timestamp
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.currentTime = scene.start_s;
+      }
+    }, 100);
+  };
 
   if (loading) {
     return (
@@ -126,7 +142,25 @@ export default function VideoDetailsPage() {
     );
   }
 
-  const { video, full_transcript, scenes, total_scenes } = videoDetails;
+  const { video, full_transcript, scenes, total_scenes, reprocess_hint } = videoDetails;
+
+  // Filter scenes by selected tag
+  const filteredScenes = selectedTag
+    ? scenes.filter(scene => scene.tags?.includes(selectedTag))
+    : scenes;
+
+  // Get all unique tags from all scenes
+  const allTags = Array.from(
+    new Set(scenes.flatMap(scene => scene.tags || []))
+  ).sort();
+
+  const handleTagClick = (tag: string) => {
+    if (selectedTag === tag) {
+      setSelectedTag(null); // Deselect if clicking the same tag
+    } else {
+      setSelectedTag(tag);
+    }
+  };
 
   return (
     <div className="min-h-screen p-6">
@@ -158,8 +192,35 @@ export default function VideoDetailsPage() {
           </div>
         </div>
 
-        {/* Video Metadata Card */}
-        <div className="card mb-6">
+        {/* View Mode Toggle */}
+        <div className="mb-6 flex gap-2">
+          <button
+            onClick={() => setViewMode('details')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              viewMode === 'details'
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Details
+          </button>
+          <button
+            onClick={() => setViewMode('transcript')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              viewMode === 'transcript'
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Transcript View
+          </button>
+        </div>
+
+        {/* Details View */}
+        {viewMode === 'details' && (
+          <>
+            {/* Video Metadata Card */}
+            <div className="card mb-6">
           <h2 className="text-xl font-semibold mb-4">{t.videoDetails.videoInfo}</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
@@ -191,6 +252,43 @@ export default function VideoDetailsPage() {
           )}
         </div>
 
+        {/* Video Summary Card */}
+        {video.video_summary && (
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Video Summary</h2>
+              <button
+                onClick={() => setExpandedSummary(!expandedSummary)}
+                className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+              >
+                {expandedSummary ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            <div className={`text-gray-700 leading-relaxed ${
+              expandedSummary ? '' : 'max-h-40 overflow-hidden relative'
+            }`}>
+              <p className="whitespace-pre-wrap">{video.video_summary}</p>
+              {!expandedSummary && (
+                <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent"></div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Reprocess Hint */}
+        {reprocess_hint && (
+          <div className="card mb-6 bg-blue-50 border border-blue-200">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-blue-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm text-blue-800">{reprocess_hint}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Full Transcript Card */}
         {full_transcript && (
           <div className="card mb-6">
@@ -217,14 +315,46 @@ export default function VideoDetailsPage() {
         {/* Scenes Section */}
         <div className="mb-6">
           <h2 className="text-2xl font-bold mb-4">Scene-by-Scene Breakdown</h2>
-          <p className="text-gray-600 mb-6">
-            Detailed analysis of all {total_scenes} scenes detected in this video
+          <p className="text-gray-600 mb-2">
+            Detailed analysis of {selectedTag ? filteredScenes.length : total_scenes} scenes {selectedTag && `with tag "${selectedTag}"`}
           </p>
+
+          {/* Tag Filter */}
+          {allTags.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-sm font-medium text-gray-700">Filter by tag:</span>
+                {selectedTag && (
+                  <button
+                    onClick={() => setSelectedTag(null)}
+                    className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                  >
+                    Clear filter
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => handleTagClick(tag)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      selectedTag === tag
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Scene Cards */}
         <div className="space-y-6">
-          {scenes.map((scene) => (
+          {filteredScenes.map((scene) => (
             <div key={scene.id} className="card">
               <div className="flex flex-col md:flex-row gap-6">
                 {/* Scene Thumbnail */}
@@ -273,6 +403,42 @@ export default function VideoDetailsPage() {
                     </div>
                   )}
 
+                  {/* Visual Description (Rich Semantics) */}
+                  {scene.visual_description && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                        Visual Description
+                      </h4>
+                      <p className="text-gray-700 leading-relaxed">
+                        {scene.visual_description}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Tags */}
+                  {scene.tags && scene.tags.length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                        Tags
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {scene.tags.map((tag, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleTagClick(tag)}
+                            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                              selectedTag === tag
+                                ? 'bg-primary-600 text-white'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Scene Metadata */}
                   <div className="flex items-center gap-4 text-xs text-gray-500 mt-4 pt-4 border-t border-gray-200">
                     <span>Duration: {(scene.end_s - scene.start_s).toFixed(1)}s</span>
@@ -285,6 +451,19 @@ export default function VideoDetailsPage() {
         </div>
 
         {/* No Scenes Message */}
+        {filteredScenes.length === 0 && scenes.length > 0 && (
+          <div className="card text-center py-12">
+            <p className="text-gray-600">
+              No scenes found with tag "{selectedTag}".
+            </p>
+            <button
+              onClick={() => setSelectedTag(null)}
+              className="mt-4 btn btn-secondary"
+            >
+              Clear filter
+            </button>
+          </div>
+        )}
         {scenes.length === 0 && (
           <div className="card text-center py-12">
             <p className="text-gray-600">
@@ -292,6 +471,116 @@ export default function VideoDetailsPage() {
                 ? t.videoDetails.noScenes
                 : 'Video is still being processed. Scenes will appear once processing is complete.'}
             </p>
+          </div>
+        )}
+          </>
+        )}
+
+        {/* Transcript View */}
+        {viewMode === 'transcript' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Transcript List */}
+            <div className="card max-h-[calc(100vh-300px)] overflow-y-auto">
+              <h2 className="text-xl font-semibold mb-4">Transcript</h2>
+
+              {scenes.length === 0 && (
+                <div className="text-center py-12 text-gray-500">
+                  <p>
+                    {video.status === 'READY'
+                      ? 'No transcript segments available'
+                      : 'Video is still being processed. Transcript will appear once processing is complete.'}
+                  </p>
+                </div>
+              )}
+
+              {scenes.length > 0 && (
+                <div className="space-y-3">
+                  {scenes.map((scene) => (
+                    <button
+                      key={scene.id}
+                      onClick={() => handleSceneClick(scene)}
+                      className={`w-full text-left p-4 rounded-lg border transition-colors ${
+                        selectedScene?.id === scene.id
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-gray-200 hover:border-primary-300'
+                      }`}
+                    >
+                      <div className="flex gap-4">
+                        {/* Timestamp */}
+                        <div className="flex-shrink-0 w-24">
+                          <div className="text-sm font-medium text-gray-700">
+                            {formatTimestamp(scene.start_s)}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {formatTimestamp(scene.end_s)}
+                          </div>
+                        </div>
+
+                        {/* Transcript Segment */}
+                        <div className="flex-1 min-w-0">
+                          {scene.transcript_segment && (
+                            <p className="text-sm text-gray-700 line-clamp-2">
+                              {scene.transcript_segment}
+                            </p>
+                          )}
+                          {!scene.transcript_segment && (
+                            <p className="text-sm text-gray-400 italic">
+                              No transcript for this segment
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Video Player */}
+            <div className="card">
+              <h2 className="text-xl font-semibold mb-4">Video Player</h2>
+
+              {!selectedScene && (
+                <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
+                  <p>Select a transcript segment to watch</p>
+                </div>
+              )}
+
+              {selectedScene && (
+                <div className="space-y-4">
+                  <video
+                    ref={videoRef}
+                    controls
+                    className="w-full aspect-video bg-black rounded-lg"
+                  >
+                    <source
+                      src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos/${video.storage_path}`}
+                      type="video/mp4"
+                    />
+                    Your browser does not support the video tag.
+                  </video>
+
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <h3 className="font-medium mb-2">Scene {selectedScene.index + 1}</h3>
+                    <p className="text-sm text-gray-600 mb-2">
+                      Timestamp: {formatTimestamp(selectedScene.start_s)} - {formatTimestamp(selectedScene.end_s)}
+                    </p>
+                    {selectedScene.visual_summary && (
+                      <div className="mb-3">
+                        <p className="text-sm font-medium text-gray-700">Visual Description:</p>
+                        <p className="text-sm text-gray-600">{selectedScene.visual_summary}</p>
+                      </div>
+                    )}
+                    {selectedScene.transcript_segment && (
+                      <div>
+                        <p className="text-sm font-medium text-gray-700">Transcript:</p>
+                        <p className="text-sm text-gray-600">{selectedScene.transcript_segment}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -266,7 +266,7 @@ class Database:
         """
         response = (
             self.client.table("video_scenes")
-            .select("id,video_id,index,start_s,end_s,transcript_segment,visual_summary,combined_text,thumbnail_url,created_at")
+            .select("id,video_id,index,start_s,end_s,transcript_segment,visual_summary,combined_text,thumbnail_url,visual_description,visual_entities,visual_actions,tags,created_at")
             .eq("video_id", str(video_id))
             .order("index", desc=False)
             .execute()

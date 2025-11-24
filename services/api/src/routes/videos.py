@@ -300,6 +300,8 @@ async def list_videos(current_user: User = Depends(get_current_user)):
                 height=v.height,
                 video_created_at=v.video_created_at,
                 thumbnail_url=v.thumbnail_url,
+                video_summary=v.video_summary,
+                has_rich_semantics=v.has_rich_semantics,
                 error_message=v.error_message,
                 created_at=v.created_at,
                 updated_at=v.updated_at,
@@ -356,6 +358,8 @@ async def get_video(
         height=video.height,
         video_created_at=video.video_created_at,
         thumbnail_url=video.thumbnail_url,
+        video_summary=video.video_summary,
+        has_rich_semantics=video.has_rich_semantics,
         error_message=video.error_message,
         created_at=video.created_at,
         updated_at=video.updated_at,
@@ -406,6 +410,12 @@ async def get_video_details(
     # Get all scenes for the video
     scenes = db.get_video_scenes(video_id)
 
+    # Determine if reprocess hint should be shown
+    # Show hint if video is READY but doesn't have rich semantics
+    reprocess_hint = None
+    if video.status == "READY" and not video.has_rich_semantics:
+        reprocess_hint = "Reprocess this video to see AI-generated summary and tags."
+
     return VideoDetailsResponse(
         video=VideoResponse(
             id=video.id,
@@ -419,6 +429,8 @@ async def get_video_details(
             height=video.height,
             video_created_at=video.video_created_at,
             thumbnail_url=video.thumbnail_url,
+            video_summary=video.video_summary,
+            has_rich_semantics=video.has_rich_semantics,
             error_message=video.error_message,
             created_at=video.created_at,
             updated_at=video.updated_at,
@@ -435,9 +447,14 @@ async def get_video_details(
                 visual_summary=scene.visual_summary,
                 combined_text=scene.combined_text,
                 thumbnail_url=scene.thumbnail_url,
+                visual_description=scene.visual_description,
+                visual_entities=scene.visual_entities,
+                visual_actions=scene.visual_actions,
+                tags=scene.tags,
                 created_at=scene.created_at,
             )
             for scene in scenes
         ],
         total_scenes=len(scenes),
+        reprocess_hint=reprocess_hint,
     )

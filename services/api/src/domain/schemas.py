@@ -70,14 +70,16 @@ class VideoResponse(BaseModel):
     owner_id: UUID
     storage_path: str
     status: VideoStatus
-    filename: Optional[str]
-    duration_s: Optional[float]
-    frame_rate: Optional[float]
-    width: Optional[int]
-    height: Optional[int]
-    video_created_at: Optional[datetime]
-    thumbnail_url: Optional[str]
-    error_message: Optional[str]
+    filename: Optional[str] = None
+    duration_s: Optional[float] = None
+    frame_rate: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    video_created_at: Optional[datetime] = None
+    thumbnail_url: Optional[str] = None
+    video_summary: Optional[str] = None
+    has_rich_semantics: Optional[bool] = None
+    error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -100,10 +102,14 @@ class VideoSceneResponse(BaseModel):
     index: int
     start_s: float
     end_s: float
-    transcript_segment: Optional[str]
-    visual_summary: Optional[str]
-    combined_text: Optional[str]
-    thumbnail_url: Optional[str]
+    transcript_segment: Optional[str] = None
+    visual_summary: Optional[str] = None
+    combined_text: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    visual_description: Optional[str] = None
+    visual_entities: Optional[list[str]] = None
+    visual_actions: Optional[list[str]] = None
+    tags: Optional[list[str]] = None
     similarity: Optional[float] = None  # Only present in search results
     created_at: Optional[datetime] = None  # Not returned by search RPC
 
@@ -136,6 +142,7 @@ class VideoDetailsResponse(BaseModel):
     full_transcript: Optional[str]
     scenes: list[VideoSceneResponse]
     total_scenes: int
+    reprocess_hint: Optional[str] = None
 
 
 # User Info Schemas

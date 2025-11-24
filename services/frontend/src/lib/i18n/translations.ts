@@ -56,7 +56,7 @@ export const translations: Record<'en' | 'ko', Translations> = {
       footerCopyright: '© 2025 Heimdex. All rights reserved.',
     },
     auth: {
-      appTitle: 'Heimdex',
+      appTitle: 'Heimdex Demo',
       appSubtitle: 'Vector Native Video Archive',
       signInTitle: 'Sign in to Heimdex',
       signUpTitle: 'Create your Heimdex account',
@@ -211,10 +211,10 @@ export const translations: Record<'en' | 'ko', Translations> = {
       scheduleDemo: '데모 예약',
       contactSales: '영업팀 문의',
       footerTagline: '벡터 기반 비디오 아카이브 플랫폼',
-      footerCopyright: '© 2025 Heimdex. 모든 권리 보유.',
+      footerCopyright: '© 2025 Heimdex. All rights reserved.',
     },
     auth: {
-      appTitle: 'Heimdex',
+      appTitle: 'Heimdex Demo',
       appSubtitle: '벡터 기반 비디오 아카이브',
       signInTitle: 'Heimdex 로그인',
       signUpTitle: 'Heimdex 계정 만들기',

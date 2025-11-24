@@ -142,39 +142,43 @@ class OpenAIClient:
             with open(image_path, "rb") as image_file:
                 image_data = base64.b64encode(image_file.read()).decode("utf-8")
 
-            # Build strict system prompt
+            # Build strict system prompt with richer descriptions
             system_prompts = {
                 "ko": """당신은 비디오 장면 분석 전문가입니다. 다음 JSON 스키마로만 응답하세요:
 
 {
   "status": "ok" 또는 "no_content",
-  "description": "30자 이내의 짧은 한국어 문장",
-  "main_entities": ["짧은 명사구 목록"],
-  "actions": ["짧은 동사구 목록"],
+  "description": "1-2문장의 구체적이고 설명적인 한국어 장면 묘사 (최대 200자)",
+  "main_entities": ["주요 인물, 사물, 장소 등의 짧은 명사구"],
+  "actions": ["발생하는 행동을 나타내는 짧은 동사구"],
   "confidence": 0.0에서 1.0 사이의 숫자
 }
 
 규칙:
-- 절대 사과하지 마세요
-- "설명할 수 없습니다" 같은 말을 하지 마세요
 - 장면이 완전히 검은색, 너무 흐릿하거나 인식할 수 없는 경우: status="no_content", description="", main_entities=[], actions=[], confidence=0.0
-- 그 외의 경우: status="ok"이고 30자 이내의 간결한 한국어 설명 제공
+- 그 외의 경우: status="ok"
+- description: 누가 무엇을 하고 있는지, 장소와 분위기를 포함한 1-2문장의 구체적 설명 (최대 200자)
+- main_entities: 주요 등장 인물, 물체, 장소를 짧은 명사구로 나열 (각 항목은 30자 미만)
+- actions: 일어나는 행동을 짧은 동사구로 나열 (각 항목은 30자 미만)
+- 태그로 사용 가능하도록 entities와 actions는 간결하게
 - JSON만 출력하고 추가 설명 없음""",
                 "en": """You are a video scene analysis expert. Respond ONLY with this JSON schema:
 
 {
   "status": "ok" or "no_content",
-  "description": "very short sentence under 50 characters",
-  "main_entities": ["short noun phrases"],
-  "actions": ["short verb phrases"],
+  "description": "1-2 descriptive sentences about the scene (max 200 characters)",
+  "main_entities": ["short noun phrases for people, objects, locations"],
+  "actions": ["short verb phrases for actions happening"],
   "confidence": number between 0.0 and 1.0
 }
 
 Rules:
-- NEVER apologize
-- NEVER say you cannot describe something
 - If scene is completely black, too blurry, or nothing recognizable: status="no_content", description="", main_entities=[], actions=[], confidence=0.0
-- Otherwise: status="ok" with very concise description
+- Otherwise: status="ok"
+- description: 1-2 specific sentences describing who/what is present, what's happening, location and mood (max 200 chars)
+- main_entities: short noun phrases for main people, objects, locations (each item under 30 chars)
+- actions: short verb phrases for actions occurring (each item under 30 chars)
+- Keep entities and actions concise for use as clickable tags
 - Output JSON only, no additional text""",
             }
 
@@ -258,6 +262,100 @@ Rules:
             return None
         except Exception as e:
             logger.error(f"Visual analysis failed: {e}", exc_info=True)
+            return None
+
+    def summarize_video_from_scenes(
+        self,
+        scene_descriptions: list[str],
+        transcript_language: str = "ko",
+    ) -> Optional[str]:
+        """
+        Generate video-level summary from scene descriptions.
+
+        Token efficiency:
+        - Limits number of scene descriptions to avoid token overflow
+        - Truncates combined text if needed
+        - Uses small max_tokens for concise output
+        - Requests 3-5 sentences max
+
+        Args:
+            scene_descriptions: List of scene descriptions (in order)
+            transcript_language: Language for the summary ('ko' or 'en')
+
+        Returns:
+            Optional[str]: Video summary (3-5 sentences) or None if failed
+        """
+        if not scene_descriptions:
+            logger.warning("No scene descriptions provided for video summary")
+            return None
+
+        try:
+            # Limit number of scenes to manage token usage
+            # Take first N, some from middle, and last few for representative sample
+            max_scenes = 30
+            if len(scene_descriptions) > max_scenes:
+                # Take first 10, middle 10, last 10
+                sampled = (
+                    scene_descriptions[:10]
+                    + scene_descriptions[len(scene_descriptions)//2 - 5:len(scene_descriptions)//2 + 5]
+                    + scene_descriptions[-10:]
+                )
+                logger.info(f"Sampled {len(sampled)} scenes from {len(scene_descriptions)} total for summary")
+            else:
+                sampled = scene_descriptions
+
+            # Combine scene descriptions
+            combined_text = "\n".join(f"장면 {i+1}: {desc}" if transcript_language == "ko" else f"Scene {i+1}: {desc}"
+                                     for i, desc in enumerate(sampled))
+
+            # Truncate if too long (preserve ~4000 characters for safety)
+            max_chars = 4000
+            if len(combined_text) > max_chars:
+                combined_text = combined_text[:max_chars] + "..."
+                logger.info(f"Truncated scene descriptions to {max_chars} characters")
+
+            # Build system prompt
+            system_prompts = {
+                "ko": """당신은 비디오 요약 전문가입니다. 장면별 설명을 바탕으로 전체 비디오를 요약하세요.
+
+요구사항:
+- 3-5문장의 간결한 한국어 요약 작성
+- 비디오의 주요 내용, 주제, 흐름을 포착
+- 구체적이고 설명적으로 작성
+- 단락 형식 또는 3-5개의 핵심 포인트
+- 추가 설명 없이 요약만 제공""",
+                "en": """You are a video summarization expert. Summarize the entire video based on scene descriptions.
+
+Requirements:
+- Write a concise 3-5 sentence summary in English
+- Capture the main content, themes, and flow of the video
+- Be specific and descriptive
+- Format as a paragraph or 3-5 key points
+- Provide only the summary without additional commentary""",
+            }
+
+            system_prompt = system_prompts.get(transcript_language, system_prompts["ko"])
+
+            # User message with scene descriptions
+            user_message = combined_text
+
+            # Call OpenAI
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",  # Use cost-efficient model for summaries
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=300,  # Limit output length
+                temperature=0.3,  # Slightly creative but mostly deterministic
+            )
+
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"Generated video summary: {summary[:100]}...")
+            return summary
+
+        except Exception as e:
+            logger.error(f"Failed to generate video summary: {e}", exc_info=True)
             return None
 
     def create_embedding(self, text: str) -> list[float]:

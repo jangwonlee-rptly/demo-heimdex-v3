@@ -84,6 +84,10 @@ class VideoProcessor:
                 combined_text=sidecar.combined_text,
                 embedding=sidecar.embedding,
                 thumbnail_url=sidecar.thumbnail_url,
+                visual_description=sidecar.visual_description,
+                visual_entities=sidecar.visual_entities,
+                visual_actions=sidecar.visual_actions,
+                tags=sidecar.tags,
             )
 
             logger.info(f"Scene {scene.index} saved with id={scene_id}")
@@ -285,6 +289,40 @@ class VideoProcessor:
                         content_type="image/jpeg",
                     )
                     db.update_video_metadata(video_id=video_id, thumbnail_url=thumbnail_url)
+
+            # Step 8: Generate video-level summary from scene descriptions (v2)
+            logger.info("Generating video-level summary from scene descriptions")
+            try:
+                scene_descriptions = db.get_scene_descriptions(video_id)
+
+                if scene_descriptions:
+                    logger.info(f"Found {len(scene_descriptions)} scene descriptions for video summary")
+                    video_summary = openai_client.summarize_video_from_scenes(
+                        scene_descriptions,
+                        transcript_language=language,
+                    )
+
+                    if video_summary:
+                        logger.info(f"Generated video summary: {video_summary[:100]}...")
+                        db.update_video_metadata(
+                            video_id=video_id,
+                            video_summary=video_summary,
+                            has_rich_semantics=True,
+                        )
+                    else:
+                        logger.warning("Failed to generate video summary")
+                        # Still mark as having rich semantics even if summary failed
+                        db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
+                else:
+                    logger.warning("No scene descriptions found for video summary")
+                    # Mark as having rich semantics even without summary (scenes have tags)
+                    db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
+
+            except Exception as e:
+                logger.error(f"Failed to generate video summary: {e}", exc_info=True)
+                # Continue processing - summary generation failure shouldn't fail the entire job
+                # Still mark as having rich semantics (scenes have the new fields)
+                db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
 
             # Mark as READY
             db.update_video_status(video_id, VideoStatus.READY)

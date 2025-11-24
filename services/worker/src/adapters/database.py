@@ -102,6 +102,8 @@ class Database:
         height: Optional[int] = None,
         video_created_at: Optional[datetime] = None,
         thumbnail_url: Optional[str] = None,
+        video_summary: Optional[str] = None,
+        has_rich_semantics: Optional[bool] = None,
     ) -> None:
         """Update video metadata.
 
@@ -113,6 +115,8 @@ class Database:
             height: Height of the video resolution.
             video_created_at: Creation timestamp from video metadata.
             thumbnail_url: URL of the video thumbnail.
+            video_summary: AI-generated video summary (v2).
+            has_rich_semantics: Flag indicating rich semantics processing (v2).
 
         Returns:
             None: This function does not return a value.
@@ -124,9 +128,15 @@ class Database:
             "height": height,
             "video_created_at": video_created_at.isoformat() if video_created_at else None,
             "thumbnail_url": thumbnail_url,
+            "video_summary": video_summary,
+            "has_rich_semantics": has_rich_semantics,
         }
 
-        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+        # Remove None values to avoid overwriting existing data
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+
+        if update_data:
+            self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
 
     def save_transcript(self, video_id: UUID, transcript: str) -> None:
         """
@@ -171,6 +181,10 @@ class Database:
         combined_text: str,
         embedding: list[float],
         thumbnail_url: Optional[str] = None,
+        visual_description: Optional[str] = None,
+        visual_entities: Optional[list[str]] = None,
+        visual_actions: Optional[list[str]] = None,
+        tags: Optional[list[str]] = None,
     ) -> UUID:
         """Create a video scene record.
 
@@ -184,6 +198,10 @@ class Database:
             combined_text: The combined text for embedding.
             embedding: The embedding vector.
             thumbnail_url: The URL of the scene thumbnail.
+            visual_description: Richer 1-2 sentence description (v2).
+            visual_entities: List of main entities detected (v2).
+            visual_actions: List of actions detected (v2).
+            tags: Normalized tags for filtering (v2).
 
         Returns:
             UUID: The UUID of the created scene.
@@ -201,6 +219,10 @@ class Database:
             "combined_text": combined_text,
             "embedding": embedding_str,
             "thumbnail_url": thumbnail_url,
+            "visual_description": visual_description,
+            "visual_entities": visual_entities or [],
+            "visual_actions": visual_actions or [],
+            "tags": tags or [],
         }
 
         response = self.client.table("video_scenes").insert(data).execute()
@@ -245,6 +267,35 @@ class Database:
             .execute()
         )
         return {row["index"] for row in response.data}
+
+    def get_scene_descriptions(self, video_id: UUID) -> list[str]:
+        """
+        Get all visual descriptions for a video's scenes, ordered by index.
+
+        This is used to generate video-level summaries.
+
+        Args:
+            video_id: Video ID
+
+        Returns:
+            List of scene descriptions in order (empty strings for scenes without descriptions)
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("index, visual_description")
+            .eq("video_id", str(video_id))
+            .order("index")
+            .execute()
+        )
+
+        # Extract descriptions, filtering out empty/null ones
+        descriptions = [
+            row.get("visual_description", "").strip()
+            for row in response.data
+            if row.get("visual_description")
+        ]
+
+        return descriptions
 
     def delete_scenes_for_video(self, video_id: UUID) -> None:
         """Delete all scenes for a video (used for reprocessing).

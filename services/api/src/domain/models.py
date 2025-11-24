@@ -70,6 +70,8 @@ class Video:
         video_created_at: Optional[datetime] = None,
         thumbnail_url: Optional[str] = None,
         full_transcript: Optional[str] = None,
+        video_summary: Optional[str] = None,
+        has_rich_semantics: Optional[bool] = None,
         error_message: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
@@ -89,6 +91,8 @@ class Video:
             video_created_at: Creation timestamp from video metadata (optional).
             thumbnail_url: URL to the video thumbnail (optional).
             full_transcript: Full transcript of the video (optional).
+            video_summary: AI-generated video summary (v2, optional).
+            has_rich_semantics: Flag indicating rich semantics processing (v2, optional).
             error_message: Error message if processing failed (optional).
             created_at: Timestamp when the video record was created.
             updated_at: Timestamp when the video record was last updated.
@@ -105,6 +109,8 @@ class Video:
         self.video_created_at = video_created_at
         self.thumbnail_url = thumbnail_url
         self.full_transcript = full_transcript
+        self.video_summary = video_summary
+        self.has_rich_semantics = has_rich_semantics
         self.error_message = error_message
         self.created_at = created_at
         self.updated_at = updated_at
@@ -124,6 +130,10 @@ class VideoScene:
         visual_summary: Optional[str] = None,
         combined_text: Optional[str] = None,
         thumbnail_url: Optional[str] = None,
+        visual_description: Optional[str] = None,
+        visual_entities: Optional[list[str]] = None,
+        visual_actions: Optional[list[str]] = None,
+        tags: Optional[list[str]] = None,
         similarity: Optional[float] = None,  # For search results
         created_at: Optional[datetime] = None,
     ):
@@ -139,6 +149,10 @@ class VideoScene:
             visual_summary: Visual description of this scene (optional).
             combined_text: Combined text used for embedding generation (optional).
             thumbnail_url: URL to the scene thumbnail (optional).
+            visual_description: Richer 1-2 sentence description (v2, optional).
+            visual_entities: List of main entities detected (v2, optional).
+            visual_actions: List of actions detected (v2, optional).
+            tags: Normalized tags for filtering (v2, optional).
             similarity: Similarity score for search results (optional).
             created_at: Timestamp when the scene was created.
         """
@@ -151,5 +165,9 @@ class VideoScene:
         self.visual_summary = visual_summary
         self.combined_text = combined_text
         self.thumbnail_url = thumbnail_url
+        self.visual_description = visual_description
+        self.visual_entities = visual_entities or []
+        self.visual_actions = visual_actions or []
+        self.tags = tags or []
         self.similarity = similarity
         self.created_at = created_at

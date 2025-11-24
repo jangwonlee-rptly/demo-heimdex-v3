@@ -27,6 +27,10 @@ class SceneSidecar:
         combined_text: str,
         embedding: list[float],
         thumbnail_url: Optional[str] = None,
+        visual_description: Optional[str] = None,
+        visual_entities: Optional[list[str]] = None,
+        visual_actions: Optional[list[str]] = None,
+        tags: Optional[list[str]] = None,
     ):
         """Initialize SceneSidecar.
 
@@ -39,6 +43,10 @@ class SceneSidecar:
             combined_text: The combined text for embedding.
             embedding: The embedding vector.
             thumbnail_url: The URL of the scene thumbnail (optional).
+            visual_description: Richer 1-2 sentence description (v2).
+            visual_entities: List of main entities detected (v2).
+            visual_actions: List of actions detected (v2).
+            tags: Normalized tags for filtering (v2).
         """
         self.index = index
         self.start_s = start_s
@@ -48,10 +56,60 @@ class SceneSidecar:
         self.combined_text = combined_text
         self.embedding = embedding
         self.thumbnail_url = thumbnail_url
+        self.visual_description = visual_description
+        self.visual_entities = visual_entities or []
+        self.visual_actions = visual_actions or []
+        self.tags = tags or []
 
 
 class SidecarBuilder:
     """Builds scene sidecars with transcripts, visuals, and embeddings."""
+
+    @staticmethod
+    def _normalize_tags(entities: list[str], actions: list[str]) -> list[str]:
+        """
+        Normalize and combine entities and actions into tags.
+
+        Normalization:
+        - Trim whitespace
+        - Convert to lowercase
+        - Remove duplicates
+        - Filter empty strings
+        - Limit length to 30 characters per tag
+
+        Args:
+            entities: List of entity strings
+            actions: List of action strings
+
+        Returns:
+            List of normalized, deduplicated tags
+        """
+        all_tags = entities + actions
+
+        # Normalize each tag
+        normalized = []
+        for tag in all_tags:
+            if not tag:
+                continue
+
+            # Trim and lowercase
+            tag = tag.strip().lower()
+
+            # Skip empty or too long
+            if not tag or len(tag) > 30:
+                continue
+
+            normalized.append(tag)
+
+        # Deduplicate while preserving order
+        seen = set()
+        deduplicated = []
+        for tag in normalized:
+            if tag not in seen:
+                seen.add(tag)
+                deduplicated.append(tag)
+
+        return deduplicated
 
     @staticmethod
     def build_sidecar(
@@ -105,8 +163,12 @@ class SidecarBuilder:
             transcript_segment and len(transcript_segment.strip()) > 20
         )
 
-        # Initialize visual summary
+        # Initialize visual semantics fields
         visual_summary = ""
+        visual_description = None
+        visual_entities = []
+        visual_actions = []
+        tags = []
         thumbnail_url = None
         best_frame_path = None
 
@@ -138,33 +200,43 @@ class SidecarBuilder:
 
                     # Process result
                     if visual_result and visual_result.get("status") == "ok":
-                        # Build visual summary from JSON fields
-                        parts = []
-
+                        # Extract richer description (v2)
                         description = visual_result.get("description", "")
+                        if description:
+                            visual_description = description
+                            logger.info(f"Visual description: {visual_description[:100]}...")
+
+                        # Extract entities and actions (v2)
+                        if settings.visual_semantics_include_entities:
+                            visual_entities = visual_result.get("main_entities", [])
+                            logger.info(f"Extracted {len(visual_entities)} entities")
+
+                        if settings.visual_semantics_include_actions:
+                            visual_actions = visual_result.get("actions", [])
+                            logger.info(f"Extracted {len(visual_actions)} actions")
+
+                        # Normalize tags from entities and actions
+                        tags = SidecarBuilder._normalize_tags(visual_entities, visual_actions)
+                        logger.info(f"Normalized to {len(tags)} tags: {tags[:5]}")
+
+                        # Build visual summary for backward compatibility (combines description + entities + actions)
+                        parts = []
                         if description:
                             parts.append(description)
 
-                        # Add entities if available
-                        if settings.visual_semantics_include_entities:
-                            entities = visual_result.get("main_entities", [])
-                            if entities:
-                                if language == "ko":
-                                    parts.append(f"주요 대상: {', '.join(entities)}")
-                                else:
-                                    parts.append(f"Main entities: {', '.join(entities)}")
+                        if visual_entities:
+                            if language == "ko":
+                                parts.append(f"주요 대상: {', '.join(visual_entities)}")
+                            else:
+                                parts.append(f"Main entities: {', '.join(visual_entities)}")
 
-                        # Add actions if available
-                        if settings.visual_semantics_include_actions:
-                            actions = visual_result.get("actions", [])
-                            if actions:
-                                if language == "ko":
-                                    parts.append(f"행동: {', '.join(actions)}")
-                                else:
-                                    parts.append(f"Actions: {', '.join(actions)}")
+                        if visual_actions:
+                            if language == "ko":
+                                parts.append(f"행동: {', '.join(visual_actions)}")
+                            else:
+                                parts.append(f"Actions: {', '.join(visual_actions)}")
 
                         visual_summary = ". ".join(parts)
-                        logger.info(f"Visual summary: {visual_summary[:100]}...")
                     else:
                         logger.info(
                             f"Visual analysis returned no_content for scene {scene.index}, "
@@ -219,6 +291,10 @@ class SidecarBuilder:
             combined_text=combined_text,
             embedding=embedding,
             thumbnail_url=thumbnail_url,
+            visual_description=visual_description,
+            visual_entities=visual_entities,
+            visual_actions=visual_actions,
+            tags=tags,
         )
 
     @staticmethod

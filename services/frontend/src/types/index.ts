@@ -33,6 +33,8 @@ export interface Video {
   height?: number;
   video_created_at?: string;
   thumbnail_url?: string;
+  video_summary?: string;
+  has_rich_semantics?: boolean;
   error_message?: string;
   created_at: string;
   updated_at: string;
@@ -49,6 +51,10 @@ export interface VideoScene {
   end_s: number;
   transcript_segment?: string;
   visual_summary?: string;
+  visual_description?: string;
+  visual_entities?: string[];
+  visual_actions?: string[];
+  tags?: string[];
   combined_text?: string;
   thumbnail_url?: string;
   similarity?: number; // Present only in search results
@@ -73,4 +79,5 @@ export interface VideoDetails {
   full_transcript?: string;
   scenes: VideoScene[];
   total_scenes: number;
+  reprocess_hint?: string;
 }
