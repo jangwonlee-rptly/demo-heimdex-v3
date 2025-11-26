@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { UserProfile, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
-import LanguageToggle from '@/components/LanguageToggle';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
@@ -114,11 +113,6 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push('/login');
-  };
-
   const handleProcessVideo = async (videoId: string) => {
     try {
       await apiRequest(`/videos/${videoId}/process`, { method: 'POST' });
@@ -203,22 +197,11 @@ export default function DashboardPage() {
 
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">{t.dashboard.title}</h1>
-            <p className="text-gray-600 mt-1">
-              {t.dashboard.welcome}, {profile?.full_name}
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <LanguageToggle />
-            <button
-              onClick={handleSignOut}
-              className="btn btn-secondary"
-            >
-              {t.common.signOut}
-            </button>
-          </div>
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold">{t.dashboard.title}</h1>
+          <p className="text-gray-600 mt-1">
+            {t.dashboard.welcome}, {profile?.full_name}
+          </p>
         </div>
 
         {/* Actions */}

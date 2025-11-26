@@ -2,6 +2,11 @@ import { Translations } from './types';
 
 export const translations: Record<'en' | 'ko', Translations> = {
   en: {
+    nav: {
+      dashboard: 'Dashboard',
+      upload: 'Upload',
+      search: 'Search',
+    },
     common: {
       loading: 'Loading...',
       error: 'Error',
@@ -160,6 +165,11 @@ export const translations: Record<'en' | 'ko', Translations> = {
     },
   },
   ko: {
+    nav: {
+      dashboard: '대시보드',
+      upload: '업로드',
+      search: '검색',
+    },
     common: {
       loading: '로딩 중...',
       error: '오류',

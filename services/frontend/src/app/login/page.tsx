@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useLanguage } from '@/lib/i18n';
-import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,9 +61,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="absolute top-4 right-4">
-        <LanguageToggle />
-      </div>
       <div className="card max-w-md w-full">
         <h1 className="text-3xl font-bold text-center mb-2">{t.auth.appTitle}</h1>
         <p className="text-gray-600 text-center mb-8">

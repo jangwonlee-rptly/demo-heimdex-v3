@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { LanguageProvider } from '@/lib/i18n';
+import GlobalNav from '@/components/GlobalNav';
 
 export const metadata: Metadata = {
   title: 'Heimdex - Vector Native Video Archive',
@@ -24,7 +25,10 @@ export default function RootLayout({
       <body>
         <LanguageProvider>
           <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-            {children}
+            <GlobalNav />
+            <div className="pt-16">
+              {children}
+            </div>
           </div>
         </LanguageProvider>
       </body>

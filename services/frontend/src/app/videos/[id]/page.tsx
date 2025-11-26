@@ -5,7 +5,6 @@ import { useRouter, useParams } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { VideoDetails, VideoScene } from '@/types';
 import { useLanguage } from '@/lib/i18n';
-import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -127,12 +126,6 @@ export default function VideoDetailsPage() {
     return (
       <div className="min-h-screen p-6">
         <div className="max-w-4xl mx-auto">
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="btn btn-secondary mb-6"
-          >
-            ← {t.videoDetails.backToDashboard}
-          </button>
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
             <p className="font-medium">{t.common.error}</p>
             <p className="text-sm mt-1">{error || t.videoDetails.notFound}</p>
@@ -167,15 +160,6 @@ export default function VideoDetailsPage() {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="btn btn-secondary"
-            >
-              ← {t.videoDetails.backToDashboard}
-            </button>
-            <LanguageToggle />
-          </div>
           <h1 className="text-3xl font-bold text-gray-900">
             {video.filename || `Video ${video.id.substring(0, 8)}`}
           </h1>

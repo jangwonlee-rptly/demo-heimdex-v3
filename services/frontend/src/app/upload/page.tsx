@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest, getAccessToken } from '@/lib/supabase';
 import { useLanguage } from '@/lib/i18n';
-import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -191,16 +190,6 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-2xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="btn btn-secondary"
-          >
-            ← {t.upload.backToDashboard}
-          </button>
-          <LanguageToggle />
-        </div>
-
         <div className="card">
           <h1 className="text-2xl font-bold mb-2">{t.upload.title}</h1>
           <p className="text-gray-600 mb-6">

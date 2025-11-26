@@ -1,6 +1,13 @@
 export type Language = 'en' | 'ko';
 
 export interface Translations {
+  // Navigation
+  nav: {
+    dashboard: string;
+    upload: string;
+    search: string;
+  };
+
   // Common
   common: {
     loading: string;

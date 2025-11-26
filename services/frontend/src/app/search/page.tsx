@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
-import LanguageToggle from '@/components/LanguageToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,16 +84,6 @@ export default function SearchPage() {
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="btn btn-secondary"
-          >
-            ← {t.common.back}
-          </button>
-          <LanguageToggle />
-        </div>
-
         <div className="card mb-6">
           <h1 className="text-2xl font-bold mb-4">{t.search.title}</h1>
 
