@@ -6,6 +6,11 @@ import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import LanguageToggle from '@/components/LanguageToggle';
+import AdvancedSearchWeights, {
+  SignalConfig,
+  WeightPreset
+} from '@/components/AdvancedSearchWeights';
+import { SignalWeight } from '@/lib/normalizeWeights';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,8 +29,72 @@ export default function SearchPage() {
   const [results, setResults] = useState<SearchResult | null>(null);
   const [selectedScene, setSelectedScene] = useState<VideoScene | null>(null);
   const [currentVideo, setCurrentVideo] = useState<Video | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const router = useRouter();
+
+  // Signal configurations for advanced search
+  const signals: SignalConfig[] = [
+    {
+      key: 'asr',
+      label: 'Transcript (ASR)',
+      description: 'Weight for spoken words and audio transcription. Higher values prioritize dialogue-heavy content.'
+    },
+    {
+      key: 'image',
+      label: 'Visual Analysis',
+      description: 'Weight for visual content detected in video frames. Higher values prioritize what you see on screen.'
+    },
+    {
+      key: 'metadata',
+      label: 'Metadata',
+      description: 'Weight for video titles, tags, descriptions, and other metadata. Higher values trust curated information.'
+    }
+  ];
+
+  // Preset configurations for common use cases
+  const presets: WeightPreset[] = [
+    {
+      id: 'balanced',
+      label: 'Balanced',
+      description: 'Equal weight across all signals - good for general purpose search',
+      weights: { asr: 0.4, image: 0.4, metadata: 0.2 }
+    },
+    {
+      id: 'dialogue',
+      label: 'Dialogue-Heavy',
+      description: 'Prioritize spoken content - ideal for interviews, podcasts, meetings',
+      weights: { asr: 0.7, image: 0.2, metadata: 0.1 }
+    },
+    {
+      id: 'visual',
+      label: 'Visual-Heavy',
+      description: 'Prioritize visual content - ideal for presentations, silent videos',
+      weights: { asr: 0.1, image: 0.7, metadata: 0.2 }
+    },
+    {
+      id: 'metadata',
+      label: 'Metadata-Heavy',
+      description: 'Prioritize curated metadata - ideal for well-tagged archives',
+      weights: { asr: 0.2, image: 0.2, metadata: 0.6 }
+    }
+  ];
+
+  // Weights state - default to balanced
+  const [weights, setWeights] = useState<SignalWeight[]>([
+    { key: 'asr', weight: 0.4 },
+    { key: 'image', weight: 0.4 },
+    { key: 'metadata', weight: 0.2 }
+  ]);
+
+  // Example queries for user guidance
+  const exampleQueries = [
+    'person talking about technology',
+    'outdoor landscape scene',
+    'meeting room discussion',
+    'presentation with slides',
+    'people laughing'
+  ];
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -44,12 +113,19 @@ export default function SearchPage() {
     setSearching(true);
 
     try {
+      // Convert weights array to object for API
+      const weightsObj = weights.reduce((acc, w) => {
+        acc[w.key] = w.weight;
+        return acc;
+      }, {} as Record<string, number>);
+
       const searchResults = await apiRequest<SearchResult>('/search', {
         method: 'POST',
         body: JSON.stringify({
           query: query.trim(),
           limit: 20,
           threshold: 0.2,
+          weights: weightsObj, // Include weights in search request
         }),
       });
 
@@ -98,26 +174,99 @@ export default function SearchPage() {
         <div className="card mb-6">
           <h1 className="text-2xl font-bold mb-4">{t.search.title}</h1>
 
-          <form onSubmit={handleSearch} className="flex gap-4">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t.search.searchPlaceholder}
-              className="input flex-1"
-            />
-            <button
-              type="submit"
-              disabled={searching || !query.trim()}
-              className="btn btn-primary"
-            >
-              {searching ? t.search.searching : t.search.searchButton}
-            </button>
+          <form onSubmit={handleSearch} className="space-y-4">
+            {/* Search Input */}
+            <div className="flex gap-4">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t.search.searchPlaceholder}
+                className="input flex-1"
+              />
+              <button
+                type="submit"
+                disabled={searching || !query.trim()}
+                className="btn btn-primary"
+              >
+                {searching ? t.search.searching : t.search.searchButton}
+              </button>
+            </div>
+
+            {/* Example Queries */}
+            {!results && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-600">Try:</span>
+                {exampleQueries.map((example, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setQuery(example)}
+                    className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full transition-colors"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Advanced Search Toggle */}
+            <div className="pt-2 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+              >
+                <svg
+                  className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <span>Advanced: Adjust Signal Weights</span>
+                {!showAdvanced && (
+                  <span className="text-xs text-gray-500 font-normal">
+                    (ASR {Math.round(weights[0].weight * 100)}%,
+                     Visual {Math.round(weights[1].weight * 100)}%,
+                     Metadata {Math.round(weights[2].weight * 100)}%)
+                  </span>
+                )}
+              </button>
+
+              {/* Collapsible Advanced Section */}
+              {showAdvanced && (
+                <div className="mt-4 animate-slideDown">
+                  <AdvancedSearchWeights
+                    signals={signals}
+                    value={weights}
+                    onChange={setWeights}
+                    presets={presets}
+                    step={0.05}
+                    showAdvanced={false}
+                  />
+                </div>
+              )}
+            </div>
           </form>
 
+          {/* Results Summary */}
           {results && (
-            <div className="mt-4 text-sm text-gray-600">
-              {results.total} {t.search.resultsFound} ({results.latency_ms}ms)
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">
+                  {results.total} {t.search.resultsFound} ({results.latency_ms}ms)
+                </span>
+                <span className="text-xs text-gray-500">
+                  Weights: ASR {Math.round(weights[0].weight * 100)}%,
+                  Visual {Math.round(weights[1].weight * 100)}%,
+                  Metadata {Math.round(weights[2].weight * 100)}%
+                </span>
+              </div>
             </div>
           )}
         </div>

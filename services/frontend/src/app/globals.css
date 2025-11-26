@@ -42,6 +42,10 @@ body {
   .animate-slide-in {
     animation: slide-in 0.3s ease-out;
   }
+
+  .animate-slideDown {
+    animation: slideDown 0.3s ease-out;
+  }
 }
 
 @keyframes slide-in {
@@ -52,5 +56,18 @@ body {
   to {
     transform: translateX(0);
     opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    max-height: 1000px;
+    opacity: 1;
+    transform: translateY(0);
   }
 }

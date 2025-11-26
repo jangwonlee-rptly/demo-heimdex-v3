@@ -315,6 +315,94 @@ class Database:
         response = self.client.rpc("search_scenes_by_embedding", params).execute()
         return [VideoScene(**row) for row in response.data]
 
+    def search_scenes_weighted(
+        self,
+        query_embedding: list[float],
+        limit: int = 10,
+        threshold: float = 0.5,
+        video_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
+        asr_weight: float = 0.4,
+        image_weight: float = 0.4,
+        metadata_weight: float = 0.2,
+    ) -> list[VideoScene]:
+        """Search for scenes using vector similarity with weighted signal boosting.
+
+        Since we currently use combined embeddings (ASR + Visual + Metadata mixed),
+        this method applies weights as post-processing boosting factors based on
+        content availability in each scene:
+        - ASR boost: Applied if transcript_segment exists
+        - Visual boost: Applied if visual_summary or visual_description exists
+        - Metadata boost: Applied if tags exist
+
+        Args:
+            query_embedding: The vector embedding of the search query.
+            limit: Maximum number of results to return (default: 10).
+            threshold: Similarity threshold (0.0 to 1.0, default: 0.5).
+            video_id: Filter by specific video ID (optional).
+            user_id: Filter by specific user ID (optional).
+            asr_weight: Weight for ASR/transcript signal (0.0 to 1.0).
+            image_weight: Weight for visual/image signal (0.0 to 1.0).
+            metadata_weight: Weight for metadata signal (0.0 to 1.0).
+
+        Returns:
+            list[VideoScene]: A list of matching video scenes, re-ranked by weighted score.
+
+        Note:
+            This is a simplified implementation using combined embeddings.
+            For true multi-signal search, store separate embeddings per signal
+            and compute weighted similarity in the database query.
+        """
+        # Get initial results with a larger limit to allow for re-ranking
+        initial_limit = min(limit * 3, 100)  # Get more results for re-ranking
+        scenes = self.search_scenes(
+            query_embedding=query_embedding,
+            limit=initial_limit,
+            threshold=threshold,
+            video_id=video_id,
+            user_id=user_id,
+        )
+
+        # Apply weighted boosting to similarity scores
+        for scene in scenes:
+            if scene.similarity is None:
+                continue
+
+            # Calculate boost multiplier based on content availability and weights
+            boost = 1.0
+            available_signals = []
+
+            # ASR boost: Check if transcript exists
+            if scene.transcript_segment and len(scene.transcript_segment.strip()) > 0:
+                available_signals.append('asr')
+                boost += asr_weight * 0.5  # Up to 50% boost from ASR
+
+            # Visual boost: Check if visual content exists
+            if (scene.visual_summary and len(scene.visual_summary.strip()) > 0) or \
+               (scene.visual_description and len(scene.visual_description.strip()) > 0):
+                available_signals.append('visual')
+                boost += image_weight * 0.5  # Up to 50% boost from visual
+
+            # Metadata boost: Check if tags exist
+            if scene.tags and len(scene.tags) > 0:
+                available_signals.append('metadata')
+                boost += metadata_weight * 0.5  # Up to 50% boost from metadata
+
+            # Normalize boost based on number of available signals
+            if available_signals:
+                # Penalize scenes missing preferred signals
+                signal_coverage = len(available_signals) / 3.0  # Max 3 signals
+                boost = 1.0 + (boost - 1.0) * signal_coverage
+
+            # Apply boost to similarity score
+            scene.similarity = min(scene.similarity * boost, 1.0)
+
+        # Re-sort by weighted similarity
+        scenes.sort(key=lambda s: s.similarity if s.similarity else 0.0, reverse=True)
+
+        # Return top results after re-ranking
+        return scenes[:limit]
+
     def log_search_query(
         self,
         user_id: UUID,

@@ -118,12 +118,43 @@ class VideoSceneResponse(BaseModel):
 
 # Search Schemas
 class SearchRequest(BaseModel):
-    """Schema for search request."""
+    """Schema for search request with multi-signal weights."""
 
     query: str = Field(..., min_length=1, max_length=1000)
     video_id: Optional[UUID] = None  # If provided, search only in this video
     limit: int = Field(10, ge=1, le=100)
     threshold: float = Field(0.2, ge=0.0, le=1.0)
+    weights: Optional[dict[str, float]] = Field(
+        None,
+        description="Signal weights (must sum to 1.0). Keys: asr, image, metadata"
+    )
+
+    def model_post_init(self, __context) -> None:
+        """Validate weights after model initialization."""
+        if self.weights is not None:
+            total = sum(self.weights.values())
+            if abs(total - 1.0) > 1e-6:
+                raise ValueError(f"Weights must sum to 1.0, got {total}")
+
+            # Ensure all weights are in valid range
+            for key, weight in self.weights.items():
+                if not (0.0 <= weight <= 1.0):
+                    raise ValueError(f"Weight '{key}' must be between 0 and 1, got {weight}")
+
+    @property
+    def asr_weight(self) -> float:
+        """Get ASR/transcript weight with fallback to default."""
+        return self.weights.get('asr', 0.4) if self.weights else 0.4
+
+    @property
+    def image_weight(self) -> float:
+        """Get image/visual weight with fallback to default."""
+        return self.weights.get('image', 0.4) if self.weights else 0.4
+
+    @property
+    def metadata_weight(self) -> float:
+        """Get metadata weight with fallback to default."""
+        return self.weights.get('metadata', 0.2) if self.weights else 0.2
 
 
 class SearchResponse(BaseModel):

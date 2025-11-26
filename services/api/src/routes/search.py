@@ -47,7 +47,8 @@ async def search_scenes(
 
     logger.info(
         f"Search request from user {user_id} (language: {user_language}): "
-        f"query='{request.query}', video_id={request.video_id}, limit={request.limit}"
+        f"query='{request.query}', video_id={request.video_id}, limit={request.limit}, "
+        f"weights=(asr={request.asr_weight:.2f}, image={request.image_weight:.2f}, metadata={request.metadata_weight:.2f})"
     )
 
     # If video_id is provided, verify user has access to it
@@ -74,13 +75,16 @@ async def search_scenes(
             detail="Failed to process search query",
         )
 
-    # Search for similar scenes
-    scenes = db.search_scenes(
+    # Search for similar scenes using weighted search
+    scenes = db.search_scenes_weighted(
         query_embedding=query_embedding,
         limit=request.limit,
         threshold=request.threshold,
         video_id=request.video_id,
         user_id=user_id,
+        asr_weight=request.asr_weight,
+        image_weight=request.image_weight,
+        metadata_weight=request.metadata_weight,
     )
 
     # Calculate latency
