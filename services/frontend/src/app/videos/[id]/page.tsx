@@ -444,19 +444,23 @@ export default function VideoDetailsPage() {
 
           {/* Tag Filter */}
           {allTags.length > 0 && (
-            <div className="mt-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-sm font-medium text-gray-700">Filter by tag:</span>
+            <details className="mt-4 group">
+              <summary className="flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                <svg className="w-4 h-4 transition-transform group-open:rotate-90 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="text-sm font-medium text-gray-700">Filter by tag</span>
+                <span className="text-xs text-gray-500">({allTags.length})</span>
                 {selectedTag && (
                   <button
-                    onClick={() => setSelectedTag(null)}
-                    className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                    onClick={(e) => { e.preventDefault(); setSelectedTag(null); }}
+                    className="text-sm text-primary-600 hover:text-primary-700 font-medium ml-2"
                   >
                     Clear filter
                   </button>
                 )}
-              </div>
-              <div className="flex flex-wrap gap-2">
+              </summary>
+              <div className="flex flex-wrap gap-2 mt-3 ml-6">
                 {allTags.map((tag) => (
                   <button
                     key={tag}
@@ -471,7 +475,7 @@ export default function VideoDetailsPage() {
                   </button>
                 ))}
               </div>
-            </div>
+            </details>
           )}
         </div>
 
@@ -578,11 +582,17 @@ export default function VideoDetailsPage() {
 
                   {/* Tags */}
                   {scene.tags && scene.tags.length > 0 && (
-                    <div className="mb-4">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                    <details className="mb-4 group">
+                      <summary className="text-sm font-semibold text-gray-700 cursor-pointer hover:text-gray-900 list-none flex items-center gap-2 [&::-webkit-details-marker]:hidden">
+                        <svg className="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
                         {t.videoDetails.tags}
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
+                        <span className="text-xs font-normal text-gray-500">
+                          ({scene.tags.length})
+                        </span>
+                      </summary>
+                      <div className="flex flex-wrap gap-2 mt-2 ml-6">
                         {scene.tags.map((tag, idx) => (
                           <button
                             key={idx}
@@ -597,7 +607,7 @@ export default function VideoDetailsPage() {
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </details>
                   )}
 
                   {/* Scene Metadata */}

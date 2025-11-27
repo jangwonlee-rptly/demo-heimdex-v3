@@ -3972,3 +3972,233 @@ without requiring changes to the database schema, API endpoints, or frontend.
 
 **Status**: ✅ Complete - All 10 tests passing
 ================================================================================
+
+================================================================================
+SIDECAR V2 DATABASE PERSISTENCE & FRONTEND INTEGRATION
+================================================================================
+Date: November 27, 2025
+
+## Overview
+
+Extended the sidecar v2 implementation to persist all metadata fields to the
+database and updated the frontend to display the rich scene information.
+
+## Problem Statement
+
+The sidecar builder was generating rich v2 metadata (sidecar_version, search_text,
+embedding_metadata, needs_reprocess, processing_stats) but these fields were only
+used in-memory during processing. They weren't being persisted to the database,
+meaning we lost valuable debugging, versioning, and analytics data.
+
+Additionally, the frontend wasn't displaying all the available v2 fields like
+visual_entities and visual_actions.
+
+## Implementation
+
+### 1. Database Migration (011_add_sidecar_v2_metadata.sql)
+
+Added 5 new columns to the `video_scenes` table:
+
+```sql
+ALTER TABLE video_scenes
+ADD COLUMN IF NOT EXISTS sidecar_version TEXT DEFAULT 'v1',
+ADD COLUMN IF NOT EXISTS search_text TEXT,
+ADD COLUMN IF NOT EXISTS embedding_metadata JSONB,
+ADD COLUMN IF NOT EXISTS needs_reprocess BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS processing_stats JSONB;
+
+-- Indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_video_scenes_sidecar_version ON video_scenes(sidecar_version);
+CREATE INDEX IF NOT EXISTS idx_video_scenes_needs_reprocess ON video_scenes(needs_reprocess) WHERE needs_reprocess = TRUE;
+```
+
+**File created**: `infra/migrations/011_add_sidecar_v2_metadata.sql`
+
+### 2. Database Adapter Update
+
+Extended `create_scene()` in `database.py` to accept and persist the new fields:
+
+```python
+def create_scene(
+    self,
+    ...
+    # Sidecar v2 metadata fields
+    sidecar_version: Optional[str] = None,
+    search_text: Optional[str] = None,
+    embedding_metadata: Optional[dict] = None,
+    needs_reprocess: bool = False,
+    processing_stats: Optional[dict] = None,
+) -> UUID:
+```
+
+**File modified**: `services/worker/src/adapters/database.py`
+
+### 3. Video Processor Update
+
+Updated `_process_single_scene()` to pass v2 fields to `create_scene()`:
+
+```python
+scene_id = db.create_scene(
+    ...
+    # Sidecar v2 metadata fields
+    sidecar_version=sidecar.sidecar_version,
+    search_text=sidecar.search_text,
+    embedding_metadata=sidecar.embedding_metadata.to_dict() if sidecar.embedding_metadata else None,
+    needs_reprocess=sidecar.needs_reprocess,
+    processing_stats=sidecar.processing_stats,
+)
+```
+
+**File modified**: `services/worker/src/domain/video_processor.py`
+
+### 4. Frontend TypeScript Types
+
+Added new interfaces for v2 metadata:
+
+```typescript
+interface EmbeddingMetadata {
+  model: string;
+  dimensions: number;
+  input_text_hash: string;
+  input_text_length: number;
+}
+
+interface ProcessingStats {
+  scene_duration_s: number;
+  transcript_length: number;
+  visual_analysis_called: boolean;
+  visual_analysis_skipped_reason?: string;
+  search_text_length: number;
+  combined_text_length: number;
+  keyframes_extracted: number;
+  best_frame_found: boolean;
+}
+
+interface VideoScene {
+  ...
+  // Sidecar v2 metadata fields
+  sidecar_version?: string;
+  search_text?: string;
+  embedding_metadata?: EmbeddingMetadata;
+  needs_reprocess?: boolean;
+  processing_stats?: ProcessingStats;
+}
+```
+
+**File modified**: `services/frontend/src/types/index.ts`
+
+### 5. Video Details Page Enhancements
+
+Added new UI sections for v2 data:
+
+1. **Detected Entities** (blue badges) - Shows `visual_entities[]`
+2. **Detected Actions** (green badges) - Shows `visual_actions[]`
+3. **Sidecar Version Badge** - Shows version (e.g., "v2")
+4. **AI Analyzed Badge** - Purple indicator when visual analysis was performed
+5. **Processing Details** (collapsible) - Shows debug stats:
+   - Transcript length
+   - Search text length
+   - Keyframes extracted
+   - Best frame found status
+   - Skip reason (if applicable)
+   - Embedding model info
+
+**File modified**: `services/frontend/src/app/videos/[id]/page.tsx`
+
+### 6. Search Page Enhancements
+
+1. Results now prefer `visual_description` over `visual_summary`
+2. Tags displayed in search results (up to 5 with "+X more" indicator)
+3. Scene detail panel shows:
+   - Visual entities (blue badges)
+   - Visual actions (green badges)
+   - Tags (gray badges)
+
+**File modified**: `services/frontend/src/app/search/page.tsx`
+
+### 7. i18n Translations
+
+Added translation keys for both English and Korean:
+
+```typescript
+videoDetails: {
+  ...
+  visualDescription: 'Visual Description' / '시각적 설명',
+  detectedEntities: 'Detected Entities' / '감지된 개체',
+  detectedActions: 'Detected Actions' / '감지된 행동',
+  tags: 'Tags' / '태그',
+  processingDetails: 'Processing details' / '처리 세부 정보',
+  aiAnalyzed: 'AI analyzed' / 'AI 분석됨',
+}
+```
+
+**Files modified**:
+- `services/frontend/src/lib/i18n/types.ts`
+- `services/frontend/src/lib/i18n/translations.ts`
+
+## Schema Changes Summary
+
+### video_scenes table (new columns)
+
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| sidecar_version | TEXT | 'v1' | Schema version for migration tracking |
+| search_text | TEXT | NULL | Optimized text for embedding generation |
+| embedding_metadata | JSONB | NULL | Model info, dimensions, text hash |
+| needs_reprocess | BOOLEAN | FALSE | Flag for scenes needing attention |
+| processing_stats | JSONB | NULL | Debug stats about sidecar generation |
+
+## Testing
+
+Created and ran test script to verify all v2 fields are persisted correctly:
+
+```bash
+docker-compose exec worker python /app/test_sidecar_v2_fields.py
+```
+
+Output:
+```
+Verifying created scene fields:
+  visual_description: OK
+  visual_entities: OK
+  visual_actions: OK
+  tags: OK
+  sidecar_version: OK
+  search_text: OK
+  embedding_metadata: OK
+  needs_reprocess: OK
+  processing_stats: OK
+
+All sidecar v2 fields verified successfully!
+```
+
+## Benefits
+
+1. **Version Tracking**: Can identify scenes processed with old vs new logic
+2. **Reprocessing Pipeline**: `needs_reprocess` flag enables targeted reprocessing
+3. **Cost Analytics**: `processing_stats` shows which scenes triggered API calls
+4. **Debug Support**: Full visibility into processing decisions
+5. **Search Quality**: `search_text` stored for future search improvements
+6. **Rich UI**: Users can see entities, actions, and processing details
+
+## Future Use Cases
+
+1. **Batch Reprocessing**: Query scenes by version for upgrades
+   ```sql
+   SELECT * FROM video_scenes WHERE sidecar_version < 'v3'
+   ```
+
+2. **Cost Analysis**: Aggregate processing stats
+   ```sql
+   SELECT 
+     AVG((processing_stats->>'transcript_length')::int),
+     COUNT(*) FILTER (WHERE (processing_stats->>'visual_analysis_called')::boolean)
+   FROM video_scenes
+   ```
+
+3. **Quality Monitoring**: Find scenes that might need attention
+   ```sql
+   SELECT * FROM video_scenes WHERE needs_reprocess = TRUE
+   ```
+
+**Status**: ✅ Complete - Migration applied, all tests passing, frontend rebuilt
