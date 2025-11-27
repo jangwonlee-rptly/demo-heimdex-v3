@@ -6,6 +6,7 @@ import { supabase, apiRequest } from '@/lib/supabase';
 import type { UserProfile, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import ReprocessModal from '@/components/ReprocessModal';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,10 @@ export default function DashboardPage() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [reprocessModal, setReprocessModal] = useState<{ isOpen: boolean; video: Video | null }>({
+    isOpen: false,
+    video: null,
+  });
   const router = useRouter();
   const { t } = useLanguage();
 
@@ -124,6 +129,25 @@ export default function DashboardPage() {
       console.error('Failed to process video:', error);
       alert('Failed to start processing');
     }
+  };
+
+  const handleOpenReprocessModal = (video: Video) => {
+    setReprocessModal({ isOpen: true, video });
+  };
+
+  const handleCloseReprocessModal = () => {
+    setReprocessModal({ isOpen: false, video: null });
+  };
+
+  const handleReprocessSuccess = async () => {
+    // Reload videos after triggering reprocessing
+    const videoData = await apiRequest<{ videos: Video[]; total: number }>('/videos');
+    setVideos(videoData.videos);
+    setNotification({
+      message: t.reprocess.success,
+      type: 'success',
+    });
+    setTimeout(() => setNotification(null), 5000);
   };
 
   const getStatusBadge = (status: Video['status']) => {
@@ -271,11 +295,27 @@ export default function DashboardPage() {
                           </button>
                         )}
                         {video.status === 'READY' && (
+                          <>
+                            <button
+                              onClick={() => router.push(`/videos/${video.id}`)}
+                              className="btn btn-primary btn-sm"
+                            >
+                              {t.dashboard.viewDetails}
+                            </button>
+                            <button
+                              onClick={() => handleOpenReprocessModal(video)}
+                              className="btn btn-secondary btn-sm"
+                            >
+                              {t.reprocess.button}
+                            </button>
+                          </>
+                        )}
+                        {video.status === 'FAILED' && (
                           <button
-                            onClick={() => router.push(`/videos/${video.id}`)}
-                            className="btn btn-primary btn-sm"
+                            onClick={() => handleOpenReprocessModal(video)}
+                            className="btn btn-secondary btn-sm"
                           >
-                            {t.dashboard.viewDetails}
+                            {t.reprocess.button}
                           </button>
                         )}
                       </div>
@@ -295,6 +335,17 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Reprocess Modal */}
+      {reprocessModal.video && (
+        <ReprocessModal
+          videoId={reprocessModal.video.id}
+          videoName={reprocessModal.video.filename || `Video ${reprocessModal.video.id.substring(0, 8)}`}
+          isOpen={reprocessModal.isOpen}
+          onClose={handleCloseReprocessModal}
+          onSuccess={handleReprocessSuccess}
+        />
+      )}
     </div>
   );
 }

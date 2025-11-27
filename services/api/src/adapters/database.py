@@ -280,6 +280,62 @@ class Database:
             scenes.append(VideoScene(**row))
         return scenes
 
+    def delete_scenes_for_video(self, video_id: UUID) -> None:
+        """Delete all scenes for a video (used for reprocessing).
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            None: This function does not return a value.
+        """
+        self.client.table("video_scenes").delete().eq("video_id", str(video_id)).execute()
+
+    def clear_video_for_reprocess(
+        self,
+        video_id: UUID,
+        transcript_language: Optional[str] = None,
+    ) -> Optional[Video]:
+        """Clear video data for reprocessing with optional language override.
+
+        This clears:
+        - full_transcript (to force re-transcription)
+        - video_summary
+        - has_rich_semantics flag
+        - Sets transcript_language for forced language on re-transcription
+
+        Args:
+            video_id: The UUID of the video.
+            transcript_language: Optional ISO-639-1 language code for forced transcription.
+
+        Returns:
+            Optional[Video]: The updated video record if successful, otherwise None.
+        """
+        update_data = {
+            "full_transcript": None,
+            "video_summary": None,
+            "has_rich_semantics": False,
+            "transcript_language": transcript_language,
+            "status": VideoStatus.PENDING.value,
+            "error_message": None,
+        }
+
+        response = (
+            self.client.table("videos")
+            .update(update_data)
+            .eq("id", str(video_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        row = response.data[0]
+        row["id"] = UUID(row["id"])
+        row["owner_id"] = UUID(row["owner_id"])
+        row["status"] = VideoStatus(row["status"])
+        return Video(**row)
+
     # Search operations
     def search_scenes(
         self,

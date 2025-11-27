@@ -8,11 +8,13 @@ from ..auth import get_current_user, User
 from ..domain.schemas import (
     VideoUploadUrlResponse,
     VideoUploadedRequest,
+    VideoReprocessRequest,
     VideoResponse,
     VideoListResponse,
     VideoDetailsResponse,
     VideoSceneResponse,
 )
+from ..domain.models import VideoStatus
 from ..adapters.database import db
 from ..adapters.supabase import storage
 from ..adapters.queue import task_queue
@@ -270,6 +272,102 @@ async def trigger_video_processing(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to trigger video processing: {str(e)}"
+        )
+
+
+@router.post("/videos/{video_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
+async def reprocess_video(
+    video_id: UUID,
+    request: VideoReprocessRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Reprocess a video with optional language override.
+
+    Use this endpoint when the initial transcription came out in the wrong language.
+    For example, if Whisper auto-detected Russian for a Korean video, you can
+    reprocess with transcript_language="ko" to force Korean transcription.
+
+    This will:
+    1. Delete all existing scenes for the video
+    2. Clear the cached transcript (forcing re-transcription)
+    3. Reset the video status to PENDING
+    4. Re-enqueue the video for processing with the language hint
+
+    Args:
+        video_id: The UUID of the video.
+        request: The reprocess request with optional language override.
+        current_user: The authenticated user (injected).
+
+    Returns:
+        dict: Status message indicating the video was queued for reprocessing.
+
+    Raises:
+        HTTPException:
+            - 404: If the video is not found.
+            - 403: If the user is not authorized to access the video.
+            - 409: If the video is currently being processed.
+            - 500: If reprocessing fails.
+    """
+    try:
+        user_id = UUID(current_user.user_id)
+
+        # Get video and verify ownership
+        video = db.get_video(video_id)
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video not found",
+            )
+
+        if video.owner_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this video",
+            )
+
+        # Don't allow reprocessing if already processing
+        if video.status == VideoStatus.PROCESSING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Video is currently being processed. Please wait for it to complete.",
+            )
+
+        # Delete existing scenes
+        db.delete_scenes_for_video(video_id)
+        logger.info(f"Deleted existing scenes for video {video_id}")
+
+        # Clear video data and set language override
+        db.clear_video_for_reprocess(
+            video_id=video_id,
+            transcript_language=request.transcript_language,
+        )
+        logger.info(
+            f"Cleared video {video_id} for reprocess with language: "
+            f"{request.transcript_language or 'auto-detect'}"
+        )
+
+        # Enqueue processing job
+        task_queue.enqueue_video_processing(video_id)
+
+        logger.info(f"Enqueued reprocessing for video {video_id}")
+
+        return {
+            "status": "accepted",
+            "message": "Video queued for reprocessing",
+            "transcript_language": request.transcript_language or "auto-detect",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Failed to reprocess video {video_id}: {e}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reprocess video: {str(e)}"
         )
 
 

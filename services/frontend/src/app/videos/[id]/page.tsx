@@ -3,8 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
-import type { VideoDetails, VideoScene } from '@/types';
+import type { Video, VideoDetails, VideoScene } from '@/types';
 import { useLanguage } from '@/lib/i18n';
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import ReprocessModal from '@/components/ReprocessModal';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,10 +75,25 @@ export default function VideoDetailsPage() {
   const [viewMode, setViewMode] = useState<'details' | 'transcript'>('details');
   const [selectedScene, setSelectedScene] = useState<VideoScene | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [reprocessModalOpen, setReprocessModalOpen] = useState(false);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const router = useRouter();
   const params = useParams();
   const videoId = params.id as string;
+
+  // Fetch video details
+  const fetchVideoDetails = async () => {
+    try {
+      const data = await apiRequest<VideoDetails>(`/videos/${videoId}/details`);
+      setVideoDetails(data);
+      return data;
+    } catch (err: any) {
+      console.error('Failed to load video details:', err);
+      setError(err.message || 'Failed to load video details');
+      return null;
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -86,19 +103,70 @@ export default function VideoDetailsPage() {
         return;
       }
 
-      try {
-        const data = await apiRequest<VideoDetails>(`/videos/${videoId}/details`);
-        setVideoDetails(data);
-      } catch (err: any) {
-        console.error('Failed to load video details:', err);
-        setError(err.message || 'Failed to load video details');
-      } finally {
-        setLoading(false);
-      }
+      await fetchVideoDetails();
+      setLoading(false);
     };
 
     init();
   }, [router, videoId]);
+
+  // Set up realtime subscription for video status updates
+  useEffect(() => {
+    const channel = supabase
+      .channel(`video-${videoId}-changes`)
+      .on<Video>(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'videos',
+          filter: `id=eq.${videoId}`,
+        },
+        async (payload: RealtimePostgresChangesPayload<Video>) => {
+          const updatedVideo = payload.new as Video;
+          const oldVideo = payload.old as Video;
+
+          // Show notification if status changed
+          if (oldVideo.status !== updatedVideo.status) {
+            let message = '';
+            let type: 'success' | 'info' | 'error' = 'info';
+
+            if (updatedVideo.status === 'READY') {
+              message = t.reprocess.completed;
+              type = 'success';
+              // Refresh the full video details when processing completes
+              await fetchVideoDetails();
+            } else if (updatedVideo.status === 'PROCESSING') {
+              message = t.reprocess.started;
+              type = 'info';
+              // Update just the video status in the current details
+              setVideoDetails((prev) =>
+                prev ? { ...prev, video: { ...prev.video, status: 'PROCESSING' } } : prev
+              );
+            } else if (updatedVideo.status === 'FAILED') {
+              message = t.reprocess.failed;
+              type = 'error';
+              // Update the video status
+              setVideoDetails((prev) =>
+                prev ? { ...prev, video: { ...prev.video, status: 'FAILED', error_message: updatedVideo.error_message } } : prev
+              );
+            }
+
+            if (message) {
+              setNotification({ message, type });
+              // Auto-dismiss notification after 5 seconds
+              setTimeout(() => setNotification(null), 5000);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscription on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [videoId, t]);
 
   const handleSceneClick = (scene: VideoScene) => {
     setSelectedScene(scene);
@@ -109,6 +177,20 @@ export default function VideoDetailsPage() {
         videoRef.current.currentTime = scene.start_s;
       }
     }, 100);
+  };
+
+  const handleReprocessSuccess = () => {
+    // Show initial notification - the real-time subscription will handle
+    // showing the completion notification when status changes to READY
+    setNotification({
+      message: t.reprocess.success,
+      type: 'info',
+    });
+    setTimeout(() => setNotification(null), 5000);
+    // Update video status to show it's pending reprocessing
+    setVideoDetails((prev) =>
+      prev ? { ...prev, video: { ...prev.video, status: 'PENDING' } } : prev
+    );
   };
 
   if (loading) {
@@ -157,22 +239,79 @@ export default function VideoDetailsPage() {
 
   return (
     <div className="min-h-screen p-6">
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 animate-slide-in">
+          <div
+            className={`rounded-lg shadow-lg p-4 min-w-[300px] ${
+              notification.type === 'success'
+                ? 'bg-green-50 border border-green-200 text-green-800'
+                : notification.type === 'error'
+                ? 'bg-red-50 border border-red-200 text-red-800'
+                : 'bg-blue-50 border border-blue-200 text-blue-800'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {notification.type === 'success' && (
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                )}
+                {notification.type === 'error' && (
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                )}
+                {notification.type === 'info' && (
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                )}
+                <p className="font-medium">{notification.message}</p>
+              </div>
+              <button
+                onClick={() => setNotification(null)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">
-            {video.filename || `Video ${video.id.substring(0, 8)}`}
-          </h1>
-          <div className="flex items-center gap-4 mt-2 text-sm text-gray-600">
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-              video.status === 'READY' ? 'bg-green-100 text-green-800' :
-              video.status === 'PROCESSING' ? 'bg-blue-100 text-blue-800' :
-              video.status === 'FAILED' ? 'bg-red-100 text-red-800' :
-              'bg-gray-100 text-gray-800'
-            }`}>
-              {video.status}
-            </span>
-            <span>{t.videoDetails.uploadedAt}: {formatDate(video.created_at)}</span>
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">
+                {video.filename || `Video ${video.id.substring(0, 8)}`}
+              </h1>
+              <div className="flex items-center gap-4 mt-2 text-sm text-gray-600">
+                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                  video.status === 'READY' ? 'bg-green-100 text-green-800' :
+                  video.status === 'PROCESSING' ? 'bg-blue-100 text-blue-800' :
+                  video.status === 'FAILED' ? 'bg-red-100 text-red-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {video.status}
+                </span>
+                <span>{t.videoDetails.uploadedAt}: {formatDate(video.created_at)}</span>
+              </div>
+            </div>
+            {/* Reprocess Button */}
+            {(video.status === 'READY' || video.status === 'FAILED') && (
+              <button
+                onClick={() => setReprocessModalOpen(true)}
+                className="btn btn-secondary"
+              >
+                {t.reprocess.button}
+              </button>
+            )}
           </div>
         </div>
 
@@ -391,7 +530,7 @@ export default function VideoDetailsPage() {
                   {scene.visual_description && (
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                        Visual Description
+                        {t.videoDetails.visualDescription}
                       </h4>
                       <p className="text-gray-700 leading-relaxed">
                         {scene.visual_description}
@@ -399,11 +538,49 @@ export default function VideoDetailsPage() {
                     </div>
                   )}
 
+                  {/* Visual Entities */}
+                  {scene.visual_entities && scene.visual_entities.length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                        {t.videoDetails.detectedEntities}
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {scene.visual_entities.map((entity, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                          >
+                            {entity}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Visual Actions */}
+                  {scene.visual_actions && scene.visual_actions.length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                        {t.videoDetails.detectedActions}
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {scene.visual_actions.map((action, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                          >
+                            {action}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Tags */}
                   {scene.tags && scene.tags.length > 0 && (
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                        Tags
+                        {t.videoDetails.tags}
                       </h4>
                       <div className="flex flex-wrap gap-2">
                         {scene.tags.map((tag, idx) => (
@@ -424,9 +601,45 @@ export default function VideoDetailsPage() {
                   )}
 
                   {/* Scene Metadata */}
-                  <div className="flex items-center gap-4 text-xs text-gray-500 mt-4 pt-4 border-t border-gray-200">
-                    <span>Duration: {(scene.end_s - scene.start_s).toFixed(1)}s</span>
-                    <span>Scene ID: {scene.id.substring(0, 8)}</span>
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="flex items-center gap-4 text-xs text-gray-500">
+                      <span>Duration: {(scene.end_s - scene.start_s).toFixed(1)}s</span>
+                      <span>Scene ID: {scene.id.substring(0, 8)}</span>
+                      {scene.sidecar_version && (
+                        <span className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">
+                          {scene.sidecar_version}
+                        </span>
+                      )}
+                      {scene.processing_stats?.visual_analysis_called && (
+                        <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded">
+                          {t.videoDetails.aiAnalyzed}
+                        </span>
+                      )}
+                    </div>
+                    {/* Processing Stats (collapsible debug info) */}
+                    {scene.processing_stats && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">
+                          {t.videoDetails.processingDetails}
+                        </summary>
+                        <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600 grid grid-cols-2 gap-2">
+                          <span>Transcript: {scene.processing_stats.transcript_length} chars</span>
+                          <span>Search text: {scene.processing_stats.search_text_length} chars</span>
+                          <span>Keyframes: {scene.processing_stats.keyframes_extracted}</span>
+                          <span>Best frame: {scene.processing_stats.best_frame_found ? 'Yes' : 'No'}</span>
+                          {scene.processing_stats.visual_analysis_skipped_reason && (
+                            <span className="col-span-2 text-amber-600">
+                              Skipped: {scene.processing_stats.visual_analysis_skipped_reason}
+                            </span>
+                          )}
+                          {scene.embedding_metadata && (
+                            <span className="col-span-2">
+                              Embedding: {scene.embedding_metadata.model} ({scene.embedding_metadata.dimensions}d)
+                            </span>
+                          )}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 </div>
               </div>
@@ -568,6 +781,15 @@ export default function VideoDetailsPage() {
           </div>
         )}
       </div>
+
+      {/* Reprocess Modal */}
+      <ReprocessModal
+        videoId={videoId}
+        videoName={video.filename || `Video ${video.id.substring(0, 8)}`}
+        isOpen={reprocessModalOpen}
+        onClose={() => setReprocessModalOpen(false)}
+        onSuccess={handleReprocessSuccess}
+      />
     </div>
   );
 }

@@ -18,23 +18,35 @@ class OpenAIClient:
         """Initialize the OpenAI client."""
         self.client = OpenAI(api_key=settings.openai_api_key)
 
-    def transcribe_audio(self, audio_file_path: Path) -> str:
+    def transcribe_audio(self, audio_file_path: Path, language: str = None) -> str:
         """
         Transcribe audio using Whisper.
 
         Args:
             audio_file_path: Path to audio file
+            language: Optional ISO-639-1 language code (e.g., 'ko', 'en', 'ja', 'ru').
+                     If not provided, Whisper will auto-detect the language.
 
         Returns:
             str: Transcription text
         """
-        logger.info(f"Transcribing audio from {audio_file_path}")
+        if language:
+            logger.info(f"Transcribing audio from {audio_file_path} with language hint: {language}")
+        else:
+            logger.info(f"Transcribing audio from {audio_file_path} (auto-detect language)")
+
         with open(audio_file_path, "rb") as audio_file:
-            transcript = self.client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text",
-            )
+            params = {
+                "model": "whisper-1",
+                "file": audio_file,
+                "response_format": "text",
+            }
+            # Only add language if explicitly specified
+            if language:
+                params["language"] = language
+
+            transcript = self.client.audio.transcriptions.create(**params)
+
         logger.info(f"Transcription complete: {len(transcript)} chars")
         return transcript
 
@@ -94,11 +106,12 @@ class OpenAIClient:
             }
         ]
 
-        # Call GPT-4o
+        # Call GPT-5-nano
+        # Note: newer models require max_completion_tokens instead of max_tokens
         response = self.client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5-nano",
             messages=messages,
-            max_tokens=150,
+            max_completion_tokens=150,
         )
 
         visual_summary = response.choices[0].message.content
@@ -236,13 +249,19 @@ Rules:
             ]
 
             # Call OpenAI with optimized settings
-            response = self.client.chat.completions.create(
-                model=settings.visual_semantics_model,
-                messages=messages,
-                max_tokens=settings.visual_semantics_max_tokens,
-                temperature=settings.visual_semantics_temperature,
-                response_format={"type": "json_object"},  # Force JSON response
-            )
+            # Note: newer models (gpt-4o, gpt-5-nano, etc.) require max_completion_tokens instead of max_tokens
+            # Note: gpt-5-nano only supports default temperature (1.0), so we omit it for that model
+            api_params = {
+                "model": settings.visual_semantics_model,
+                "messages": messages,
+                "max_completion_tokens": settings.visual_semantics_max_tokens,
+                "response_format": {"type": "json_object"},  # Force JSON response
+            }
+            # Only add temperature if model supports it (gpt-5-nano does not)
+            if "gpt-5-nano" not in settings.visual_semantics_model:
+                api_params["temperature"] = settings.visual_semantics_temperature
+
+            response = self.client.chat.completions.create(**api_params)
 
             # Parse JSON response
             response_text = response.choices[0].message.content
@@ -340,13 +359,14 @@ Requirements:
             user_message = combined_text
 
             # Call OpenAI
+            # Note: newer models require max_completion_tokens instead of max_tokens
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",  # Use cost-efficient model for summaries
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
                 ],
-                max_tokens=300,  # Limit output length
+                max_completion_tokens=300,  # Limit output length
                 temperature=0.3,  # Slightly creative but mostly deterministic
             )
 

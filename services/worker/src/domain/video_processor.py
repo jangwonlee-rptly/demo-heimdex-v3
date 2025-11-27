@@ -88,6 +88,12 @@ class VideoProcessor:
                 visual_entities=sidecar.visual_entities,
                 visual_actions=sidecar.visual_actions,
                 tags=sidecar.tags,
+                # Sidecar v2 metadata fields
+                sidecar_version=sidecar.sidecar_version,
+                search_text=sidecar.search_text,
+                embedding_metadata=sidecar.embedding_metadata.to_dict() if sidecar.embedding_metadata else None,
+                needs_reprocess=sidecar.needs_reprocess,
+                processing_stats=sidecar.processing_stats,
             )
 
             logger.info(f"Scene {scene.index} saved with id={scene_id}")
@@ -140,10 +146,18 @@ class VideoProcessor:
             storage_path = video["storage_path"]
             filename = video.get("filename")  # Extract filename for metadata-aware search
 
-            # Fetch user's preferred language
+            # Get transcript language override (set during reprocess)
+            # This forces Whisper to use a specific language instead of auto-detect
+            transcript_language = video.get("transcript_language")
+            if transcript_language:
+                logger.info(f"Using forced transcript language: {transcript_language}")
+            else:
+                logger.info("Using auto-detect for transcript language")
+
+            # Fetch user's preferred language for visual analysis and summaries
             user_profile = db.get_user_profile(owner_id)
             language = user_profile.get("preferred_language", "ko") if user_profile else "ko"
-            logger.info(f"Processing video in language: {language}")
+            logger.info(f"Processing video with output language: {language}")
 
             # Update status to PROCESSING
             db.update_video_status(video_id, VideoStatus.PROCESSING)
@@ -202,7 +216,11 @@ class VideoProcessor:
                     audio_path = work_dir / "audio.mp3"
                     ffmpeg.extract_audio(video_path, audio_path)
 
-                    full_transcript = openai_client.transcribe_audio(audio_path)
+                    # Pass transcript_language to Whisper if set (from reprocess request)
+                    full_transcript = openai_client.transcribe_audio(
+                        audio_path,
+                        language=transcript_language,
+                    )
                     logger.info(f"Transcription complete: {len(full_transcript)} characters")
 
                     # Save transcript as checkpoint for future retries

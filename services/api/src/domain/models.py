@@ -72,6 +72,7 @@ class Video:
         full_transcript: Optional[str] = None,
         video_summary: Optional[str] = None,
         has_rich_semantics: Optional[bool] = None,
+        transcript_language: Optional[str] = None,
         error_message: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
@@ -93,6 +94,7 @@ class Video:
             full_transcript: Full transcript of the video (optional).
             video_summary: AI-generated video summary (v2, optional).
             has_rich_semantics: Flag indicating rich semantics processing (v2, optional).
+            transcript_language: ISO-639-1 language code for forced transcription (optional).
             error_message: Error message if processing failed (optional).
             created_at: Timestamp when the video record was created.
             updated_at: Timestamp when the video record was last updated.
@@ -111,6 +113,7 @@ class Video:
         self.full_transcript = full_transcript
         self.video_summary = video_summary
         self.has_rich_semantics = has_rich_semantics
+        self.transcript_language = transcript_language
         self.error_message = error_message
         self.created_at = created_at
         self.updated_at = updated_at

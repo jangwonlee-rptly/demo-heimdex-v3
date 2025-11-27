@@ -171,6 +171,10 @@ export interface Translations {
     scenes: string;
     transcript: string;
     visualSummary: string;
+    visualDescription: string;
+    detectedEntities: string;
+    detectedActions: string;
+    tags: string;
     metadata: string;
     sceneNumber: string;
     timeRange: string;
@@ -178,5 +182,37 @@ export interface Translations {
     noTranscript: string;
     noVisualSummary: string;
     noMetadata: string;
+    processingDetails: string;
+    aiAnalyzed: string;
+  };
+
+  // Reprocess
+  reprocess: {
+    button: string;
+    title: string;
+    description: string;
+    languageLabel: string;
+    languageHelp: string;
+    autoDetect: string;
+    languages: {
+      ko: string;
+      en: string;
+      ja: string;
+      zh: string;
+      es: string;
+      fr: string;
+      de: string;
+      ru: string;
+      pt: string;
+      it: string;
+    };
+    cancel: string;
+    confirm: string;
+    processing: string;
+    success: string;
+    started: string;
+    completed: string;
+    failed: string;
+    error: string;
   };
 }

@@ -163,15 +163,37 @@ export default function SearchPage() {
                             </span>
                           )}
                         </div>
-                        {scene.visual_summary && (
+                        {scene.visual_description ? (
+                          <p className="text-sm text-gray-700 line-clamp-2 mb-1">
+                            {scene.visual_description}
+                          </p>
+                        ) : scene.visual_summary && (
                           <p className="text-sm text-gray-700 line-clamp-2 mb-1">
                             {scene.visual_summary}
                           </p>
                         )}
                         {scene.transcript_segment && (
-                          <p className="text-xs text-gray-500 line-clamp-1">
+                          <p className="text-xs text-gray-500 line-clamp-1 mb-1">
                             &quot;{scene.transcript_segment}&quot;
                           </p>
+                        )}
+                        {/* Tags */}
+                        {scene.tags && scene.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {scene.tags.slice(0, 5).map((tag, idx) => (
+                              <span
+                                key={idx}
+                                className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            {scene.tags.length > 5 && (
+                              <span className="text-xs text-gray-400">
+                                +{scene.tags.length - 5} more
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -210,16 +232,66 @@ export default function SearchPage() {
                   <p className="text-sm text-gray-600 mb-2">
                     {t.search.timestamp}: {selectedScene.start_s.toFixed(1)}s - {selectedScene.end_s.toFixed(1)}s
                   </p>
-                  {selectedScene.visual_summary && (
+                  {(selectedScene.visual_description || selectedScene.visual_summary) && (
                     <div className="mb-3">
                       <p className="text-sm font-medium text-gray-700">Visual Description:</p>
-                      <p className="text-sm text-gray-600">{selectedScene.visual_summary}</p>
+                      <p className="text-sm text-gray-600">
+                        {selectedScene.visual_description || selectedScene.visual_summary}
+                      </p>
                     </div>
                   )}
                   {selectedScene.transcript_segment && (
-                    <div>
+                    <div className="mb-3">
                       <p className="text-sm font-medium text-gray-700">Transcript:</p>
                       <p className="text-sm text-gray-600">&quot;{selectedScene.transcript_segment}&quot;</p>
+                    </div>
+                  )}
+                  {/* Visual Entities */}
+                  {selectedScene.visual_entities && selectedScene.visual_entities.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-sm font-medium text-gray-700 mb-1">Detected Entities:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedScene.visual_entities.map((entity, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-800"
+                          >
+                            {entity}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Visual Actions */}
+                  {selectedScene.visual_actions && selectedScene.visual_actions.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-sm font-medium text-gray-700 mb-1">Detected Actions:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedScene.visual_actions.map((action, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800"
+                          >
+                            {action}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Tags */}
+                  {selectedScene.tags && selectedScene.tags.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-1">Tags:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedScene.tags.map((tag, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

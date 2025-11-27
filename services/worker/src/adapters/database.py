@@ -185,6 +185,12 @@ class Database:
         visual_entities: Optional[list[str]] = None,
         visual_actions: Optional[list[str]] = None,
         tags: Optional[list[str]] = None,
+        # Sidecar v2 metadata fields
+        sidecar_version: Optional[str] = None,
+        search_text: Optional[str] = None,
+        embedding_metadata: Optional[dict] = None,
+        needs_reprocess: bool = False,
+        processing_stats: Optional[dict] = None,
     ) -> UUID:
         """Create a video scene record.
 
@@ -202,6 +208,11 @@ class Database:
             visual_entities: List of main entities detected (v2).
             visual_actions: List of actions detected (v2).
             tags: Normalized tags for filtering (v2).
+            sidecar_version: Schema version for migration tracking (v2).
+            search_text: Optimized text for embedding generation (v2).
+            embedding_metadata: Info about embedding model/generation (v2).
+            needs_reprocess: Flag indicating scene may benefit from reprocessing (v2).
+            processing_stats: Debug stats about sidecar generation (v2).
 
         Returns:
             UUID: The UUID of the created scene.
@@ -223,6 +234,12 @@ class Database:
             "visual_entities": visual_entities or [],
             "visual_actions": visual_actions or [],
             "tags": tags or [],
+            # Sidecar v2 metadata fields
+            "sidecar_version": sidecar_version or "v2",
+            "search_text": search_text,
+            "embedding_metadata": embedding_metadata,
+            "needs_reprocess": needs_reprocess,
+            "processing_stats": processing_stats,
         }
 
         response = self.client.table("video_scenes").insert(data).execute()

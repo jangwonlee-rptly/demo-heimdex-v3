@@ -63,6 +63,24 @@ class VideoUploadedRequest(BaseModel):
     pass  # No additional fields needed
 
 
+class VideoReprocessRequest(BaseModel):
+    """Schema for reprocessing a video with optional language override.
+
+    When a user notices the transcript came out in the wrong language
+    (e.g., Whisper detected Russian when the video is Korean),
+    they can request reprocessing with an explicit language hint.
+    """
+
+    transcript_language: Optional[str] = Field(
+        None,
+        description="ISO-639-1 language code (e.g., 'ko', 'en', 'ja', 'zh', 'es'). "
+                    "If provided, forces Whisper to transcribe in this language. "
+                    "If null/omitted, uses auto-detection (default behavior).",
+        pattern="^[a-z]{2}$",
+        examples=["ko", "en", "ja", "zh", "es", "fr", "de", "ru"],
+    )
+
+
 class VideoResponse(BaseModel):
     """Schema for video response."""
 

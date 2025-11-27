@@ -121,18 +121,24 @@ class FFmpegAdapter:
         )
 
     @staticmethod
-    def has_audio_stream(video_path: Path) -> bool:
+    def get_audio_streams(video_path: Path) -> list[dict]:
         """
-        Check if video file has an audio stream.
+        Get information about all audio streams in a video file.
 
         Args:
             video_path: Path to video file
 
         Returns:
-            True if video has audio stream, False otherwise
+            List of audio stream info dicts with keys:
+            - index: absolute stream index (for use with -map 0:{index})
+            - audio_index: audio-relative index (for use with -map 0:a:{audio_index})
+            - codec: audio codec name
+            - channels: number of audio channels
+            - sample_rate: sample rate in Hz
+            - bit_rate: bit rate (if available)
+            - language: language tag (if available)
+            - title: stream title (if available, often contains description like "commentary")
         """
-        logger.info(f"Checking for audio stream in {video_path}")
-
         try:
             result = subprocess.run(
                 [
@@ -148,39 +154,133 @@ class FFmpegAdapter:
             )
 
             data = json.loads(result.stdout)
+            audio_streams = []
+            audio_index = 0  # Track audio-relative index
 
-            # Check if there's an audio stream
-            audio_stream = next(
-                (s for s in data.get("streams", []) if s["codec_type"] == "audio"),
-                None,
-            )
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") != "audio":
+                    continue
 
-            has_audio = audio_stream is not None
-            logger.info(f"Audio stream {'found' if has_audio else 'not found'}")
-            return has_audio
+                tags = stream.get("tags", {})
+                stream_info = {
+                    "index": stream.get("index"),  # Absolute stream index
+                    "audio_index": audio_index,  # Audio-relative index
+                    "codec": stream.get("codec_name"),
+                    "channels": stream.get("channels", 0),
+                    "sample_rate": int(stream.get("sample_rate", 0)),
+                    "bit_rate": int(stream.get("bit_rate", 0)) if stream.get("bit_rate") else 0,
+                    "language": tags.get("language", tags.get("LANGUAGE", "")),
+                    "title": tags.get("title", tags.get("TITLE", "")),
+                }
+                audio_streams.append(stream_info)
+                audio_index += 1
+
+            return audio_streams
 
         except Exception as e:
-            logger.warning(f"Failed to check for audio stream: {e}")
-            return False
+            logger.warning(f"Failed to get audio streams: {e}")
+            return []
 
     @staticmethod
-    def extract_audio(video_path: Path, output_path: Path) -> None:
+    def get_best_audio_stream_index(video_path: Path) -> Optional[int]:
+        """
+        Determine the best audio stream to use for transcription.
+
+        Selection criteria (in order of priority):
+        1. Skip streams with titles containing "commentary", "description", "subtitle", "narrat"
+        2. Prefer streams with more channels (stereo > mono)
+        3. Prefer streams with higher bit rate
+        4. Fall back to first audio stream if no better option
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            Audio-relative stream index (for use with -map 0:a:{index}), or None if no audio
+        """
+        audio_streams = FFmpegAdapter.get_audio_streams(video_path)
+
+        if not audio_streams:
+            return None
+
+        logger.info(f"Found {len(audio_streams)} audio stream(s)")
+        for stream in audio_streams:
+            logger.info(
+                f"  Audio stream {stream['audio_index']} (absolute: {stream['index']}): "
+                f"{stream['codec']}, {stream['channels']}ch, {stream['sample_rate']}Hz, "
+                f"bitrate={stream['bit_rate']}, lang={stream['language']}, "
+                f"title='{stream['title']}'"
+            )
+
+        # Filter out commentary/description/subtitle tracks
+        excluded_keywords = ["commentary", "description", "subtitle", "narrat", "자막", "caption", "uptitle"]
+        filtered_streams = [
+            s for s in audio_streams
+            if not any(kw in s["title"].lower() for kw in excluded_keywords)
+        ]
+
+        # If all streams were filtered out, use original list
+        if not filtered_streams:
+            logger.warning("All audio streams appear to be commentary/subtitle tracks, using first stream")
+            filtered_streams = audio_streams
+
+        # Sort by channels (descending), then by bit_rate (descending)
+        sorted_streams = sorted(
+            filtered_streams,
+            key=lambda s: (s["channels"], s["bit_rate"]),
+            reverse=True,
+        )
+
+        best_stream = sorted_streams[0]
+        logger.info(f"Selected audio stream {best_stream['audio_index']} (absolute: {best_stream['index']}) as best option")
+        return best_stream["audio_index"]
+
+    @staticmethod
+    def has_audio_stream(video_path: Path) -> bool:
+        """
+        Check if video file has an audio stream.
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            True if video has audio stream, False otherwise
+        """
+        logger.info(f"Checking for audio stream in {video_path}")
+        audio_streams = FFmpegAdapter.get_audio_streams(video_path)
+        has_audio = len(audio_streams) > 0
+        logger.info(f"Audio stream {'found' if has_audio else 'not found'}")
+        return has_audio
+
+    @staticmethod
+    def extract_audio(video_path: Path, output_path: Path, audio_stream_index: Optional[int] = None) -> None:
         """
         Extract audio track from video.
 
         Args:
             video_path: Path to video file
             output_path: Path to save extracted audio (e.g., .mp3, .wav)
+            audio_stream_index: Audio-relative stream index to extract (0, 1, 2...).
+                               If None, automatically selects the best audio stream
+                               based on channels, bitrate, and title metadata.
 
         Raises:
             subprocess.CalledProcessError: If ffmpeg fails
+            ValueError: If no audio stream found
         """
-        logger.info(f"Extracting audio from {video_path} to {output_path}")
+        # Auto-select best audio stream if not specified
+        if audio_stream_index is None:
+            audio_stream_index = FFmpegAdapter.get_best_audio_stream_index(video_path)
+            if audio_stream_index is None:
+                raise ValueError("No audio stream found in video")
+
+        logger.info(f"Extracting audio stream 0:a:{audio_stream_index} from {video_path} to {output_path}")
 
         subprocess.run(
             [
                 "ffmpeg",
                 "-i", str(video_path),
+                "-map", f"0:a:{audio_stream_index}",  # Select specific audio stream
                 "-vn",  # No video
                 "-acodec", "libmp3lame",  # MP3 codec
                 "-q:a", "2",  # Quality level

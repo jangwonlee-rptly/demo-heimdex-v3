@@ -41,6 +41,30 @@ export interface Video {
 }
 
 /**
+ * Embedding metadata for a scene.
+ */
+export interface EmbeddingMetadata {
+  model: string;
+  dimensions: number;
+  input_text_hash: string;
+  input_text_length: number;
+}
+
+/**
+ * Processing statistics for a scene.
+ */
+export interface ProcessingStats {
+  scene_duration_s: number;
+  transcript_length: number;
+  visual_analysis_called: boolean;
+  visual_analysis_skipped_reason?: string;
+  search_text_length: number;
+  combined_text_length: number;
+  keyframes_extracted: number;
+  best_frame_found: boolean;
+}
+
+/**
  * Video scene interface representing a detected scene.
  */
 export interface VideoScene {
@@ -59,6 +83,12 @@ export interface VideoScene {
   thumbnail_url?: string;
   similarity?: number; // Present only in search results
   created_at: string;
+  // Sidecar v2 metadata fields
+  sidecar_version?: string;
+  search_text?: string;
+  embedding_metadata?: EmbeddingMetadata;
+  needs_reprocess?: boolean;
+  processing_stats?: ProcessingStats;
 }
 
 /**

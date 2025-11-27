@@ -46,11 +46,30 @@ class Settings(BaseSettings):
     visual_brightness_threshold: float = 15.0  # Min brightness (0-255) for informative frames
     visual_blur_threshold: float = 100.0  # Min blur score (Laplacian variance) for sharp frames
     visual_semantics_enabled: bool = True  # Enable/disable visual semantics entirely
-    visual_semantics_model: str = "gpt-4o-mini"  # Model for visual analysis (cheaper variant)
+    visual_semantics_model: str = "gpt-5-nano"  # Model for visual analysis (cheaper variant)
     visual_semantics_max_tokens: int = 128  # Max tokens for visual analysis response
     visual_semantics_temperature: float = 0.0  # Temperature for visual analysis (0 = deterministic)
     visual_semantics_include_entities: bool = True  # Include main_entities in JSON response
     visual_semantics_include_actions: bool = True  # Include actions in JSON response
+
+    # Cost optimization: minimum scene duration (seconds) to trigger visual analysis
+    # Scenes shorter than this will skip visual analysis if transcript is available
+    visual_semantics_min_duration_s: float = 1.5
+
+    # Cost optimization: minimum transcript length (chars) to consider "rich" transcript
+    # If transcript is longer than this, visual analysis may be skipped for short scenes
+    visual_semantics_transcript_threshold: int = 50
+
+    # Cost optimization: force visual analysis if transcript is empty/short
+    # even for very short scenes
+    visual_semantics_force_on_no_transcript: bool = True
+
+    # Sidecar schema version for future migrations
+    sidecar_schema_version: str = "v2"
+
+    # Search text optimization
+    search_text_max_length: int = 8000  # Max chars for embedding input
+    search_text_transcript_weight: float = 0.6  # Relative priority of transcript in search text
 
 
 # Global settings instance
