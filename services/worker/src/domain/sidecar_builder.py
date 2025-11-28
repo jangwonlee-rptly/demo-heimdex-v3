@@ -242,6 +242,95 @@ class SidecarBuilder:
         return deduplicated
 
     @staticmethod
+    def _assess_scene_meaningfulness(
+        transcript_segment: str,
+        visual_description: str,
+        visual_entities: list[str],
+        visual_actions: list[str],
+        tags: list[str],
+        has_informative_frame: bool,
+        scene_duration_s: float,
+        language: str = "ko",
+    ) -> str:
+        """
+        Assess scene meaningfulness and ensure we always return content.
+
+        This method implements a multi-tier approach to scene assessment:
+        - Tier 1: Strong signals (transcript, visual description)
+        - Tier 2: Moderate signals (entities/actions, tags)
+        - Tier 3: Fallback (frame passed quality, generic description)
+
+        Args:
+            transcript_segment: Transcript text
+            visual_description: Description from OpenAI
+            visual_entities: Extracted entities
+            visual_actions: Extracted actions
+            tags: Normalized tags
+            has_informative_frame: Whether frame passed quality checks
+            scene_duration_s: Scene duration
+            language: Language code
+
+        Returns:
+            Enhanced visual description (never empty if ANY signal exists)
+        """
+        # Tier 1: If we have a strong visual description, use it
+        if visual_description and visual_description.strip():
+            return visual_description
+
+        # Tier 2a: Build description from entities and actions
+        if visual_entities or visual_actions:
+            parts = []
+            if language == "ko":
+                if visual_entities:
+                    parts.append(", ".join(visual_entities[:3]))
+                if visual_actions:
+                    parts.append(", ".join(visual_actions[:3]))
+                description = " - ".join(parts) if parts else ""
+            else:
+                if visual_entities:
+                    parts.append(", ".join(visual_entities[:3]))
+                if visual_actions:
+                    parts.append(", ".join(visual_actions[:3]))
+                description = " - ".join(parts) if parts else ""
+
+            if description:
+                logger.info(
+                    f"Built visual description from entities/actions: {description[:50]}..."
+                )
+                return description
+
+        # Tier 2b: Build description from tags
+        if tags:
+            if language == "ko":
+                description = f"시각적 장면: {', '.join(tags[:3])}"
+            else:
+                description = f"Visual scene: {', '.join(tags[:3])}"
+            logger.info(f"Built visual description from tags: {description}")
+            return description
+
+        # Tier 3: Frame passed quality checks, use generic fallback
+        if has_informative_frame:
+            # Scene had visual content good enough for analysis
+            if scene_duration_s > 3.0:
+                if language == "ko":
+                    description = "의미 있는 시각적 장면"
+                else:
+                    description = "Meaningful visual scene"
+            else:
+                if language == "ko":
+                    description = "시각적 장면"
+                else:
+                    description = "Visual scene"
+
+            logger.info(
+                f"Using fallback visual description (frame passed quality): {description}"
+            )
+            return description
+
+        # No visual signal at all, return empty
+        return ""
+
+    @staticmethod
     def _should_skip_visual_analysis(
         scene_duration_s: float,
         transcript_length: int,
@@ -409,25 +498,54 @@ class SidecarBuilder:
             stats.keyframes_extracted = len(keyframe_paths)
 
             if keyframe_paths:
-                # Find best quality frame
-                best_frame_path = frame_quality_checker.find_best_frame(keyframe_paths)
-                stats.best_frame_found = best_frame_path is not None
+                # Rank frames by quality (best first)
+                ranked_frames = frame_quality_checker.rank_frames_by_quality(keyframe_paths)
+                stats.best_frame_found = len(ranked_frames) > 0
 
-                if best_frame_path:
-                    logger.info(
-                        f"Found informative frame for scene {scene.index}, "
-                        f"calling OpenAI for visual analysis"
+                if ranked_frames:
+                    # Try frames in order of quality until we get meaningful content
+                    max_attempts = min(
+                        len(ranked_frames),
+                        settings.visual_semantics_max_frame_retries
                     )
-                    stats.visual_analysis_called = True
+                    best_frame_path = ranked_frames[0][0]  # Keep best for thumbnail
 
-                    # Call optimized visual analysis (single frame, strict JSON)
-                    visual_result = openai_client.analyze_scene_visuals_optimized(
-                        best_frame_path,
-                        transcript_segment if has_meaningful_transcript else None,
-                        language=language,
-                    )
+                    visual_result = None
+                    for attempt in range(max_attempts):
+                        frame_path, frame_score = ranked_frames[attempt]
 
-                    # Process result
+                        logger.info(
+                            f"Scene {scene.index}: Analyzing frame {attempt + 1}/{max_attempts} "
+                            f"(quality score: {frame_score:.2f})"
+                        )
+                        stats.visual_analysis_called = True
+
+                        # Call optimized visual analysis (single frame, strict JSON)
+                        visual_result = openai_client.analyze_scene_visuals_optimized(
+                            frame_path,
+                            transcript_segment if has_meaningful_transcript else None,
+                            language=language,
+                        )
+
+                        # Check if we got meaningful content
+                        if visual_result and visual_result.get("status") == "ok":
+                            logger.info(
+                                f"Scene {scene.index}: Got meaningful content on attempt {attempt + 1}"
+                            )
+                            break
+                        else:
+                            logger.info(
+                                f"Scene {scene.index}: Frame {attempt + 1} returned no_content"
+                            )
+
+                            # If retry is disabled or this is the last frame, stop
+                            if not settings.visual_semantics_retry_on_no_content or attempt >= max_attempts - 1:
+                                logger.info(
+                                    f"Scene {scene.index}: No more frames to try"
+                                )
+                                break
+
+                    # Process result if we got meaningful content
                     if visual_result and visual_result.get("status") == "ok":
                         # Extract richer description (v2)
                         description = visual_result.get("description", "")
@@ -467,9 +585,8 @@ class SidecarBuilder:
 
                         visual_summary = ". ".join(parts)
                     else:
-                        logger.info(
-                            f"Visual analysis returned no_content for scene {scene.index}, "
-                            f"skipping visual semantics"
+                        logger.warning(
+                            f"Scene {scene.index}: All {max_attempts} frame(s) returned no_content"
                         )
                 else:
                     logger.info(
@@ -508,6 +625,27 @@ class SidecarBuilder:
                     content_type="image/jpeg",
                 )
 
+        # Assess scene meaningfulness and enhance visual description if needed
+        # This ensures scenes with ANY visual signal get meaningful descriptions
+        has_informative_frame = best_frame_path is not None
+        enhanced_visual_description = SidecarBuilder._assess_scene_meaningfulness(
+            transcript_segment=transcript_segment,
+            visual_description=visual_description or "",
+            visual_entities=visual_entities,
+            visual_actions=visual_actions,
+            tags=tags,
+            has_informative_frame=has_informative_frame,
+            scene_duration_s=scene_duration,
+            language=language,
+        )
+
+        # Use enhanced description if we got one
+        if enhanced_visual_description and not visual_description:
+            visual_description = enhanced_visual_description
+            # Also update visual_summary if it's empty
+            if not visual_summary:
+                visual_summary = enhanced_visual_description
+
         # Build search-optimized text (transcript-first for better semantic matching)
         search_text = SidecarBuilder._build_search_text(
             transcript_segment,
@@ -528,10 +666,18 @@ class SidecarBuilder:
                 search_text = "내용 없음"
             else:
                 search_text = "No content"
-            logger.warning(
-                f"Scene {scene.index} has no meaningful content "
-                f"(no transcript, no visual summary)"
-            )
+            # Only warn if we truly have no signals at all
+            if not has_meaningful_transcript and not has_informative_frame and not tags:
+                logger.warning(
+                    f"Scene {scene.index} has no meaningful content "
+                    f"(no transcript, no informative frames, no tags)"
+                )
+            else:
+                logger.info(
+                    f"Scene {scene.index} has minimal searchable text but has other signals "
+                    f"(transcript={has_meaningful_transcript}, frame={has_informative_frame}, "
+                    f"tags={len(tags)})"
+                )
 
         # Similarly for combined_text
         if len(combined_text.strip()) < 10:

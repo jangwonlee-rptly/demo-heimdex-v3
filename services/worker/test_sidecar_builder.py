@@ -167,6 +167,64 @@ class SidecarBuilder:
         return deduplicated
 
     @staticmethod
+    def _assess_scene_meaningfulness(
+        transcript_segment: str,
+        visual_description: str,
+        visual_entities: list[str],
+        visual_actions: list[str],
+        tags: list[str],
+        has_informative_frame: bool,
+        scene_duration_s: float,
+        language: str = "ko",
+    ) -> str:
+        # Tier 1: If we have a strong visual description, use it
+        if visual_description and visual_description.strip():
+            return visual_description
+
+        # Tier 2a: Build description from entities and actions
+        if visual_entities or visual_actions:
+            parts = []
+            if language == "ko":
+                if visual_entities:
+                    parts.append(", ".join(visual_entities[:3]))
+                if visual_actions:
+                    parts.append(", ".join(visual_actions[:3]))
+                description = " - ".join(parts) if parts else ""
+            else:
+                if visual_entities:
+                    parts.append(", ".join(visual_entities[:3]))
+                if visual_actions:
+                    parts.append(", ".join(visual_actions[:3]))
+                description = " - ".join(parts) if parts else ""
+            if description:
+                return description
+
+        # Tier 2b: Build description from tags
+        if tags:
+            if language == "ko":
+                description = f"시각적 장면: {', '.join(tags[:3])}"
+            else:
+                description = f"Visual scene: {', '.join(tags[:3])}"
+            return description
+
+        # Tier 3: Frame passed quality checks, use generic fallback
+        if has_informative_frame:
+            if scene_duration_s > 3.0:
+                if language == "ko":
+                    description = "의미 있는 시각적 장면"
+                else:
+                    description = "Meaningful visual scene"
+            else:
+                if language == "ko":
+                    description = "시각적 장면"
+                else:
+                    description = "Visual scene"
+            return description
+
+        # No visual signal at all, return empty
+        return ""
+
+    @staticmethod
     def _should_skip_visual_analysis(
         scene_duration_s: float,
         transcript_length: int,
@@ -529,6 +587,154 @@ def test_smart_truncate():
     print("All smart truncation tests passed!")
 
 
+def test_assess_scene_meaningfulness():
+    """Test scene meaningfulness assessment with multi-tier fallback."""
+    print("\n" + "=" * 80)
+    print("Testing Scene Meaningfulness Assessment")
+    print("=" * 80 + "\n")
+
+    # Test 1: Tier 1 - Strong visual description
+    print("Test 1: Tier 1 - Use existing visual description")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="Some transcript",
+        visual_description="A person standing on a beach",
+        visual_entities=["person", "beach"],
+        visual_actions=["standing"],
+        tags=["person", "beach", "standing"],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="en"
+    )
+    print(f"Result: {result}")
+    assert result == "A person standing on a beach", "Should use existing visual description"
+    print("PASSED\n")
+
+    # Test 2: Tier 2a - Build from entities and actions
+    print("Test 2: Tier 2a - Build from entities and actions (Korean)")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=["사람", "강아지"],
+        visual_actions=["달리기", "놀기"],
+        tags=[],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="ko"
+    )
+    print(f"Result: {result}")
+    assert "사람" in result and "강아지" in result, "Should include entities"
+    assert "달리기" in result and "놀기" in result, "Should include actions"
+    print("PASSED\n")
+
+    # Test 3: Tier 2a - Build from entities only (English)
+    print("Test 3: Tier 2a - Build from entities only (English)")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=["person", "laptop", "office"],
+        visual_actions=[],
+        tags=[],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="en"
+    )
+    print(f"Result: {result}")
+    assert "person" in result and "laptop" in result, "Should include entities"
+    print("PASSED\n")
+
+    # Test 4: Tier 2b - Build from tags
+    print("Test 4: Tier 2b - Build from tags")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=[],
+        visual_actions=[],
+        tags=["car", "road", "traffic"],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="en"
+    )
+    print(f"Result: {result}")
+    assert "Visual scene:" in result, "Should use visual scene prefix"
+    assert "car" in result, "Should include tag"
+    print("PASSED\n")
+
+    # Test 5: Tier 3 - Fallback for long scene with informative frame
+    print("Test 5: Tier 3 - Fallback for long scene with informative frame")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=[],
+        visual_actions=[],
+        tags=[],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="en"
+    )
+    print(f"Result: {result}")
+    assert result == "Meaningful visual scene", "Should use meaningful fallback for long scenes"
+    print("PASSED\n")
+
+    # Test 6: Tier 3 - Fallback for short scene with informative frame
+    print("Test 6: Tier 3 - Fallback for short scene with informative frame")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=[],
+        visual_actions=[],
+        tags=[],
+        has_informative_frame=True,
+        scene_duration_s=1.5,
+        language="ko"
+    )
+    print(f"Result: {result}")
+    assert result == "시각적 장면", "Should use generic fallback for short scenes"
+    print("PASSED\n")
+
+    # Test 7: No visual signal at all - empty result
+    print("Test 7: No visual signal at all - empty result")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=[],
+        visual_actions=[],
+        tags=[],
+        has_informative_frame=False,
+        scene_duration_s=2.0,
+        language="en"
+    )
+    print(f"Result: '{result}'")
+    assert result == "", "Should return empty when no visual signal exists"
+    print("PASSED\n")
+
+    # Test 8: Limit to 3 entities/actions
+    print("Test 8: Limit to 3 entities/actions")
+    print("-" * 80)
+    result = SidecarBuilder._assess_scene_meaningfulness(
+        transcript_segment="",
+        visual_description="",
+        visual_entities=["one", "two", "three", "four", "five"],
+        visual_actions=[],
+        tags=[],
+        has_informative_frame=True,
+        scene_duration_s=5.0,
+        language="en"
+    )
+    print(f"Result: {result}")
+    parts = result.split(", ")
+    assert len(parts) == 3, "Should limit to 3 entities"
+    print("PASSED\n")
+
+    print("All scene meaningfulness assessment tests passed!")
+
+
 def test_should_skip_visual_analysis():
     """Test visual analysis skip logic for cost optimization."""
     print("\n" + "=" * 80)
@@ -865,6 +1071,7 @@ def run_all_tests():
         test_combined_text_with_filename,
         test_search_text_optimization,
         test_smart_truncate,
+        test_assess_scene_meaningfulness,
         test_should_skip_visual_analysis,
         test_scene_sidecar_versioning,
         test_processing_stats,
@@ -900,6 +1107,7 @@ def run_all_tests():
         print("  - Combined text building (backward compatibility, audio-first)")
         print("  - Search text optimization (transcript-first, no labels)")
         print("  - Smart truncation (sentence/word boundaries)")
+        print("  - Scene meaningfulness assessment (multi-tier fallback)")
         print("  - Visual analysis skip logic (cost optimization)")
         print("  - SceneSidecar versioning (v2 fields)")
         print("  - Processing stats tracking")

@@ -44,13 +44,15 @@ class Settings(BaseSettings):
 
     # Visual semantics optimization configuration
     visual_brightness_threshold: float = 15.0  # Min brightness (0-255) for informative frames
-    visual_blur_threshold: float = 100.0  # Min blur score (Laplacian variance) for sharp frames
+    visual_blur_threshold: float = 50.0  # Min blur score (Laplacian variance) for sharp frames
     visual_semantics_enabled: bool = True  # Enable/disable visual semantics entirely
-    visual_semantics_model: str = "gpt-5-nano"  # Model for visual analysis (cheaper variant)
-    visual_semantics_max_tokens: int = 128  # Max tokens for visual analysis response
+    visual_semantics_model: str = "gpt-4o-mini"  # Model for visual analysis (upgraded from gpt-5-nano for better accuracy)
+    visual_semantics_max_tokens: int = 150  # Max tokens for visual analysis response (increased for richer descriptions)
     visual_semantics_temperature: float = 0.0  # Temperature for visual analysis (0 = deterministic)
     visual_semantics_include_entities: bool = True  # Include main_entities in JSON response
     visual_semantics_include_actions: bool = True  # Include actions in JSON response
+    visual_semantics_retry_on_no_content: bool = True  # Retry with next best frame if first returns no_content
+    visual_semantics_max_frame_retries: int = 2  # Max frames to try before giving up (1 = no retries, 2 = try 2nd frame, etc.)
 
     # Cost optimization: minimum scene duration (seconds) to trigger visual analysis
     # Scenes shorter than this will skip visual analysis if transcript is available

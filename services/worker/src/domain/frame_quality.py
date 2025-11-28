@@ -192,6 +192,49 @@ class FrameQualityChecker:
 
         return best_frame
 
+    @staticmethod
+    def rank_frames_by_quality(frame_paths: list[Path]) -> list[tuple[Path, float]]:
+        """
+        Rank all frames by quality score (highest first).
+
+        Args:
+            frame_paths: List of frame paths to evaluate
+
+        Returns:
+            List of (frame_path, quality_score) tuples, sorted by score descending.
+            Only includes frames that pass quality checks.
+        """
+        if not frame_paths:
+            return []
+
+        scored_frames = []
+
+        for frame_path in frame_paths:
+            result = FrameQualityChecker.check_frame(frame_path)
+
+            if result.is_informative:
+                # Score based on brightness and blur
+                # Normalize brightness to 0-1 range, prefer mid-range brightness
+                brightness_score = 1.0 - abs(result.brightness - 127.5) / 127.5
+
+                # Normalize blur score (cap at reasonable max)
+                blur_score = min(result.blur_score / 1000.0, 1.0)
+
+                # Combined score
+                combined_score = brightness_score * 0.4 + blur_score * 0.6
+
+                scored_frames.append((frame_path, combined_score))
+
+        # Sort by score descending
+        scored_frames.sort(key=lambda x: x[1], reverse=True)
+
+        if scored_frames:
+            logger.info(f"Ranked {len(scored_frames)} informative frames (best score: {scored_frames[0][1]:.2f})")
+        else:
+            logger.warning("No informative frames found in candidate set")
+
+        return scored_frames
+
 
 # Global frame quality checker instance
 frame_quality_checker = FrameQualityChecker()

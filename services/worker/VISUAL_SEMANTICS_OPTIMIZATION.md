@@ -31,7 +31,9 @@ Previously, the system would:
 
 **Configuration** (see `src/config.py`):
 - `visual_brightness_threshold`: Minimum brightness (default: 15.0)
-- `visual_blur_threshold`: Minimum Laplacian variance (default: 100.0)
+- `visual_blur_threshold`: Minimum Laplacian variance (default: 50.0, lowered from 100.0 to reduce false negatives)
+- `visual_semantics_retry_on_no_content`: Retry with next best frame if first returns no_content (default: True)
+- `visual_semantics_max_frame_retries`: Max frames to try before giving up (default: 2)
 
 ### 2. Strict JSON Schema Prompt (`src/adapters/openai_client.py`)
 
@@ -59,11 +61,17 @@ Previously, the system would:
   - `temperature=0.0` (deterministic, no rambling)
 
 **Configuration**:
-- `visual_semantics_model`: Model to use (default: "gpt-4o-mini" - cheaper variant)
-- `visual_semantics_max_tokens`: Response token limit (default: 128)
+- `visual_semantics_model`: Model to use (default: "gpt-4o-mini" - upgraded from gpt-5-nano for better accuracy)
+- `visual_semantics_max_tokens`: Response token limit (default: 150 - increased for richer descriptions)
 - `visual_semantics_temperature`: Temperature setting (default: 0.0)
 - `visual_semantics_include_entities`: Toggle entities in response (default: True)
 - `visual_semantics_include_actions`: Toggle actions in response (default: True)
+
+**Prompt Improvements**:
+- More aggressive extraction: Forces OpenAI to describe ANY visible content
+- Only allows "no_content" for completely black or completely blurred frames
+- Emphasizes extraction of ALL visible elements (people, objects, text, colors, backgrounds)
+- Encourages analysis even when uncertain (using lower confidence scores)
 
 ### 3. Transcript-First Strategy (`src/domain/sidecar_builder.py`)
 
@@ -114,11 +122,28 @@ New environment variables (all prefixed with `HEIMDEX_` in .env):
 | Condition | OpenAI Called? | Reason |
 |-----------|----------------|--------|
 | All frames too dark/blurry | ❌ No | Pre-filtered by frame quality checker |
-| Good frame + meaningful transcript | ✅ Yes | Full visual + transcript context |
-| Good frame + no transcript | ✅ Yes | Visual-only analysis |
+| Good frame + meaningful transcript | ✅ Yes (1-2 frames) | Full visual + transcript context with multi-frame fallback |
+| Good frame + no transcript | ✅ Yes (1-2 frames) | Visual-only analysis with multi-frame fallback |
 | No good frames + meaningful transcript | ❌ No | Transcript-only embedding (no visual needed) |
 | No good frames + no transcript | ❌ No | Placeholder embedding ("내용 없음") |
 | `visual_semantics_enabled=False` | ❌ No | Disabled globally |
+
+## Multi-Frame Fallback Strategy
+
+**New Feature**: If the first frame returns `status="no_content"`, the system will automatically try the next best quality frame.
+
+**How it works**:
+1. Extract and rank all keyframes by quality score (brightness + sharpness)
+2. Try the best frame first
+3. If result is "no_content" AND retry is enabled, try the next best frame
+4. Continue until max_frame_retries is reached or "ok" status is received
+5. This significantly improves accuracy for scenes where one frame might be a transition or poor moment
+
+**Configuration**:
+- `visual_semantics_retry_on_no_content`: Enable/disable retry (default: True)
+- `visual_semantics_max_frame_retries`: Maximum frames to try (default: 2)
+
+**Cost Impact**: Minimal - only retries when first frame fails, and stops immediately on success
 
 ## Expected Token Savings
 
@@ -152,12 +177,13 @@ INFO: "Best frame selected: scene_X_frame_Y.jpg (score=0.85)"
 ## Testing and Tuning
 
 ### Recommended Tuning Process:
-1. Start with default thresholds
+1. Start with default thresholds (brightness: 15.0, blur: 50.0)
 2. Monitor logs for skipped scenes
 3. Spot-check a few "skipped" scenes to verify they're truly uninformative
 4. Adjust thresholds if needed:
    - Increase `visual_brightness_threshold` to skip more dark scenes
    - Increase `visual_blur_threshold` to skip more blurry scenes
+   - Decrease `visual_blur_threshold` if too many meaningful frames are being rejected (current default: 50.0)
 
 ### Test Cases:
 - ✅ Completely black frames (e.g., scene transitions)

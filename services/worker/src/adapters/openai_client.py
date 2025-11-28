@@ -168,11 +168,13 @@ class OpenAIClient:
 }
 
 규칙:
-- 장면이 완전히 검은색, 너무 흐릿하거나 인식할 수 없는 경우: status="no_content", description="", main_entities=[], actions=[], confidence=0.0
-- 그 외의 경우: status="ok"
-- description: 누가 무엇을 하고 있는지, 장소와 분위기를 포함한 1-2문장의 구체적 설명 (최대 200자)
-- main_entities: 주요 등장 인물, 물체, 장소를 짧은 명사구로 나열 (각 항목은 30자 미만)
-- actions: 일어나는 행동을 짧은 동사구로 나열 (각 항목은 30자 미만)
+- **중요**: 장면에서 무언가 보이면 반드시 분석하세요. status="no_content"는 완전히 검은 화면이나 완전히 흐릿한 경우에만 사용하세요.
+- 사람, 물체, 텍스트, 색상, 배경 등 어떤 것이든 보이는 것을 설명하세요
+- 불확실한 경우에도 보이는 것을 최대한 설명하세요 (confidence를 낮게 설정)
+- status="ok"인 경우: 반드시 description, main_entities, actions를 채우세요
+- description: 누가/무엇이 있는지, 무엇을 하는지, 장소와 분위기를 포함한 구체적 설명 (최대 200자)
+- main_entities: 보이는 모든 주요 대상 (사람, 물체, 장소, 텍스트 등)을 명사구로 나열 (각 항목은 30자 미만)
+- actions: 일어나는 모든 행동이나 상태를 동사구로 나열 (정적인 장면은 "표시", "보임" 등 사용) (각 항목은 30자 미만)
 - 태그로 사용 가능하도록 entities와 actions는 간결하게
 - JSON만 출력하고 추가 설명 없음""",
                 "en": """You are a video scene analysis expert. Respond ONLY with this JSON schema:
@@ -186,11 +188,13 @@ class OpenAIClient:
 }
 
 Rules:
-- If scene is completely black, too blurry, or nothing recognizable: status="no_content", description="", main_entities=[], actions=[], confidence=0.0
-- Otherwise: status="ok"
-- description: 1-2 specific sentences describing who/what is present, what's happening, location and mood (max 200 chars)
-- main_entities: short noun phrases for main people, objects, locations (each item under 30 chars)
-- actions: short verb phrases for actions occurring (each item under 30 chars)
+- **IMPORTANT**: If you can see ANYTHING in the scene, you MUST analyze it. Only use status="no_content" for completely black screens or completely blurred content.
+- Describe ANY visible elements: people, objects, text, colors, backgrounds, etc.
+- Even if uncertain, describe what you see (use lower confidence)
+- If status="ok": you MUST fill in description, main_entities, and actions
+- description: Specific details about who/what is present, what's happening, location and mood (max 200 chars)
+- main_entities: ALL visible main subjects (people, objects, locations, text, etc.) as noun phrases (each item under 30 chars)
+- actions: ALL actions or states occurring (for static scenes use "displayed", "shown", etc.) as verb phrases (each item under 30 chars)
 - Keep entities and actions concise for use as clickable tags
 - Output JSON only, no additional text""",
             }
