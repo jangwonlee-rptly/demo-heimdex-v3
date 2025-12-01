@@ -124,7 +124,7 @@ export default function GlobalNav() {
                     {t.common.signIn}
                   </button>
                   <button
-                    onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
+                    onClick={() => window.location.href = 'https://cal.com/jlee-heimdex/heimdex-demo'}
                     className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2 rounded-lg hover:shadow-lg transition transform hover:scale-105"
                   >
                     {t.landing.getDemo}

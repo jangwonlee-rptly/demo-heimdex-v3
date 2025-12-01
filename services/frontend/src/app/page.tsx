@@ -57,7 +57,7 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
+              onClick={() => window.location.href = 'https://cal.com/jlee-heimdex/heimdex-demo'}
               className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
               {t.landing.requestDemo}
@@ -192,13 +192,13 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
+              onClick={() => window.location.href = 'https://cal.com/jlee-heimdex/heimdex-demo'}
               className="bg-white text-blue-600 px-8 py-4 rounded-lg text-lg font-semibold hover:shadow-xl transition transform hover:scale-105"
             >
               {t.landing.scheduleDemo}
             </button>
             <button
-              onClick={() => window.location.href = 'https://calendly.com/j-lee-heimdex/heimdex-demo'}
+              onClick={() => window.location.href = 'https://cal.com/jlee-heimdex/heimdex-demo'}
               className="border-2 border-white text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-white/10 transition"
             >
               {t.landing.contactSales}
