@@ -8,14 +8,6 @@ import { useLanguage } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * Search page component.
- *
- * Allows users to search for video scenes using natural language.
- * Displays results with scene details and allows playback of selected scenes.
- *
- * @returns {JSX.Element} The search page.
- */
 export default function SearchPage() {
   const { t } = useLanguage();
   const [query, setQuery] = useState('');
@@ -65,12 +57,10 @@ export default function SearchPage() {
   const handleSceneClick = async (scene: VideoScene) => {
     setSelectedScene(scene);
 
-    // Load video details
     try {
       const video = await apiRequest<Video>(`/videos/${scene.video_id}`);
       setCurrentVideo(video);
 
-      // Wait for video to load and seek to timestamp
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.currentTime = scene.start_s;
@@ -82,115 +72,168 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="card mb-6">
-          <h1 className="text-2xl font-bold mb-4">{t.search.title}</h1>
+    <div className="min-h-screen bg-surface-950 pt-20 pb-12">
+      {/* Background Effects */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-0 left-1/3 w-[600px] h-[600px] bg-accent-cyan/5 rounded-full blur-[150px]" />
+        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-accent-violet/5 rounded-full blur-[120px]" />
+      </div>
 
-          <form onSubmit={handleSearch} className="flex gap-4">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t.search.searchPlaceholder}
-              className="input flex-1"
-            />
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Search Header */}
+        <div className="card mb-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-accent-cyan/20 to-accent-violet/20 flex items-center justify-center">
+              <svg className="w-6 h-6 text-accent-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-surface-100">{t.search.title}</h1>
+              <p className="text-surface-400 text-sm">Search your videos with natural language</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSearch} className="flex gap-3">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t.search.searchPlaceholder}
+                className="input pl-12"
+              />
+              <svg className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
             <button
               type="submit"
               disabled={searching || !query.trim()}
               className="btn btn-primary"
             >
-              {searching ? t.search.searching : t.search.searchButton}
+              {searching ? (
+                <>
+                  <div className="w-5 h-5 spinner" />
+                  {t.search.searching}
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  {t.search.searchButton}
+                </>
+              )}
             </button>
           </form>
 
           {results && (
-            <div className="mt-4 text-sm text-gray-600">
-              {results.total} {t.search.resultsFound} ({results.latency_ms}ms)
+            <div className="mt-4 flex items-center gap-4 text-sm">
+              <span className="text-surface-300">
+                <span className="font-semibold text-accent-cyan">{results.total}</span> {t.search.resultsFound}
+              </span>
+              <span className="text-surface-600">|</span>
+              <span className="text-surface-500">{results.latency_ms}ms</span>
             </div>
           )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Search Results */}
-          <div className="card max-h-[calc(100vh-300px)] overflow-y-auto">
-            <h2 className="text-xl font-semibold mb-4">Results</h2>
+          <div className="card max-h-[calc(100vh-280px)] overflow-y-auto no-scrollbar">
+            <h2 className="text-lg font-semibold text-surface-100 mb-4 sticky top-0 bg-surface-800/95 backdrop-blur-sm py-2 -mt-2">
+              Results
+            </h2>
 
             {!results && (
-              <div className="text-center py-12 text-gray-500">
-                <p>Enter a search query to find scenes in your videos</p>
+              <div className="empty-state py-12">
+                <div className="empty-state-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </div>
+                <p className="empty-state-title">Enter a search query</p>
+                <p className="empty-state-description">
+                  Search for anything in your videos using natural language
+                </p>
               </div>
             )}
 
             {results && results.results.length === 0 && (
-              <div className="text-center py-12 text-gray-500">
-                <p>{t.search.noResults}</p>
-                <p className="text-sm mt-2">Try adjusting your search query</p>
+              <div className="empty-state py-12">
+                <div className="empty-state-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="8" y1="12" x2="16" y2="12" />
+                  </svg>
+                </div>
+                <p className="empty-state-title">{t.search.noResults}</p>
+                <p className="empty-state-description">
+                  Try adjusting your search query
+                </p>
               </div>
             )}
 
             {results && results.results.length > 0 && (
               <div className="space-y-3">
-                {results.results.map((scene) => (
+                {results.results.map((scene, index) => (
                   <button
                     key={scene.id}
                     onClick={() => handleSceneClick(scene)}
-                    className={`w-full text-left p-4 rounded-lg border transition-colors ${
-                      selectedScene?.id === scene.id
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-200 hover:border-primary-300'
+                    className={`scene-card w-full text-left ${
+                      selectedScene?.id === scene.id ? 'active' : ''
                     }`}
+                    style={{ animationDelay: `${index * 0.03}s` }}
                   >
                     <div className="flex gap-3">
                       {scene.thumbnail_url && (
-                        <img
-                          src={scene.thumbnail_url}
-                          alt="Scene thumbnail"
-                          className="w-24 h-16 object-cover rounded"
-                        />
+                        <div className="thumbnail w-28 h-[70px] flex-shrink-0">
+                          <img
+                            src={scene.thumbnail_url}
+                            alt="Scene thumbnail"
+                            className="w-full h-full"
+                          />
+                        </div>
                       )}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs font-medium text-gray-500">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-xs font-medium text-surface-400">
                             {t.search.scene} {scene.index + 1}
                           </span>
-                          <span className="text-xs text-gray-400">
+                          <span className="text-xs text-surface-600">
                             {scene.start_s.toFixed(1)}s - {scene.end_s.toFixed(1)}s
                           </span>
                           {scene.similarity && (
-                            <span className="text-xs text-primary-600 font-medium">
+                            <span className="badge badge-accent text-[10px] py-0.5">
                               {(scene.similarity * 100).toFixed(0)}% match
                             </span>
                           )}
                         </div>
-                        {scene.visual_description ? (
-                          <p className="text-sm text-gray-700 line-clamp-2 mb-1">
-                            {scene.visual_description}
-                          </p>
-                        ) : scene.visual_summary && (
-                          <p className="text-sm text-gray-700 line-clamp-2 mb-1">
-                            {scene.visual_summary}
+                        {(scene.visual_description || scene.visual_summary) && (
+                          <p className="text-sm text-surface-300 line-clamp-2 mb-1.5">
+                            {scene.visual_description || scene.visual_summary}
                           </p>
                         )}
                         {scene.transcript_segment && (
-                          <p className="text-xs text-gray-500 line-clamp-1 mb-1">
+                          <p className="text-xs text-surface-500 line-clamp-1 italic">
                             &quot;{scene.transcript_segment}&quot;
                           </p>
                         )}
-                        {/* Tags */}
                         {scene.tags && scene.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {scene.tags.slice(0, 5).map((tag, idx) => (
-                              <span
-                                key={idx}
-                                className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600"
-                              >
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {scene.tags.slice(0, 4).map((tag, idx) => (
+                              <span key={idx} className="tag text-[10px] py-0.5">
                                 {tag}
                               </span>
                             ))}
-                            {scene.tags.length > 5 && (
-                              <span className="text-xs text-gray-400">
-                                +{scene.tags.length - 5} more
+                            {scene.tags.length > 4 && (
+                              <span className="text-xs text-surface-600">
+                                +{scene.tags.length - 4}
                               </span>
                             )}
                           </div>
@@ -205,89 +248,105 @@ export default function SearchPage() {
 
           {/* Video Player */}
           <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Video Player</h2>
+            <h2 className="text-lg font-semibold text-surface-100 mb-4">Video Player</h2>
 
             {!selectedScene && (
-              <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
-                <p>Select a scene to watch</p>
+              <div className="video-container aspect-video flex items-center justify-center">
+                <div className="text-center">
+                  <svg className="w-12 h-12 text-surface-600 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                  <p className="text-surface-500">Select a scene to watch</p>
+                </div>
               </div>
             )}
 
             {selectedScene && currentVideo && (
               <div className="space-y-4">
-                <video
-                  ref={videoRef}
-                  controls
-                  className="w-full aspect-video bg-black rounded-lg"
-                >
-                  <source
-                    src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos/${currentVideo.storage_path}`}
-                    type="video/mp4"
-                  />
-                  Your browser does not support the video tag.
-                </video>
+                <div className="video-container">
+                  <video
+                    ref={videoRef}
+                    controls
+                    className="w-full aspect-video"
+                  >
+                    <source
+                      src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos/${currentVideo.storage_path}`}
+                      type="video/mp4"
+                    />
+                    Your browser does not support the video tag.
+                  </video>
+                </div>
 
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h3 className="font-medium mb-2">{t.search.scene} {selectedScene.index + 1}</h3>
-                  <p className="text-sm text-gray-600 mb-2">
-                    {t.search.timestamp}: {selectedScene.start_s.toFixed(1)}s - {selectedScene.end_s.toFixed(1)}s
-                  </p>
+                <div className="p-4 rounded-xl bg-surface-800/50 border border-surface-700/30 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-surface-100">
+                      {t.search.scene} {selectedScene.index + 1}
+                    </h3>
+                    <span className="text-sm text-surface-500">
+                      {selectedScene.start_s.toFixed(1)}s - {selectedScene.end_s.toFixed(1)}s
+                    </span>
+                  </div>
+
                   {(selectedScene.visual_description || selectedScene.visual_summary) && (
-                    <div className="mb-3">
-                      <p className="text-sm font-medium text-gray-700">Visual Description:</p>
-                      <p className="text-sm text-gray-600">
+                    <div>
+                      <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">
+                        Visual Description
+                      </p>
+                      <p className="text-sm text-surface-300">
                         {selectedScene.visual_description || selectedScene.visual_summary}
                       </p>
                     </div>
                   )}
+
                   {selectedScene.transcript_segment && (
-                    <div className="mb-3">
-                      <p className="text-sm font-medium text-gray-700">Transcript:</p>
-                      <p className="text-sm text-gray-600">&quot;{selectedScene.transcript_segment}&quot;</p>
+                    <div>
+                      <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">
+                        Transcript
+                      </p>
+                      <p className="text-sm text-surface-400 italic">
+                        &quot;{selectedScene.transcript_segment}&quot;
+                      </p>
                     </div>
                   )}
-                  {/* Visual Entities */}
+
                   {selectedScene.visual_entities && selectedScene.visual_entities.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-sm font-medium text-gray-700 mb-1">Detected Entities:</p>
-                      <div className="flex flex-wrap gap-1">
+                    <div>
+                      <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
+                        Detected Entities
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
                         {selectedScene.visual_entities.map((entity, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-800"
-                          >
+                          <span key={idx} className="badge badge-info">
                             {entity}
                           </span>
                         ))}
                       </div>
                     </div>
                   )}
-                  {/* Visual Actions */}
+
                   {selectedScene.visual_actions && selectedScene.visual_actions.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-sm font-medium text-gray-700 mb-1">Detected Actions:</p>
-                      <div className="flex flex-wrap gap-1">
+                    <div>
+                      <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
+                        Detected Actions
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
                         {selectedScene.visual_actions.map((action, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800"
-                          >
+                          <span key={idx} className="badge badge-success">
                             {action}
                           </span>
                         ))}
                       </div>
                     </div>
                   )}
-                  {/* Tags */}
+
                   {selectedScene.tags && selectedScene.tags.length > 0 && (
                     <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1">Tags:</p>
-                      <div className="flex flex-wrap gap-1">
+                      <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
+                        Tags
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
                         {selectedScene.tags.map((tag, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700"
-                          >
+                          <span key={idx} className="tag">
                             {tag}
                           </span>
                         ))}

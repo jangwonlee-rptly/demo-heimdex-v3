@@ -19,6 +19,45 @@ export interface UserProfile {
 }
 
 /**
+ * EXIF GPS metadata interface.
+ */
+export interface ExifGpsMetadata {
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+  location_name?: string;
+}
+
+/**
+ * EXIF camera metadata interface.
+ */
+export interface ExifCameraMetadata {
+  make?: string;
+  model?: string;
+  software?: string;
+}
+
+/**
+ * EXIF recording metadata interface.
+ */
+export interface ExifRecordingMetadata {
+  iso?: number;
+  focal_length?: number;
+  aperture?: number;
+  white_balance?: string;
+}
+
+/**
+ * Full EXIF metadata interface.
+ */
+export interface ExifMetadata {
+  gps?: ExifGpsMetadata;
+  camera?: ExifCameraMetadata;
+  recording?: ExifRecordingMetadata;
+  other?: Record<string, unknown>;
+}
+
+/**
  * Video metadata interface.
  */
 export interface Video {
@@ -36,6 +75,13 @@ export interface Video {
   video_summary?: string;
   has_rich_semantics?: boolean;
   error_message?: string;
+  // EXIF metadata fields
+  exif_metadata?: ExifMetadata;
+  location_latitude?: number;
+  location_longitude?: number;
+  location_name?: string;
+  camera_make?: string;
+  camera_model?: string;
   created_at: string;
   updated_at: string;
 }

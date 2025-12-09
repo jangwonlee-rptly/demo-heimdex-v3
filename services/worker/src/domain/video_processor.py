@@ -7,7 +7,7 @@ from threading import Semaphore
 from typing import Optional
 from uuid import UUID
 
-from .scene_detector import scene_detector
+from .scene_detector import scene_detector, DetectorPreferences
 from .sidecar_builder import sidecar_builder
 from ..adapters.database import db, VideoStatus
 from ..adapters.supabase import storage
@@ -154,10 +154,14 @@ class VideoProcessor:
             else:
                 logger.info("Using auto-detect for transcript language")
 
-            # Fetch user's preferred language for visual analysis and summaries
+            # Fetch user's preferred language and scene detector preferences
             user_profile = db.get_user_profile(owner_id)
             language = user_profile.get("preferred_language", "ko") if user_profile else "ko"
             logger.info(f"Processing video with output language: {language}")
+
+            # Get user's scene detector preferences (if any)
+            detector_prefs_raw = user_profile.get("scene_detector_preferences") if user_profile else None
+            detector_preferences = DetectorPreferences.from_dict(detector_prefs_raw)
 
             # Update status to PROCESSING
             db.update_video_status(video_id, VideoStatus.PROCESSING)
@@ -176,6 +180,35 @@ class VideoProcessor:
                     f"resolution={metadata.width}x{metadata.height}, "
                     f"fps={metadata.frame_rate:.2f}"
                 )
+
+                # Prepare EXIF metadata for storage
+                exif_metadata = None
+                location_latitude = None
+                location_longitude = None
+                location_name = None
+                camera_make = None
+                camera_model = None
+
+                if metadata.exif:
+                    exif = metadata.exif
+                    exif_metadata = exif.to_dict() or None
+
+                    # Denormalized fields for efficient queries
+                    if exif.has_location():
+                        location_latitude = exif.latitude
+                        location_longitude = exif.longitude
+                        location_name = exif.location_name  # Will be None initially
+
+                    camera_make = exif.camera_make
+                    camera_model = exif.camera_model
+
+                    if exif.has_location():
+                        logger.info(
+                            f"EXIF GPS: lat={location_latitude}, lon={location_longitude}"
+                        )
+                    if camera_make or camera_model:
+                        logger.info(f"EXIF Camera: {camera_make} {camera_model}")
+
                 db.update_video_metadata(
                     video_id=video_id,
                     duration_s=metadata.duration_s,
@@ -183,6 +216,12 @@ class VideoProcessor:
                     width=metadata.width,
                     height=metadata.height,
                     video_created_at=metadata.created_at,
+                    exif_metadata=exif_metadata,
+                    location_latitude=location_latitude,
+                    location_longitude=location_longitude,
+                    location_name=location_name,
+                    camera_make=camera_make,
+                    camera_model=camera_model,
                 )
                 logger.info("Video metadata updated successfully")
             except Exception as e:
@@ -191,15 +230,19 @@ class VideoProcessor:
                 # But log the error for debugging
                 raise
 
-            # Step 4: Detect scenes
-            logger.info("Detecting scenes")
-            scenes = scene_detector.detect_scenes(
+            # Step 4: Detect scenes using best-of-all-detectors approach
+            logger.info("Detecting scenes using multi-detector approach")
+            scenes, detection_result = scene_detector.detect_scenes_with_preferences(
                 video_path,
                 video_duration_s=metadata.duration_s,
                 fps=metadata.frame_rate,
+                preferences=detector_preferences,
+                use_best=True,  # Try all detectors, pick the one with most scenes
             )
 
-            logger.info(f"Detected {len(scenes)} scenes")
+            logger.info(
+                f"Detected {len(scenes)} scenes using {detection_result.strategy.value} detector"
+            )
 
             # Step 5: Extract audio and transcribe (with caching for idempotency)
             logger.info("Checking for cached transcript")

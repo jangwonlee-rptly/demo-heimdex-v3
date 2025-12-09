@@ -7,17 +7,10 @@ import type { UserProfile, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import ReprocessModal from '@/components/ReprocessModal';
+import VideoCard from '@/components/VideoCard';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * User dashboard component.
- *
- * Displays the user's profile, uploaded videos, and quick actions.
- * Handles initial data fetching and redirection for unauthenticated users or users without profiles.
- *
- * @returns {JSX.Element} The dashboard page.
- */
 export default function DashboardPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
@@ -32,7 +25,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const init = async () => {
-      // Check authentication
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         router.push('/login');
@@ -40,18 +32,13 @@ export default function DashboardPage() {
       }
 
       try {
-        // Check if profile exists
         const profileData = await apiRequest<UserProfile | null>('/me/profile');
-
         if (!profileData) {
-          // No profile, redirect to onboarding
           router.push('/onboarding');
           return;
         }
-
         setProfile(profileData);
 
-        // Load videos
         const videoData = await apiRequest<{ videos: Video[]; total: number }>('/videos');
         setVideos(videoData.videos);
       } catch (error) {
@@ -64,7 +51,6 @@ export default function DashboardPage() {
     init();
   }, [router]);
 
-  // Set up realtime subscription for video status updates
   useEffect(() => {
     const channel = supabase
       .channel('videos-changes')
@@ -79,14 +65,14 @@ export default function DashboardPage() {
           const updatedVideo = payload.new as Video;
           const oldVideo = payload.old as Video;
 
-          // Update the videos list with the new data
+          // Merge the update with existing video data to preserve fields
+          // that might not be included in the real-time payload
           setVideos((currentVideos) =>
             currentVideos.map((video) =>
-              video.id === updatedVideo.id ? updatedVideo : video
+              video.id === updatedVideo.id ? { ...video, ...updatedVideo } : video
             )
           );
 
-          // Show notification if status changed
           if (oldVideo.status !== updatedVideo.status) {
             let message = '';
             let type: 'success' | 'info' | 'error' = 'info';
@@ -104,7 +90,6 @@ export default function DashboardPage() {
 
             if (message) {
               setNotification({ message, type });
-              // Auto-dismiss notification after 5 seconds
               setTimeout(() => setNotification(null), 5000);
             }
           }
@@ -112,7 +97,6 @@ export default function DashboardPage() {
       )
       .subscribe();
 
-    // Cleanup subscription on unmount
     return () => {
       supabase.removeChannel(channel);
     };
@@ -121,13 +105,14 @@ export default function DashboardPage() {
   const handleProcessVideo = async (videoId: string) => {
     try {
       await apiRequest(`/videos/${videoId}/process`, { method: 'POST' });
-      // Reload videos after triggering processing
       const videoData = await apiRequest<{ videos: Video[]; total: number }>('/videos');
       setVideos(videoData.videos);
-      alert('Video processing started!');
+      setNotification({ message: 'Video processing started!', type: 'info' });
+      setTimeout(() => setNotification(null), 5000);
     } catch (error) {
       console.error('Failed to process video:', error);
-      alert('Failed to start processing');
+      setNotification({ message: 'Failed to start processing', type: 'error' });
+      setTimeout(() => setNotification(null), 5000);
     }
   };
 
@@ -140,7 +125,6 @@ export default function DashboardPage() {
   };
 
   const handleReprocessSuccess = async () => {
-    // Reload videos after triggering reprocessing
     const videoData = await apiRequest<{ videos: Video[]; total: number }>('/videos');
     setVideos(videoData.videos);
     setNotification({
@@ -150,186 +134,178 @@ export default function DashboardPage() {
     setTimeout(() => setNotification(null), 5000);
   };
 
-  const getStatusBadge = (status: Video['status']) => {
-    const styles: Record<string, string> = {
-      PENDING: 'bg-yellow-100 text-yellow-800',
-      PROCESSING: 'bg-blue-100 text-blue-800',
-      READY: 'bg-green-100 text-green-800',
-      FAILED: 'bg-red-100 text-red-800',
-    };
-
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status]}`}>
-        {t.dashboard.status[status]}
-      </span>
-    );
+  const handleViewVideo = (videoId: string) => {
+    router.push(`/videos/${videoId}`);
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">{t.common.loading}</div>
+      <div className="min-h-screen flex items-center justify-center bg-surface-950">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 spinner" />
+          <p className="text-surface-400">{t.common.loading}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen bg-surface-950 pt-20 pb-12">
+      {/* Background Effects */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-0 right-1/4 w-[600px] h-[600px] bg-accent-cyan/5 rounded-full blur-[150px]" />
+        <div className="absolute bottom-0 left-1/4 w-[500px] h-[500px] bg-accent-violet/5 rounded-full blur-[120px]" />
+      </div>
+
       {/* Notification Toast */}
       {notification && (
-        <div className="fixed top-4 right-4 z-50 animate-slide-in">
-          <div
-            className={`rounded-lg shadow-lg p-4 min-w-[300px] ${
-              notification.type === 'success'
-                ? 'bg-green-50 border border-green-200 text-green-800'
-                : notification.type === 'error'
-                ? 'bg-red-50 border border-red-200 text-red-800'
-                : 'bg-blue-50 border border-blue-200 text-blue-800'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                {notification.type === 'success' && (
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+        <div className={`toast ${
+          notification.type === 'success' ? 'toast-success' :
+          notification.type === 'error' ? 'toast-error' : 'toast-info'
+        }`}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              {notification.type === 'success' && (
+                <div className="w-8 h-8 rounded-full bg-status-success/20 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="20 6 9 17 4 12" />
                   </svg>
-                )}
-                {notification.type === 'error' && (
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </div>
+              )}
+              {notification.type === 'error' && (
+                <div className="w-8 h-8 rounded-full bg-status-error/20 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-status-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
-                )}
-                {notification.type === 'info' && (
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </div>
+              )}
+              {notification.type === 'info' && (
+                <div className="w-8 h-8 rounded-full bg-accent-cyan/20 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-accent-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
                   </svg>
-                )}
-                <p className="font-medium">{notification.message}</p>
-              </div>
-              <button
-                onClick={() => setNotification(null)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
+                </div>
+              )}
+              <p className="font-medium text-surface-100">{notification.message}</p>
             </div>
+            <button
+              onClick={() => setNotification(null)}
+              className="text-surface-500 hover:text-surface-300 transition-colors"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
           </div>
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto">
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold">{t.dashboard.title}</h1>
-          <p className="text-gray-600 mt-1">
-            {t.dashboard.welcome}, {profile?.full_name}
-          </p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-surface-100 mb-1">{t.dashboard.title}</h1>
+              <p className="text-surface-400">
+                {t.dashboard.welcome}, <span className="text-accent-cyan">{profile?.full_name}</span>
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => router.push('/upload')}
+                className="btn btn-primary"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                {t.dashboard.uploadVideo}
+              </button>
+              <button
+                onClick={() => router.push('/search')}
+                className="btn btn-secondary"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                {t.dashboard.searchVideos}
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-4 mb-8">
-          <button
-            onClick={() => router.push('/upload')}
-            className="btn btn-primary"
-          >
-            {t.dashboard.uploadVideo}
-          </button>
-          <button
-            onClick={() => router.push('/search')}
-            className="btn btn-secondary"
-          >
-            {t.dashboard.searchVideos}
-          </button>
+        {/* Stats Overview */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="stat-card">
+            <div className="stat-label">Total Videos</div>
+            <div className="stat-value">{videos.length}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Ready</div>
+            <div className="stat-value text-status-success">{videos.filter(v => v.status === 'READY').length}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Processing</div>
+            <div className="stat-value text-status-info">{videos.filter(v => v.status === 'PROCESSING').length}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Pending</div>
+            <div className="stat-value text-status-warning">{videos.filter(v => v.status === 'PENDING').length}</div>
+          </div>
         </div>
 
         {/* Videos List */}
         <div className="card">
-          <h2 className="text-xl font-semibold mb-4">{t.dashboard.yourVideos}</h2>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-surface-100">{t.dashboard.yourVideos}</h2>
+            <span className="text-sm text-surface-500">{videos.length} videos</span>
+          </div>
 
           {videos.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <p className="text-lg mb-2">{t.dashboard.noVideos}</p>
-              <p>{t.dashboard.uploadFirst}</p>
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+                  <line x1="7" y1="2" x2="7" y2="22" />
+                  <line x1="17" y1="2" x2="17" y2="22" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <line x1="2" y1="7" x2="7" y2="7" />
+                  <line x1="2" y1="17" x2="7" y2="17" />
+                  <line x1="17" y1="17" x2="22" y2="17" />
+                  <line x1="17" y1="7" x2="22" y2="7" />
+                </svg>
+              </div>
+              <p className="empty-state-title">{t.dashboard.noVideos}</p>
+              <p className="empty-state-description">{t.dashboard.uploadFirst}</p>
+              <button
+                onClick={() => router.push('/upload')}
+                className="btn btn-primary mt-6"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                Upload your first video
+              </button>
             </div>
           ) : (
-            <div className="space-y-4">
-              {videos.map((video) => (
-                <div
+            <div className="video-card-grid">
+              {videos.map((video, index) => (
+                <VideoCard
                   key={video.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
-                >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-medium">
-                          {video.filename || `Video ${video.id.substring(0, 8)}`}
-                        </h3>
-                        {getStatusBadge(video.status)}
-                      </div>
-
-                      <div className="text-sm text-gray-600 space-y-1">
-                        {video.duration_s && (
-                          <p>{t.dashboard.duration}: {Math.round(video.duration_s)}s</p>
-                        )}
-                        {video.width && video.height && (
-                          <p>{t.dashboard.resolution}: {video.width}x{video.height}</p>
-                        )}
-                        <p>{t.dashboard.uploaded}: {new Date(video.created_at).toLocaleString()}</p>
-                      </div>
-
-                      {video.error_message && (
-                        <p className="text-sm text-red-600 mt-2">
-                          {t.dashboard.error}: {video.error_message}
-                        </p>
-                      )}
-
-                      <div className="flex gap-2 mt-3">
-                        {video.status === 'PENDING' && (
-                          <button
-                            onClick={() => handleProcessVideo(video.id)}
-                            className="btn btn-primary btn-sm"
-                          >
-                            {t.dashboard.startProcessing}
-                          </button>
-                        )}
-                        {video.status === 'READY' && (
-                          <>
-                            <button
-                              onClick={() => router.push(`/videos/${video.id}`)}
-                              className="btn btn-primary btn-sm"
-                            >
-                              {t.dashboard.viewDetails}
-                            </button>
-                            <button
-                              onClick={() => handleOpenReprocessModal(video)}
-                              className="btn btn-secondary btn-sm"
-                            >
-                              {t.reprocess.button}
-                            </button>
-                          </>
-                        )}
-                        {video.status === 'FAILED' && (
-                          <button
-                            onClick={() => handleOpenReprocessModal(video)}
-                            className="btn btn-secondary btn-sm"
-                          >
-                            {t.reprocess.button}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {video.thumbnail_url && (
-                      <img
-                        src={video.thumbnail_url}
-                        alt="Video thumbnail"
-                        className="w-32 h-20 object-cover rounded"
-                      />
-                    )}
-                  </div>
-                </div>
+                  video={video}
+                  index={index}
+                  onProcess={handleProcessVideo}
+                  onView={handleViewVideo}
+                  onReprocess={handleOpenReprocessModal}
+                />
               ))}
             </div>
           )}

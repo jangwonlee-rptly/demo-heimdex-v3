@@ -1,0 +1,112 @@
+[2025-12-09 14:45] EXIF Metadata Display Bug Fixes
+File: devlog/2512091445.txt
+
+== What we worked on ==
+- Fixed EXIF metadata not displaying in dashboard video cards
+- Fixed EXIF metadata disappearing after real-time updates
+- Added comprehensive "Recording Information" section to video details page
+- Updated VideoCard to show GPS coordinates even without reverse-geocoded location name
+
+== Problems encountered ==
+1. User reported seeing GPS coordinates briefly appear in video cards, then disappear
+2. EXIF metadata wasn't showing in the video details page at all
+3. Dashboard video cards only showed location if location_name was set (but reverse geocoding not implemented)
+
+== Root cause analysis ==
+
+### Issue 1: API endpoints not returning EXIF fields
+The API routes were manually mapping Video model fields to VideoResponse, but the new EXIF fields were missing from this mapping. Even though:
+- Database had the data (select("*") fetches all columns)
+- Video model had the fields defined
+- VideoResponse schema had the fields defined
+
+The explicit field mapping in routes/videos.py was not including them.
+
+### Issue 2: Real-time updates wiping EXIF data
+The dashboard subscribes to Supabase real-time updates for the videos table. When an update came in (e.g., status change during processing), the code was:
+
+```typescript
+// OLD - completely replaces video with payload
+video.id === updatedVideo.id ? updatedVideo : video
+```
+
+Supabase real-time `payload.new` often only contains changed fields or a subset of columns, NOT the full row. This meant EXIF fields were being wiped out on every status update.
+
+== How we solved it ==
+
+### Fix 1: Added EXIF fields to all API response mappings
+Updated three endpoints in services/api/src/routes/videos.py:
+- GET /videos (list_videos)
+- GET /videos/{video_id} (get_video)
+- GET /videos/{video_id}/details (get_video_details)
+
+Added these fields to each VideoResponse construction:
+```python
+exif_metadata=v.exif_metadata,
+location_latitude=v.location_latitude,
+location_longitude=v.location_longitude,
+location_name=v.location_name,
+camera_make=v.camera_make,
+camera_model=v.camera_model,
+```
+
+### Fix 2: Merge real-time updates instead of replacing
+Changed dashboard real-time handler to merge updates:
+
+```typescript
+// NEW - merges update with existing video data
+video.id === updatedVideo.id ? { ...video, ...updatedVideo } : video
+```
+
+This preserves any fields not included in the real-time payload.
+
+### Fix 3: Show GPS coordinates without location name
+Updated VideoCard to display raw coordinates when location_name is not available:
+- Shows "37.77, -122.42" format for coordinates
+- Full precision coordinates in tooltip on hover
+- Still shows location_name when available (for future reverse geocoding)
+
+### Fix 4: Added Recording Information section to details page
+New card section showing:
+- Location: name + full coordinates + altitude
+- Camera: make, model, software version
+- Recorded: date and time from video metadata
+- Settings: ISO, aperture, focal length (when available)
+
+Each item has its own styled card with icon, only shown when data exists.
+
+== Changes made ==
+- services/api/src/routes/videos.py
+  - Added EXIF fields to VideoResponse in list_videos()
+  - Added EXIF fields to VideoResponse in get_video()
+  - Added EXIF fields to VideoResponse in get_video_details()
+
+- services/frontend/src/app/dashboard/page.tsx
+  - Fixed real-time update handler to merge instead of replace
+  - Changed: `? updatedVideo` to `? { ...video, ...updatedVideo }`
+
+- services/frontend/src/components/VideoCard.tsx
+  - Updated condition to show location when coordinates exist (not just location_name)
+  - Display coordinates as "lat, lon" when no location_name available
+  - Added GPS coordinates in tooltip
+
+- services/frontend/src/app/videos/[id]/page.tsx
+  - Added new "Recording Information" section after stats cards
+  - Location card with map pin icon (cyan)
+  - Camera card with camera icon (violet)
+  - Recorded date card with calendar icon (green)
+  - Settings card with gear icon (yellow) - shows ISO, aperture, focal length
+
+== Lessons learned ==
+1. When adding new fields to models/schemas, check ALL places where responses are manually constructed
+2. Real-time updates from Supabase may not include all columns - always merge with existing state
+3. Use spread operator {...existing, ...update} pattern for partial updates in React state
+
+== Testing notes ==
+- Verified build passes with all changes
+- EXIF data should now persist through status changes (PENDING -> PROCESSING -> READY)
+- Video details page shows Recording Information section when any EXIF data exists
+
+== Related files ==
+- Previous devlog: devlog/2512091415.txt (EXIF extraction implementation)
+- Migration: infra/migrations/013_add_video_exif_metadata.sql

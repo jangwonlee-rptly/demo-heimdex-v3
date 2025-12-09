@@ -59,6 +59,7 @@ async def get_user_profile(current_user: User = Depends(get_current_user)):
         preferred_language=profile.preferred_language,
         marketing_consent=profile.marketing_consent,
         marketing_consent_at=profile.marketing_consent_at,
+        scene_detector_preferences=profile.scene_detector_preferences,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
@@ -86,6 +87,11 @@ async def create_or_update_user_profile(
     """
     user_id = UUID(current_user.user_id)
 
+    # Convert scene_detector_preferences to dict if provided
+    scene_prefs_dict = None
+    if profile_data.scene_detector_preferences:
+        scene_prefs_dict = profile_data.scene_detector_preferences.model_dump(exclude_none=True)
+
     # Check if profile already exists
     existing_profile = db.get_user_profile(user_id)
 
@@ -99,6 +105,7 @@ async def create_or_update_user_profile(
             job_title=profile_data.job_title,
             preferred_language=profile_data.preferred_language,
             marketing_consent=profile_data.marketing_consent,
+            scene_detector_preferences=scene_prefs_dict,
         )
     else:
         # Create new profile
@@ -110,6 +117,7 @@ async def create_or_update_user_profile(
             job_title=profile_data.job_title,
             preferred_language=profile_data.preferred_language,
             marketing_consent=profile_data.marketing_consent,
+            scene_detector_preferences=scene_prefs_dict,
         )
 
     if not profile:
@@ -126,6 +134,7 @@ async def create_or_update_user_profile(
         preferred_language=profile.preferred_language,
         marketing_consent=profile.marketing_consent,
         marketing_consent_at=profile.marketing_consent_at,
+        scene_detector_preferences=profile.scene_detector_preferences,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )

@@ -2,11 +2,97 @@
 import json
 import logging
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExifMetadata:
+    """EXIF-like metadata extracted from video files."""
+
+    # GPS/Location
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude: Optional[float] = None
+    location_name: Optional[str] = None  # Will be populated by reverse geocoding
+
+    # Camera info
+    camera_make: Optional[str] = None
+    camera_model: Optional[str] = None
+    software: Optional[str] = None
+
+    # Recording settings
+    iso: Optional[int] = None
+    focal_length: Optional[float] = None
+    aperture: Optional[float] = None
+
+    # Other metadata
+    artist: Optional[str] = None
+    copyright: Optional[str] = None
+    orientation: Optional[int] = None
+    content_identifier: Optional[str] = None
+
+    # Raw metadata dict for any extra fields
+    raw: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary format for database storage."""
+        result: dict[str, Any] = {}
+
+        # GPS section
+        if self.latitude is not None or self.longitude is not None:
+            result["gps"] = {}
+            if self.latitude is not None:
+                result["gps"]["latitude"] = self.latitude
+            if self.longitude is not None:
+                result["gps"]["longitude"] = self.longitude
+            if self.altitude is not None:
+                result["gps"]["altitude"] = self.altitude
+            if self.location_name:
+                result["gps"]["location_name"] = self.location_name
+
+        # Camera section
+        if self.camera_make or self.camera_model or self.software:
+            result["camera"] = {}
+            if self.camera_make:
+                result["camera"]["make"] = self.camera_make
+            if self.camera_model:
+                result["camera"]["model"] = self.camera_model
+            if self.software:
+                result["camera"]["software"] = self.software
+
+        # Recording section
+        if self.iso or self.focal_length or self.aperture:
+            result["recording"] = {}
+            if self.iso:
+                result["recording"]["iso"] = self.iso
+            if self.focal_length:
+                result["recording"]["focal_length"] = self.focal_length
+            if self.aperture:
+                result["recording"]["aperture"] = self.aperture
+
+        # Other section
+        other_fields = {}
+        if self.artist:
+            other_fields["artist"] = self.artist
+        if self.copyright:
+            other_fields["copyright"] = self.copyright
+        if self.orientation:
+            other_fields["orientation"] = self.orientation
+        if self.content_identifier:
+            other_fields["content_identifier"] = self.content_identifier
+        if other_fields:
+            result["other"] = other_fields
+
+        return result if result else {}
+
+    def has_location(self) -> bool:
+        """Check if GPS location is available."""
+        return self.latitude is not None and self.longitude is not None
 
 
 class VideoMetadata:
@@ -19,6 +105,7 @@ class VideoMetadata:
         height: int,
         frame_rate: float,
         created_at: Optional[datetime] = None,
+        exif: Optional[ExifMetadata] = None,
     ):
         """Initialize VideoMetadata.
 
@@ -28,16 +115,187 @@ class VideoMetadata:
             height: Height of the video resolution.
             frame_rate: Frame rate of the video.
             created_at: Creation timestamp from video metadata.
+            exif: EXIF-like metadata (GPS, camera, etc.).
         """
         self.duration_s = duration_s
         self.width = width
         self.height = height
         self.frame_rate = frame_rate
         self.created_at = created_at
+        self.exif = exif
 
 
 class FFmpegAdapter:
     """Wrapper for FFmpeg and FFprobe operations."""
+
+    @staticmethod
+    def _parse_gps_coordinate(value: str) -> Optional[float]:
+        """
+        Parse GPS coordinate from various formats.
+
+        Common formats:
+        - Decimal: "48.8566" or "+48.8566"
+        - ISO 6709: "+48.8566+002.3522/"
+        - DMS: "48°51'24.0\"N" (rarely in video metadata)
+
+        Args:
+            value: GPS coordinate string
+
+        Returns:
+            Decimal degrees as float, or None if parsing fails
+        """
+        if not value:
+            return None
+
+        try:
+            # Try simple float parsing first (handles "+48.8566")
+            return float(value.strip().rstrip("/"))
+        except ValueError:
+            pass
+
+        # Try parsing ISO 6709 format: "+48.8566+002.3522/"
+        # This format has latitude followed by longitude
+        import re
+        iso_match = re.match(r"([+-]?\d+\.?\d*)", value)
+        if iso_match:
+            try:
+                return float(iso_match.group(1))
+            except ValueError:
+                pass
+
+        logger.warning(f"Could not parse GPS coordinate: {value}")
+        return None
+
+    @staticmethod
+    def _extract_exif_metadata(data: dict) -> Optional[ExifMetadata]:
+        """
+        Extract EXIF-like metadata from ffprobe data.
+
+        Args:
+            data: Full ffprobe JSON output
+
+        Returns:
+            ExifMetadata object, or None if no relevant metadata found
+        """
+        exif = ExifMetadata()
+        has_any_data = False
+
+        # Collect tags from format and all streams
+        all_tags: dict[str, str] = {}
+
+        # Format-level tags (most common location for metadata)
+        format_tags = data.get("format", {}).get("tags", {})
+        all_tags.update({k.lower(): v for k, v in format_tags.items()})
+
+        # Stream-level tags
+        for stream in data.get("streams", []):
+            stream_tags = stream.get("tags", {})
+            # Stream tags don't override format tags
+            for k, v in stream_tags.items():
+                key_lower = k.lower()
+                if key_lower not in all_tags:
+                    all_tags[key_lower] = v
+
+        # Also check side_data_list for rotation/orientation
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "video":
+                for side_data in stream.get("side_data_list", []):
+                    if side_data.get("side_data_type") == "Display Matrix":
+                        rotation = side_data.get("rotation")
+                        if rotation is not None:
+                            exif.orientation = int(rotation) % 360
+                            has_any_data = True
+
+        # Log all available tags for debugging
+        if all_tags:
+            logger.debug(f"Available metadata tags: {list(all_tags.keys())}")
+
+        # GPS Location extraction
+        # iPhone/Apple format: "location" tag contains ISO 6709 format
+        # e.g., "+37.7749-122.4194/"
+        location = all_tags.get("location", all_tags.get("com.apple.quicktime.location.iso6709", ""))
+        if location:
+            import re
+            # Parse ISO 6709: +DD.DDDD+DDD.DDDD/ or +DD.DDDD-DDD.DDDD/
+            iso_match = re.match(r"([+-]\d+\.?\d*)([+-]\d+\.?\d*)", location)
+            if iso_match:
+                exif.latitude = FFmpegAdapter._parse_gps_coordinate(iso_match.group(1))
+                exif.longitude = FFmpegAdapter._parse_gps_coordinate(iso_match.group(2))
+                if exif.latitude is not None and exif.longitude is not None:
+                    has_any_data = True
+                    logger.info(f"Extracted GPS: lat={exif.latitude}, lon={exif.longitude}")
+
+        # Try individual lat/lon tags (GoPro, DJI, some Android)
+        if exif.latitude is None:
+            for lat_key in ["gps_latitude", "latitude", "gpslat"]:
+                if lat_key in all_tags:
+                    exif.latitude = FFmpegAdapter._parse_gps_coordinate(all_tags[lat_key])
+                    if exif.latitude is not None:
+                        has_any_data = True
+                        break
+
+        if exif.longitude is None:
+            for lon_key in ["gps_longitude", "longitude", "gpslon"]:
+                if lon_key in all_tags:
+                    exif.longitude = FFmpegAdapter._parse_gps_coordinate(all_tags[lon_key])
+                    if exif.longitude is not None:
+                        has_any_data = True
+                        break
+
+        # GPS Altitude
+        for alt_key in ["gps_altitude", "altitude", "gpsalt", "com.apple.quicktime.location.altitude"]:
+            if alt_key in all_tags:
+                try:
+                    exif.altitude = float(all_tags[alt_key])
+                    has_any_data = True
+                    break
+                except ValueError:
+                    pass
+
+        # Camera Make (manufacturer)
+        for make_key in ["make", "com.apple.quicktime.make", "manufacturer"]:
+            if make_key in all_tags:
+                exif.camera_make = all_tags[make_key].strip()
+                has_any_data = True
+                break
+
+        # Camera Model
+        for model_key in ["model", "com.apple.quicktime.model", "device"]:
+            if model_key in all_tags:
+                exif.camera_model = all_tags[model_key].strip()
+                has_any_data = True
+                break
+
+        # Software version
+        for sw_key in ["software", "com.apple.quicktime.software", "encoder", "handler_name"]:
+            if sw_key in all_tags:
+                exif.software = all_tags[sw_key].strip()
+                has_any_data = True
+                break
+
+        # Artist/Author
+        for artist_key in ["artist", "author", "com.apple.quicktime.author"]:
+            if artist_key in all_tags:
+                exif.artist = all_tags[artist_key].strip()
+                has_any_data = True
+                break
+
+        # Copyright
+        if "copyright" in all_tags:
+            exif.copyright = all_tags["copyright"].strip()
+            has_any_data = True
+
+        # Content Identifier (useful for deduplication)
+        for id_key in ["content_identifier", "com.apple.quicktime.content.identifier", "media_id"]:
+            if id_key in all_tags:
+                exif.content_identifier = all_tags[id_key].strip()
+                has_any_data = True
+                break
+
+        # Store raw tags for debugging/future use
+        exif.raw = all_tags
+
+        return exif if has_any_data else None
 
     @staticmethod
     def probe_video(video_path: Path) -> VideoMetadata:
@@ -107,6 +365,14 @@ class FFmpegAdapter:
                 except Exception as e:
                     logger.warning(f"Failed to parse creation time: {e}")
 
+        # Extract EXIF-like metadata (GPS, camera info, etc.)
+        exif = FFmpegAdapter._extract_exif_metadata(data)
+        if exif:
+            logger.info(
+                f"EXIF metadata: camera={exif.camera_make} {exif.camera_model}, "
+                f"has_gps={exif.has_location()}"
+            )
+
         logger.info(
             f"Video metadata: {duration_s:.2f}s, {width}x{height}, "
             f"{frame_rate:.2f}fps"
@@ -118,6 +384,7 @@ class FFmpegAdapter:
             height=height,
             frame_rate=frame_rate,
             created_at=created_at,
+            exif=exif,
         )
 
     @staticmethod

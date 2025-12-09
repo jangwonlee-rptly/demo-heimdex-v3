@@ -51,6 +51,7 @@ class Database:
         job_title: Optional[str] = None,
         preferred_language: str = "ko",
         marketing_consent: bool = False,
+        scene_detector_preferences: Optional[dict] = None,
     ) -> UserProfile:
         """Create a new user profile.
 
@@ -61,6 +62,7 @@ class Database:
             job_title: The user's job title (optional).
             preferred_language: The user's preferred language (default: "ko").
             marketing_consent: Whether the user consented to marketing emails (default: False).
+            scene_detector_preferences: Custom scene detector thresholds (optional).
 
         Returns:
             UserProfile: The created user profile.
@@ -75,6 +77,7 @@ class Database:
             "preferred_language": preferred_language,
             "marketing_consent": marketing_consent,
             "marketing_consent_at": marketing_consent_at.isoformat() if marketing_consent_at else None,
+            "scene_detector_preferences": scene_detector_preferences,
         }
 
         response = self.client.table("user_profiles").insert(data).execute()
@@ -88,6 +91,7 @@ class Database:
         job_title: Optional[str] = None,
         preferred_language: Optional[str] = None,
         marketing_consent: Optional[bool] = None,
+        scene_detector_preferences: Optional[dict] = None,
     ) -> Optional[UserProfile]:
         """Update user profile.
 
@@ -98,6 +102,7 @@ class Database:
             job_title: The new job title (optional).
             preferred_language: The new preferred language (optional).
             marketing_consent: The new marketing consent status (optional).
+            scene_detector_preferences: Custom scene detector thresholds (optional).
 
         Returns:
             Optional[UserProfile]: The updated user profile if successful, otherwise None.
@@ -123,6 +128,8 @@ class Database:
             # Set marketing_consent_at if changing from False to True
             if marketing_consent and not existing.marketing_consent:
                 update_data["marketing_consent_at"] = datetime.utcnow().isoformat()
+        if scene_detector_preferences is not None:
+            update_data["scene_detector_preferences"] = scene_detector_preferences
 
         if not update_data:
             return existing

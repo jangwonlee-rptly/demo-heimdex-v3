@@ -26,6 +26,7 @@ class UserProfile:
         preferred_language: str = "ko",
         marketing_consent: bool = False,
         marketing_consent_at: Optional[datetime] = None,
+        scene_detector_preferences: Optional[dict] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
@@ -39,6 +40,7 @@ class UserProfile:
             preferred_language: Preferred language of the user.
             marketing_consent: Whether the user has consented to marketing.
             marketing_consent_at: Timestamp when marketing consent was given.
+            scene_detector_preferences: User's custom thresholds for scene detectors (optional).
             created_at: Timestamp when the profile was created.
             updated_at: Timestamp when the profile was last updated.
         """
@@ -49,6 +51,7 @@ class UserProfile:
         self.preferred_language = preferred_language
         self.marketing_consent = marketing_consent
         self.marketing_consent_at = marketing_consent_at
+        self.scene_detector_preferences = scene_detector_preferences
         self.created_at = created_at
         self.updated_at = updated_at
 
@@ -74,6 +77,13 @@ class Video:
         has_rich_semantics: Optional[bool] = None,
         transcript_language: Optional[str] = None,
         error_message: Optional[str] = None,
+        # EXIF metadata fields
+        exif_metadata: Optional[dict] = None,
+        location_latitude: Optional[float] = None,
+        location_longitude: Optional[float] = None,
+        location_name: Optional[str] = None,
+        camera_make: Optional[str] = None,
+        camera_model: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
@@ -96,6 +106,12 @@ class Video:
             has_rich_semantics: Flag indicating rich semantics processing (v2, optional).
             transcript_language: ISO-639-1 language code for forced transcription (optional).
             error_message: Error message if processing failed (optional).
+            exif_metadata: JSONB EXIF metadata (GPS, camera, recording settings).
+            location_latitude: GPS latitude (denormalized for queries).
+            location_longitude: GPS longitude (denormalized for queries).
+            location_name: Reverse-geocoded location name.
+            camera_make: Camera manufacturer.
+            camera_model: Camera model.
             created_at: Timestamp when the video record was created.
             updated_at: Timestamp when the video record was last updated.
         """
@@ -115,6 +131,12 @@ class Video:
         self.has_rich_semantics = has_rich_semantics
         self.transcript_language = transcript_language
         self.error_message = error_message
+        self.exif_metadata = exif_metadata
+        self.location_latitude = location_latitude
+        self.location_longitude = location_longitude
+        self.location_name = location_name
+        self.camera_make = camera_make
+        self.camera_model = camera_model
         self.created_at = created_at
         self.updated_at = updated_at
 

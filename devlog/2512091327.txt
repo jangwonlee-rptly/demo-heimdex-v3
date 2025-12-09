@@ -1,0 +1,69 @@
+[2025-12-09 13:27] Multi-Detector Scene Detection System
+File: devlog/2512091327.txt
+
+== What we worked on ==
+- Implemented a "best-of-all-detectors" scene detection strategy
+- System now runs all 4 PySceneDetect algorithms and selects the one producing the most scenes
+- Added user-specific scene detector preferences stored per user profile
+- Goal: Maximize scene separation accuracy across different video categories (movies, presentations, vlogs, etc.)
+
+== Changes made ==
+- infra/migrations/012_add_scene_detector_preferences.sql: New migration adding scene_detector_preferences JSONB column to user_profiles table with GIN index
+
+- services/worker/src/domain/scene_detector.py: Major overhaul
+  - Added 4 detection strategies: ADAPTIVE, CONTENT, THRESHOLD, HASH, plus BEST
+  - New DetectorConfig dataclass for all detector parameters
+  - New DetectorPreferences class to load user-specific thresholds from database
+  - New DetectionResult dataclass containing scenes + metadata about detector used
+  - detect_scenes_best(): Runs all 4 detectors, picks one with most scenes
+  - detect_scenes_with_preferences(): Main entry point accepting user preferences
+  - Backwards-compatible detect_scenes() method preserved
+
+- services/worker/src/domain/video_processor.py:
+  - Fetches scene_detector_preferences from user profile
+  - Uses detect_scenes_with_preferences() with use_best=True
+  - Logs which detector was selected and scene counts from each
+
+- services/api/src/domain/models.py: Added scene_detector_preferences to UserProfile model
+
+- services/api/src/domain/schemas.py:
+  - New SceneDetectorPreferences schema for structured preferences
+  - Updated UserProfileCreate, UserProfileUpdate, UserProfileResponse schemas
+
+- services/api/src/adapters/database.py: Updated create_user_profile() and update_user_profile() to handle scene_detector_preferences
+
+- services/api/src/routes/profile.py: Updated GET and POST endpoints to read/write scene_detector_preferences
+
+== Problems encountered ==
+- Different video types (movies with hard cuts, presentations with gradual transitions, vlogs with mixed content) require different detector algorithms for optimal scene separation
+- Single-detector approach was missing scenes in some video categories
+- Users may have specific content types that work better with particular threshold settings
+
+== How we tried to solve it ==
+- Researched PySceneDetect's available detectors: AdaptiveDetector, ContentDetector, ThresholdDetector, HashDetector
+- Each has different strengths:
+  - Adaptive: Good for varying content, gradual transitions
+  - Content: Good for sharp scene cuts
+  - Threshold: Based on brightness/fades
+  - Hash: Perceptual hash-based detection
+
+== How we solved it / Current status ==
+- Implemented multi-detector approach that runs ALL detectors on each video
+- Selection criteria: Pick the detector that produces the MOST scenes
+- Rationale: More scenes generally means more accurate separation (fewer missed cuts)
+- User preferences allow custom thresholds per detector type stored as JSONB
+- Example preferences format:
+  {
+    "adaptive": {"threshold": 3.0, "window_width": 2, "min_content_val": 15.0},
+    "content": {"threshold": 27.0},
+    "threshold": {"threshold": 12.0},
+    "hash": {"threshold": 0.395, "size": 16, "lowpass": 2}
+  }
+
+== Next steps / TODOs ==
+- Run the database migration (012_add_scene_detector_preferences.sql)
+- Test with various video types to validate multi-detector approach
+- Consider adding UI for users to view/adjust their detector preferences
+- Consider storing which detector was selected for each video in video metadata
+- Monitor processing time impact (4x detector runs per video)
+- Consider parallel detector execution to reduce processing time

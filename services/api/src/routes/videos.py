@@ -401,6 +401,13 @@ async def list_videos(current_user: User = Depends(get_current_user)):
                 video_summary=v.video_summary,
                 has_rich_semantics=v.has_rich_semantics,
                 error_message=v.error_message,
+                # EXIF metadata fields
+                exif_metadata=v.exif_metadata,
+                location_latitude=v.location_latitude,
+                location_longitude=v.location_longitude,
+                location_name=v.location_name,
+                camera_make=v.camera_make,
+                camera_model=v.camera_model,
                 created_at=v.created_at,
                 updated_at=v.updated_at,
             )
@@ -459,6 +466,13 @@ async def get_video(
         video_summary=video.video_summary,
         has_rich_semantics=video.has_rich_semantics,
         error_message=video.error_message,
+        # EXIF metadata fields
+        exif_metadata=video.exif_metadata,
+        location_latitude=video.location_latitude,
+        location_longitude=video.location_longitude,
+        location_name=video.location_name,
+        camera_make=video.camera_make,
+        camera_model=video.camera_model,
         created_at=video.created_at,
         updated_at=video.updated_at,
     )
@@ -530,6 +544,13 @@ async def get_video_details(
             video_summary=video.video_summary,
             has_rich_semantics=video.has_rich_semantics,
             error_message=video.error_message,
+            # EXIF metadata fields
+            exif_metadata=video.exif_metadata,
+            location_latitude=video.location_latitude,
+            location_longitude=video.location_longitude,
+            location_name=video.location_name,
+            camera_make=video.camera_make,
+            camera_model=video.camera_model,
             created_at=video.created_at,
             updated_at=video.updated_at,
         ),

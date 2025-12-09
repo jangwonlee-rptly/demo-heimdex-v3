@@ -1,0 +1,47 @@
+[2025-12-09 13:08] Frontend UI Redesign - Dark Cinematic Theme
+File: devlog/2512091308.txt
+
+== What we worked on ==
+- Complete visual overhaul of the Heimdex frontend application
+- Transformed the light-themed UI into a modern dark cinematic design
+- Created a cohesive design system with reusable component classes
+- Fixed visibility issues with the LanguageToggle component
+
+== Changes made ==
+- tailwind.config.js: New color palette (surface-950 to surface-50), accent colors (cyan, violet, pink), custom animations (shimmer, slide-up, pulse-glow, gradient-shift), glow shadows, Outfit font family
+- globals.css: Complete CSS foundation with ~570 lines of new styles including .glass-card, .card, .btn-primary, .btn-gradient, .input, .select, .badge, .status-badge, .toast, .scene-card, .modal-overlay classes
+- GlobalNav.tsx: Redesigned with scroll-based transparency, glass effect, gradient logo, active state indicators
+- page.tsx (landing): Hero section with animated gradient orbs, feature cards with gradient borders, stats section, CTA
+- login/page.tsx: Dark themed centered card with gradient logo
+- dashboard/page.tsx: Stats overview grid, video list with thumbnails and status badges
+- upload/page.tsx: Enhanced drag & drop zone with visual feedback, upload progress with speed/time stats
+- search/page.tsx: Two-column layout (results | player), scene cards with similarity badges
+- videos/[id]/page.tsx: View mode tabs (Details/Transcript), scene timeline visualization, tag filtering
+- onboarding/page.tsx: Redesigned form with gradient logo and consistent styling
+- ReprocessModal.tsx: Modal with header/content/footer sections
+- layout.tsx: Updated root layout with dark theme class and font preconnects
+- LanguageToggle.tsx: Fixed white-on-white text issue, removed flag emojis, made button leaner
+
+== Problems encountered ==
+- LanguageToggle component had white text on white background (using old light theme classes like bg-white, border-gray-300)
+- File write error on videos/[id]/page.tsx when trying to write without reading first
+
+== How we tried to solve it ==
+- Read the LanguageToggle component to understand the existing styling
+- Identified the light theme classes causing the visibility issue
+
+== How we solved it / Current status ==
+- LanguageToggle: Replaced light theme classes with dark theme equivalents (bg-surface-800/60, text-surface-300, border-surface-700/50), removed flag emojis, simplified to just show "EN" or "KO"
+- File write error: Read the file first before writing, as required by the tool
+
+== Design System Summary ==
+- Backgrounds: Deep charcoal (surface-950, surface-900, surface-800)
+- Accents: Cyan (#06b6d4), Violet (#8b5cf6), Pink (#ec4899)
+- Effects: Glassmorphism with backdrop-blur, animated gradient orbs
+- Typography: Outfit font family
+- Interactions: Hover states with glow effects, smooth transitions
+
+== Next steps / TODOs ==
+- Test the UI across different screen sizes for responsive behavior
+- Consider adding loading skeletons for better perceived performance
+- Gather user feedback on the new design

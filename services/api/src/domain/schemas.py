@@ -7,6 +7,68 @@ from pydantic import BaseModel, Field
 from .models import VideoStatus
 
 
+# Scene Detector Preferences Schema
+class SceneDetectorPreferences(BaseModel):
+    """Schema for user's scene detector preferences.
+
+    Each detector type can have custom threshold settings.
+    Format: {"adaptive": {...}, "content": {...}, "threshold": {...}, "hash": {...}}
+    """
+
+    adaptive: Optional[dict] = Field(
+        None,
+        description="AdaptiveDetector settings: {threshold: float, window_width: int, min_content_val: float}"
+    )
+    content: Optional[dict] = Field(
+        None,
+        description="ContentDetector settings: {threshold: float}"
+    )
+    threshold: Optional[dict] = Field(
+        None,
+        description="ThresholdDetector settings: {threshold: float, method: str}"
+    )
+    hash: Optional[dict] = Field(
+        None,
+        description="HashDetector settings: {threshold: float, size: int, lowpass: int}"
+    )
+
+
+# EXIF Metadata Schemas
+class ExifGpsMetadata(BaseModel):
+    """GPS location metadata from video EXIF."""
+
+    latitude: Optional[float] = Field(None, description="GPS latitude in decimal degrees")
+    longitude: Optional[float] = Field(None, description="GPS longitude in decimal degrees")
+    altitude: Optional[float] = Field(None, description="GPS altitude in meters")
+    location_name: Optional[str] = Field(None, description="Reverse-geocoded location name (city, country)")
+
+
+class ExifCameraMetadata(BaseModel):
+    """Camera/device metadata from video EXIF."""
+
+    make: Optional[str] = Field(None, description="Camera manufacturer (Apple, Samsung, Sony, etc.)")
+    model: Optional[str] = Field(None, description="Camera model (iPhone 15 Pro, Galaxy S24, etc.)")
+    software: Optional[str] = Field(None, description="Software version used to record")
+
+
+class ExifRecordingMetadata(BaseModel):
+    """Recording settings metadata from video EXIF."""
+
+    iso: Optional[int] = Field(None, description="ISO speed")
+    focal_length: Optional[float] = Field(None, description="Focal length in mm")
+    aperture: Optional[float] = Field(None, description="Aperture (f-stop)")
+    white_balance: Optional[str] = Field(None, description="White balance setting")
+
+
+class ExifMetadataResponse(BaseModel):
+    """Full EXIF metadata response schema."""
+
+    gps: Optional[ExifGpsMetadata] = None
+    camera: Optional[ExifCameraMetadata] = None
+    recording: Optional[ExifRecordingMetadata] = None
+    other: Optional[dict] = Field(None, description="Other metadata fields (artist, copyright, etc.)")
+
+
 # User Profile Schemas
 class UserProfileCreate(BaseModel):
     """Schema for creating a user profile."""
@@ -16,6 +78,7 @@ class UserProfileCreate(BaseModel):
     job_title: Optional[str] = Field(None, max_length=255)
     preferred_language: str = Field("ko", pattern="^(ko|en)$")
     marketing_consent: bool = False
+    scene_detector_preferences: Optional[SceneDetectorPreferences] = None
 
 
 class UserProfileUpdate(BaseModel):
@@ -26,6 +89,7 @@ class UserProfileUpdate(BaseModel):
     job_title: Optional[str] = Field(None, max_length=255)
     preferred_language: Optional[str] = Field(None, pattern="^(ko|en)$")
     marketing_consent: Optional[bool] = None
+    scene_detector_preferences: Optional[SceneDetectorPreferences] = None
 
 
 class UserProfileResponse(BaseModel):
@@ -38,6 +102,7 @@ class UserProfileResponse(BaseModel):
     preferred_language: str
     marketing_consent: bool
     marketing_consent_at: Optional[datetime]
+    scene_detector_preferences: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -98,6 +163,13 @@ class VideoResponse(BaseModel):
     video_summary: Optional[str] = None
     has_rich_semantics: Optional[bool] = None
     error_message: Optional[str] = None
+    # EXIF metadata fields (denormalized for quick access)
+    exif_metadata: Optional[dict] = Field(None, description="Full EXIF metadata as JSON")
+    location_latitude: Optional[float] = Field(None, description="GPS latitude")
+    location_longitude: Optional[float] = Field(None, description="GPS longitude")
+    location_name: Optional[str] = Field(None, description="Reverse-geocoded location name")
+    camera_make: Optional[str] = Field(None, description="Camera manufacturer")
+    camera_model: Optional[str] = Field(None, description="Camera model")
     created_at: datetime
     updated_at: datetime
 

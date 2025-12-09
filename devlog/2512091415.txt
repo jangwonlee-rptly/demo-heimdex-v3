@@ -1,0 +1,109 @@
+[2025-12-09 14:15] Video EXIF Metadata Extraction System
+File: devlog/2512091415.txt
+
+== What we worked on ==
+- Implemented comprehensive EXIF metadata extraction from video files
+- Extracts GPS location (latitude, longitude, altitude), camera info (make, model, software), and recording settings
+- Enables future natural language searches like "vlog from last year at Paris" or "videos shot on iPhone"
+- Stores data in both structured JSONB (for flexibility) and denormalized columns (for query performance)
+
+== Changes made ==
+- infra/migrations/013_add_video_exif_metadata.sql: New migration
+  - Added exif_metadata JSONB column for full metadata storage
+  - Added denormalized columns: location_latitude, location_longitude, location_name, camera_make, camera_model
+  - Created GIN index on exif_metadata for JSONB queries
+  - Created composite index on location columns for geo-queries
+  - Created index on camera columns for filtering by device
+
+- services/worker/src/adapters/ffmpeg.py: Major enhancements
+  - New ExifMetadata dataclass with GPS, camera, recording, and other metadata fields
+  - Added _parse_gps_coordinate() helper for various GPS formats (decimal, ISO 6709)
+  - Added _extract_exif_metadata() method that parses ffprobe output
+    - Extracts GPS from "location" tag (ISO 6709 format, common in iPhone videos)
+    - Also checks individual gps_latitude/longitude tags (GoPro, DJI, Android)
+    - Extracts camera make/model from Apple QuickTime tags and standard tags
+    - Extracts software version, artist, copyright, content identifier
+    - Handles video rotation from side_data_list
+  - Updated probe_video() to return ExifMetadata alongside basic metadata
+  - Added to_dict() method for database storage
+
+- services/worker/src/adapters/database.py: Extended update_video_metadata()
+  - Added parameters: exif_metadata, location_latitude, location_longitude, location_name, camera_make, camera_model
+  - Stores both full JSONB and denormalized fields
+
+- services/worker/src/domain/video_processor.py: Updated Step 3
+  - Extracts EXIF metadata during video processing
+  - Passes metadata to database update call
+  - Added logging for GPS coordinates and camera info
+
+- services/api/src/domain/models.py: Updated Video model
+  - Added exif_metadata, location_latitude, location_longitude, location_name, camera_make, camera_model fields
+
+- services/api/src/domain/schemas.py: New schemas
+  - Added ExifGpsMetadata, ExifCameraMetadata, ExifRecordingMetadata, ExifMetadataResponse schemas
+  - Updated VideoResponse with EXIF fields
+
+- services/frontend/src/types/index.ts: Updated Video interface
+  - Added ExifGpsMetadata, ExifCameraMetadata, ExifRecordingMetadata, ExifMetadata interfaces
+  - Added EXIF fields to Video type
+
+- services/frontend/src/components/VideoCard.tsx: Updated display
+  - Added new metadata row showing location name (with tooltip for coordinates)
+  - Added camera make/model display with camera icon
+  - Only displays when metadata is available
+
+== EXIF metadata format stored ==
+{
+  "gps": {
+    "latitude": 48.8566,
+    "longitude": 2.3522,
+    "altitude": 35.0,
+    "location_name": "Paris, France"  // To be populated by reverse geocoding
+  },
+  "camera": {
+    "make": "Apple",
+    "model": "iPhone 15 Pro",
+    "software": "17.1.1"
+  },
+  "recording": {
+    "iso": 100,
+    "focal_length": 6.86,
+    "aperture": 1.78
+  },
+  "other": {
+    "artist": "John Doe",
+    "copyright": "2024 John Doe",
+    "orientation": 0,
+    "content_identifier": "uuid-or-hash"
+  }
+}
+
+== Supported metadata sources ==
+- iPhone/iOS: location (ISO 6709), com.apple.quicktime.* tags
+- Android: Standard metadata tags, GPS tags
+- GoPro: GPS latitude/longitude tags
+- DJI: GPS coordinates, camera info
+- Professional cameras: Various vendor-specific tags
+
+== Problems encountered ==
+- Different devices store GPS in different formats
+  - iPhone uses ISO 6709: "+37.7749-122.4194/"
+  - Some devices use separate latitude/longitude tags
+  - Some use DMS (degrees/minutes/seconds) format
+- Not all videos have EXIF metadata (screen recordings, processed videos, etc.)
+- Reverse geocoding for location_name requires external API (not yet implemented)
+
+== How we solved it ==
+- Implemented robust GPS parsing that handles multiple formats
+- Made all EXIF fields optional - system gracefully handles videos without metadata
+- Used JSONB for flexibility to add new fields without schema changes
+- Denormalized commonly-queried fields for efficient filtering/indexing
+
+== Next steps / TODOs ==
+- Run migration 013_add_video_exif_metadata.sql on database
+- Implement reverse geocoding service to populate location_name from GPS coordinates
+  - Options: Google Maps Geocoding API, OpenStreetMap Nominatim, Mapbox
+- Add EXIF metadata display to video details page (more detailed view)
+- Consider adding metadata to search embeddings for semantic search
+- Add filter/sort by location or camera in dashboard
+- Add map view for videos with GPS data

@@ -104,6 +104,13 @@ class Database:
         thumbnail_url: Optional[str] = None,
         video_summary: Optional[str] = None,
         has_rich_semantics: Optional[bool] = None,
+        # EXIF metadata fields
+        exif_metadata: Optional[dict] = None,
+        location_latitude: Optional[float] = None,
+        location_longitude: Optional[float] = None,
+        location_name: Optional[str] = None,
+        camera_make: Optional[str] = None,
+        camera_model: Optional[str] = None,
     ) -> None:
         """Update video metadata.
 
@@ -117,6 +124,12 @@ class Database:
             thumbnail_url: URL of the video thumbnail.
             video_summary: AI-generated video summary (v2).
             has_rich_semantics: Flag indicating rich semantics processing (v2).
+            exif_metadata: JSONB EXIF metadata (GPS, camera, recording settings).
+            location_latitude: GPS latitude (denormalized for queries).
+            location_longitude: GPS longitude (denormalized for queries).
+            location_name: Reverse-geocoded location name (denormalized for queries).
+            camera_make: Camera manufacturer (denormalized for queries).
+            camera_model: Camera model (denormalized for queries).
 
         Returns:
             None: This function does not return a value.
@@ -130,6 +143,13 @@ class Database:
             "thumbnail_url": thumbnail_url,
             "video_summary": video_summary,
             "has_rich_semantics": has_rich_semantics,
+            # EXIF metadata fields
+            "exif_metadata": exif_metadata,
+            "location_latitude": location_latitude,
+            "location_longitude": location_longitude,
+            "location_name": location_name,
+            "camera_make": camera_make,
+            "camera_model": camera_model,
         }
 
         # Remove None values to avoid overwriting existing data
