@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 redis_broker = RedisBroker(url=settings.redis_url)
 dramatiq.set_broker(redis_broker)
 
-# Import the canonical process_video actor from shared tasks module
-# This registers the actor with the broker initialized above
-from libs.tasks import process_video  # noqa: F401
+# Import the canonical actors from shared tasks module
+# This registers the actors with the broker initialized above
+from libs.tasks import process_video, export_scene_as_short  # noqa: F401
 
-logger.info("Worker initialized with process_video actor from libs.tasks")
+logger.info("Worker initialized with process_video and export_scene_as_short actors from libs.tasks")

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { apiEndpoint } from './api-config';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
@@ -16,13 +17,24 @@ export async function getAccessToken(): Promise<string | null> {
 }
 
 /**
- * Make an authenticated API request.
+ * Make an authenticated API request with automatic versioning.
  *
  * @template T
  * @param {string} endpoint - The API endpoint to call (e.g., "/videos").
+ *                           Will be automatically versioned (e.g., "/v1/videos").
  * @param {RequestInit} [options={}] - Fetch options including method, body, etc.
  * @returns {Promise<T>} The response data parsed as JSON.
  * @throws {Error} If the API request fails (non-2xx status).
+ *
+ * @example
+ * // Automatically becomes /v1/videos
+ * const videos = await apiRequest<VideoList>('/videos');
+ *
+ * // POST to /v1/search
+ * const results = await apiRequest<SearchResults>('/search', {
+ *   method: 'POST',
+ *   body: JSON.stringify({ query: 'test' })
+ * });
  */
 export async function apiRequest<T>(
   endpoint: string,
@@ -31,7 +43,10 @@ export async function apiRequest<T>(
   const token = await getAccessToken();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-  const response = await fetch(`${apiUrl}${endpoint}`, {
+  // Apply API versioning
+  const versionedEndpoint = apiEndpoint(endpoint);
+
+  const response = await fetch(`${apiUrl}${versionedEndpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',

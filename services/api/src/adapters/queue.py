@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 redis_broker = RedisBroker(url=settings.redis_url)
 dramatiq.set_broker(redis_broker)
 
-# Import the canonical process_video actor from shared tasks module
+# Import the canonical actors from shared tasks module
 # The API service only uses .send() - the function body never executes here
-from libs.tasks import process_video
+from libs.tasks import process_video, export_scene_as_short
 
 
 class TaskQueue:
@@ -45,6 +45,28 @@ class TaskQueue:
         process_video.send(str(video_id))
 
         logger.info(f"Successfully enqueued video_id={video_id}")
+
+    @staticmethod
+    def enqueue_scene_export(scene_id: UUID, export_id: UUID) -> None:
+        """
+        Enqueue a scene export task.
+
+        Uses the shared export_scene_as_short actor to send a job to the worker.
+
+        Args:
+            scene_id: ID of the scene to export
+            export_id: ID of the export record
+
+        Returns:
+            None: This function does not return a value.
+        """
+        logger.info(f"Enqueueing scene export task for scene_id={scene_id}, export_id={export_id}")
+
+        # Use the shared actor's .send() method to enqueue the job
+        # The function body never executes in the API context - only in the worker
+        export_scene_as_short.send(str(scene_id), str(export_id))
+
+        logger.info(f"Successfully enqueued export_id={export_id}")
 
 
 # Global task queue instance

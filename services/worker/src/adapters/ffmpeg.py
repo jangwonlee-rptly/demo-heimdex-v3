@@ -593,6 +593,100 @@ class FFmpegAdapter:
             check=True,
         )
 
+    @staticmethod
+    def extract_scene_clip_with_aspect_conversion(
+        video_path: Path,
+        start_s: float,
+        end_s: float,
+        output_path: Path,
+        aspect_ratio_strategy: str = "center_crop",
+        output_quality: str = "high",
+    ) -> dict:
+        """
+        Extract a scene clip and convert to YouTube Shorts format (9:16, 1080x1920).
+
+        Args:
+            video_path: Path to source video file
+            start_s: Scene start time in seconds
+            end_s: Scene end time in seconds
+            output_path: Path to save output MP4
+            aspect_ratio_strategy: 'center_crop' or 'letterbox'
+            output_quality: 'high' or 'medium'
+
+        Returns:
+            dict: Metadata about the exported video (file_size_bytes, duration_s, resolution)
+
+        Raises:
+            subprocess.CalledProcessError: If ffmpeg fails
+        """
+        logger.info(
+            f"Extracting scene clip {start_s}s-{end_s}s with {aspect_ratio_strategy} strategy"
+        )
+
+        # Quality presets
+        if output_quality == "high":
+            crf = "18"  # High quality (8-10 Mbps)
+            audio_bitrate = "192k"
+        else:  # medium
+            crf = "23"  # Medium quality (4-6 Mbps)
+            audio_bitrate = "128k"
+
+        # Build video filter for aspect ratio conversion
+        if aspect_ratio_strategy == "center_crop":
+            # Crop center to 9:16 aspect ratio
+            # Formula: crop width to height*9/16 from center
+            vf = "crop=ih*9/16:ih,scale=1080:1920:flags=lanczos"
+        elif aspect_ratio_strategy == "letterbox":
+            # Scale to fit within 1080x1920, add black bars
+            vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
+        else:
+            raise ValueError(f"Unknown aspect_ratio_strategy: {aspect_ratio_strategy}")
+
+        # FFmpeg command
+        # -ss before -i for fast seeking
+        # -to for end time (more accurate than -t duration)
+        # -movflags +faststart for web playback optimization
+        cmd = [
+            "ffmpeg",
+            "-ss", str(start_s),
+            "-to", str(end_s),
+            "-i", str(video_path),
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "slow",  # Better compression
+            "-crf", crf,
+            "-c:a", "aac",
+            "-b:a", audio_bitrate,
+            "-ar", "44100",  # Audio sample rate
+            "-movflags", "+faststart",  # Enable fast start for web
+            "-y",  # Overwrite output
+            str(output_path),
+        ]
+
+        logger.debug(f"Running FFmpeg command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+
+        # Get output file metadata
+        file_size_bytes = output_path.stat().st_size
+        duration_s = end_s - start_s
+
+        logger.info(
+            f"Scene clip extracted: {output_path} "
+            f"({file_size_bytes / 1024 / 1024:.2f} MB, {duration_s:.1f}s)"
+        )
+
+        return {
+            "file_size_bytes": file_size_bytes,
+            "duration_s": duration_s,
+            "resolution": "1080x1920",
+        }
+
 
 # Global ffmpeg adapter instance
 ffmpeg = FFmpegAdapter()

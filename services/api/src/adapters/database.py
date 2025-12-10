@@ -1,12 +1,21 @@
 """Database adapter for Postgres/Supabase."""
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 from supabase import create_client, Client
 
 from ..config import settings
-from ..domain.models import UserProfile, Video, VideoScene, VideoStatus
+from ..domain.models import (
+    UserProfile,
+    Video,
+    VideoScene,
+    VideoStatus,
+    SceneExport,
+    ExportStatus,
+    AspectRatioStrategy,
+    OutputQuality,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +271,31 @@ class Database:
         row["status"] = VideoStatus(row["status"])
         return Video(**row)
 
+    def get_scene(self, scene_id: UUID) -> Optional[VideoScene]:
+        """Get a single scene by ID.
+
+        Args:
+            scene_id: The UUID of the scene.
+
+        Returns:
+            Optional[VideoScene]: The scene if found, otherwise None.
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("id,video_id,index,start_s,end_s,transcript_segment,visual_summary,combined_text,thumbnail_url,visual_description,visual_entities,visual_actions,tags,created_at")
+            .eq("id", str(scene_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        row = response.data[0]
+        # Convert string UUIDs to UUID objects
+        row["id"] = UUID(row["id"])
+        row["video_id"] = UUID(row["video_id"])
+        return VideoScene(**row)
+
     def get_video_scenes(self, video_id: UUID) -> list[VideoScene]:
         """Get all scenes for a video, ordered by index.
 
@@ -407,6 +441,208 @@ class Database:
         }
 
         self.client.table("search_queries").insert(data).execute()
+
+    # Scene Export operations
+    def create_scene_export(
+        self,
+        scene_id: UUID,
+        user_id: UUID,
+        aspect_ratio_strategy: AspectRatioStrategy,
+        output_quality: OutputQuality,
+    ) -> SceneExport:
+        """Create a new scene export request.
+
+        Args:
+            scene_id: UUID of the scene to export.
+            user_id: UUID of the user creating the export.
+            aspect_ratio_strategy: How to handle aspect ratio conversion.
+            output_quality: Video quality preset.
+
+        Returns:
+            SceneExport: The created export record.
+        """
+        data = {
+            "scene_id": str(scene_id),
+            "user_id": str(user_id),
+            "aspect_ratio_strategy": aspect_ratio_strategy.value,
+            "output_quality": output_quality.value,
+            "status": ExportStatus.PENDING.value,
+        }
+
+        response = self.client.table("scene_exports").insert(data).execute()
+        return self._map_export_response(response.data[0])
+
+    def get_scene_export(self, export_id: UUID) -> Optional[SceneExport]:
+        """Get a scene export by ID.
+
+        Args:
+            export_id: UUID of the export.
+
+        Returns:
+            Optional[SceneExport]: The export if found, otherwise None.
+        """
+        response = (
+            self.client.table("scene_exports")
+            .select("*")
+            .eq("id", str(export_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return self._map_export_response(response.data[0])
+
+    def update_scene_export(
+        self,
+        export_id: UUID,
+        status: Optional[ExportStatus] = None,
+        storage_path: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        duration_s: Optional[float] = None,
+        resolution: Optional[str] = None,
+        error_message: Optional[str] = None,
+        completed_at: Optional[datetime] = None,
+    ) -> SceneExport:
+        """Update a scene export record.
+
+        Args:
+            export_id: UUID of the export to update.
+            status: New status (optional).
+            storage_path: Path to exported file (optional).
+            file_size_bytes: File size in bytes (optional).
+            duration_s: Duration in seconds (optional).
+            resolution: Video resolution (optional).
+            error_message: Error message if failed (optional).
+            completed_at: Completion timestamp (optional).
+
+        Returns:
+            SceneExport: The updated export record.
+        """
+        update_data = {}
+        if status is not None:
+            update_data["status"] = status.value
+        if storage_path is not None:
+            update_data["storage_path"] = storage_path
+        if file_size_bytes is not None:
+            update_data["file_size_bytes"] = file_size_bytes
+        if duration_s is not None:
+            update_data["duration_s"] = duration_s
+        if resolution is not None:
+            update_data["resolution"] = resolution
+        if error_message is not None:
+            update_data["error_message"] = error_message
+        if completed_at is not None:
+            update_data["completed_at"] = completed_at.isoformat()
+
+        response = (
+            self.client.table("scene_exports")
+            .update(update_data)
+            .eq("id", str(export_id))
+            .execute()
+        )
+
+        return self._map_export_response(response.data[0])
+
+    def count_user_exports_since(self, user_id: UUID, since: datetime) -> int:
+        """Count how many exports a user has created since a given datetime.
+
+        Args:
+            user_id: UUID of the user.
+            since: Count exports created after this timestamp.
+
+        Returns:
+            int: Number of exports created since the given datetime.
+        """
+        response = (
+            self.client.table("scene_exports")
+            .select("id", count="exact")
+            .eq("user_id", str(user_id))
+            .gte("created_at", since.isoformat())
+            .execute()
+        )
+
+        return response.count or 0
+
+    def get_oldest_user_export_today(self, user_id: UUID) -> Optional[SceneExport]:
+        """Get the user's oldest export from the last 24 hours.
+
+        Useful for calculating when rate limit will reset.
+
+        Args:
+            user_id: UUID of the user.
+
+        Returns:
+            Optional[SceneExport]: The oldest export if found, otherwise None.
+        """
+        since = datetime.utcnow() - timedelta(hours=24)
+
+        response = (
+            self.client.table("scene_exports")
+            .select("*")
+            .eq("user_id", str(user_id))
+            .gte("created_at", since.isoformat())
+            .order("created_at", desc=False)
+            .limit(1)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return self._map_export_response(response.data[0])
+
+    def get_expired_exports(self) -> list[SceneExport]:
+        """Get all expired exports for cleanup.
+
+        Returns:
+            list[SceneExport]: List of expired exports with status 'completed'.
+        """
+        now = datetime.utcnow()
+
+        response = (
+            self.client.table("scene_exports")
+            .select("*")
+            .eq("status", ExportStatus.COMPLETED.value)
+            .lt("expires_at", now.isoformat())
+            .execute()
+        )
+
+        return [self._map_export_response(row) for row in response.data]
+
+    def delete_scene_export(self, export_id: UUID) -> None:
+        """Delete a scene export record.
+
+        Args:
+            export_id: UUID of the export to delete.
+        """
+        self.client.table("scene_exports").delete().eq("id", str(export_id)).execute()
+
+    def _map_export_response(self, row: dict) -> SceneExport:
+        """Map database row to SceneExport model.
+
+        Args:
+            row: Database row as dictionary.
+
+        Returns:
+            SceneExport: Mapped export model.
+        """
+        return SceneExport(
+            id=UUID(row["id"]),
+            scene_id=UUID(row["scene_id"]),
+            user_id=UUID(row["user_id"]),
+            aspect_ratio_strategy=AspectRatioStrategy(row["aspect_ratio_strategy"]),
+            output_quality=OutputQuality(row["output_quality"]),
+            status=ExportStatus(row["status"]),
+            error_message=row.get("error_message"),
+            storage_path=row.get("storage_path"),
+            file_size_bytes=row.get("file_size_bytes"),
+            duration_s=row.get("duration_s"),
+            resolution=row.get("resolution"),
+            created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+            completed_at=datetime.fromisoformat(row["completed_at"]) if row.get("completed_at") else None,
+            expires_at=datetime.fromisoformat(row["expires_at"]) if row.get("expires_at") else None,
+        )
 
 
 # Global database instance

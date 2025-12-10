@@ -18,6 +18,13 @@ from ..domain.models import VideoStatus
 from ..adapters.database import db
 from ..adapters.supabase import storage
 from ..adapters.queue import task_queue
+from ..exceptions import (
+    VideoNotFoundException,
+    ForbiddenException,
+    ConflictException,
+    QueueException,
+    StorageException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -303,36 +310,33 @@ async def reprocess_video(
         dict: Status message indicating the video was queued for reprocessing.
 
     Raises:
-        HTTPException:
-            - 404: If the video is not found.
-            - 403: If the user is not authorized to access the video.
-            - 409: If the video is currently being processed.
-            - 500: If reprocessing fails.
+        VideoNotFoundException: If the video is not found.
+        ForbiddenException: If the user is not authorized to access the video.
+        ConflictException: If the video is currently being processed.
+        QueueException: If enqueueing the task fails.
     """
+    user_id = UUID(current_user.user_id)
+
+    # Get video and verify ownership
+    video = db.get_video(video_id)
+    if not video:
+        raise VideoNotFoundException(str(video_id))
+
+    if video.owner_id != user_id:
+        raise ForbiddenException(
+            message="Not authorized to access this video",
+            details={"video_id": str(video_id), "user_id": str(user_id)},
+        )
+
+    # Don't allow reprocessing if already processing
+    if video.status == VideoStatus.PROCESSING:
+        raise ConflictException(
+            message="Video is currently being processed. Please wait for it to complete.",
+            resource_type="video",
+            details={"video_id": str(video_id), "current_status": video.status.value},
+        )
+
     try:
-        user_id = UUID(current_user.user_id)
-
-        # Get video and verify ownership
-        video = db.get_video(video_id)
-        if not video:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Video not found",
-            )
-
-        if video.owner_id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this video",
-            )
-
-        # Don't allow reprocessing if already processing
-        if video.status == VideoStatus.PROCESSING:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Video is currently being processed. Please wait for it to complete.",
-            )
-
         # Delete existing scenes
         db.delete_scenes_for_video(video_id)
         logger.info(f"Deleted existing scenes for video {video_id}")
@@ -358,16 +362,15 @@ async def reprocess_video(
             "transcript_language": request.transcript_language or "auto-detect",
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(
-            f"Failed to reprocess video {video_id}: {e}",
+            f"Failed to enqueue reprocessing for video {video_id}: {e}",
             exc_info=True
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reprocess video: {str(e)}"
+        raise QueueException(
+            message=f"Failed to enqueue video for reprocessing: {str(e)}",
+            queue="video_processing",
+            details={"video_id": str(video_id)},
         )
 
 

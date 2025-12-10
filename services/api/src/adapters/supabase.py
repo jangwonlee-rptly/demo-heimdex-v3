@@ -53,6 +53,34 @@ class SupabaseStorage:
         """
         return self.client.storage.from_(self.bucket_name).get_public_url(storage_path)
 
+    def get_presigned_url(self, storage_path: str, expires_in: int = 3600) -> str:
+        """
+        Generate a presigned URL for downloading a file.
+
+        Args:
+            storage_path: Path to the file in storage
+            expires_in: Expiration time in seconds (default: 3600 = 1 hour)
+
+        Returns:
+            str: Presigned download URL
+        """
+        logger.info(f"Creating signed URL for {storage_path} (expires in {expires_in}s)")
+        response = self.client.storage.from_(self.bucket_name).create_signed_url(
+            storage_path,
+            expires_in
+        )
+        logger.debug(f"Signed URL response: {response}")
+
+        # Supabase Python SDK returns dict with 'signedURL' key
+        # (different from create_signed_upload_url which uses 'signed_url')
+        signed_url = response.get("signedURL") or response.get("signed_url") or response.get("signedUrl")
+
+        if not signed_url:
+            logger.error(f"Failed to get signed URL. Response: {response}")
+            raise ValueError(f"No signed URL in response: {response}")
+
+        return signed_url
+
     def download_file(self, storage_path: str) -> bytes:
         """
         Download file from storage.

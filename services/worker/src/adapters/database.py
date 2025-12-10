@@ -345,6 +345,94 @@ class Database:
         """
         self.client.table("video_scenes").delete().eq("video_id", str(video_id)).execute()
 
+    def get_scene_by_id(self, scene_id: UUID) -> Optional[dict]:
+        """Get a scene by its ID.
+
+        Args:
+            scene_id: The UUID of the scene.
+
+        Returns:
+            Scene data if exists, None otherwise
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("*")
+            .eq("id", str(scene_id))
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0]
+
+    def get_scene_export(self, export_id: UUID) -> Optional[dict]:
+        """Get a scene export by ID.
+
+        Args:
+            export_id: UUID of the export.
+
+        Returns:
+            Export data if found, otherwise None.
+        """
+        response = (
+            self.client.table("scene_exports")
+            .select("*")
+            .eq("id", str(export_id))
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0]
+
+    def update_scene_export(
+        self,
+        export_id: UUID,
+        status: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        duration_s: Optional[float] = None,
+        resolution: Optional[str] = None,
+        error_message: Optional[str] = None,
+        completed_at: Optional[datetime] = None,
+    ) -> dict:
+        """Update a scene export record.
+
+        Args:
+            export_id: UUID of the export to update.
+            status: New status (optional).
+            storage_path: Path to exported file (optional).
+            file_size_bytes: File size in bytes (optional).
+            duration_s: Duration in seconds (optional).
+            resolution: Video resolution (optional).
+            error_message: Error message if failed (optional).
+            completed_at: Completion timestamp (optional).
+
+        Returns:
+            Updated export data.
+        """
+        update_data = {}
+        if status is not None:
+            update_data["status"] = status
+        if storage_path is not None:
+            update_data["storage_path"] = storage_path
+        if file_size_bytes is not None:
+            update_data["file_size_bytes"] = file_size_bytes
+        if duration_s is not None:
+            update_data["duration_s"] = duration_s
+        if resolution is not None:
+            update_data["resolution"] = resolution
+        if error_message is not None:
+            update_data["error_message"] = error_message
+        if completed_at is not None:
+            update_data["completed_at"] = completed_at.isoformat()
+
+        response = (
+            self.client.table("scene_exports")
+            .update(update_data)
+            .eq("id", str(export_id))
+            .execute()
+        )
+        return response.data[0]
+
 
 # Global database instance
 db = Database(settings.supabase_url, settings.supabase_service_role_key)

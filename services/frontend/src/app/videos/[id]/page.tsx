@@ -7,6 +7,7 @@ import type { Video, VideoDetails, VideoScene } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import ReprocessModal from '@/components/ReprocessModal';
+import ExportShortModal from '@/components/ExportShortModal';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +48,8 @@ export default function VideoDetailsPage() {
   const [selectedScene, setSelectedScene] = useState<VideoScene | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [reprocessModalOpen, setReprocessModalOpen] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [sceneToExport, setSceneToExport] = useState<VideoScene | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [expandedTags, setExpandedTags] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -657,27 +660,60 @@ export default function VideoDetailsPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {scenes.map((scene) => (
-                    <button
-                      key={scene.id}
-                      onClick={() => handleSceneClick(scene)}
-                      className={`scene-card w-full text-left ${selectedScene?.id === scene.id ? 'active' : ''}`}
-                    >
-                      <div className="flex gap-4">
-                        <div className="flex-shrink-0 w-20">
-                          <div className="text-sm font-medium text-accent-cyan">{formatTimestamp(scene.start_s)}</div>
-                          <div className="text-xs text-surface-600">{formatTimestamp(scene.end_s)}</div>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          {scene.transcript_segment ? (
-                            <p className="text-sm text-surface-300 line-clamp-2">{scene.transcript_segment}</p>
-                          ) : (
-                            <p className="text-sm text-surface-600 italic">No transcript</p>
-                          )}
+                  {scenes.map((scene) => {
+                    const sceneDuration = scene.end_s - scene.start_s;
+                    const canExport = sceneDuration <= 180; // YouTube Shorts max duration
+
+                    return (
+                      <div
+                        key={scene.id}
+                        className={`scene-card ${selectedScene?.id === scene.id ? 'active' : ''}`}
+                      >
+                        <button
+                          onClick={() => handleSceneClick(scene)}
+                          className="w-full text-left"
+                        >
+                          <div className="flex gap-4">
+                            <div className="flex-shrink-0 w-20">
+                              <div className="text-sm font-medium text-accent-cyan">{formatTimestamp(scene.start_s)}</div>
+                              <div className="text-xs text-surface-600">{formatTimestamp(scene.end_s)}</div>
+                              <div className="text-xs text-surface-500 mt-1">{sceneDuration.toFixed(0)}s</div>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              {scene.transcript_segment ? (
+                                <p className="text-sm text-surface-300 line-clamp-2">{scene.transcript_segment}</p>
+                              ) : (
+                                <p className="text-sm text-surface-600 italic">No transcript</p>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* Export Button */}
+                        <div className="mt-3 pt-3 border-t border-surface-700/50">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSceneToExport(scene);
+                              setExportModalOpen(true);
+                            }}
+                            disabled={!canExport}
+                            className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              canExport
+                                ? 'bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20'
+                                : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
+                            }`}
+                            title={!canExport ? 'Scene too long for YouTube Shorts (max 180s)' : 'Export as YouTube Short'}
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            {canExport ? 'Export to Short' : `Too long (${sceneDuration.toFixed(0)}s)`}
+                          </button>
                         </div>
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -738,6 +774,17 @@ export default function VideoDetailsPage() {
         onClose={() => setReprocessModalOpen(false)}
         onSuccess={handleReprocessSuccess}
       />
+
+      {sceneToExport && (
+        <ExportShortModal
+          scene={sceneToExport}
+          isOpen={exportModalOpen}
+          onClose={() => {
+            setExportModalOpen(false);
+            setSceneToExport(null);
+          }}
+        />
+      )}
     </div>
   );
 }

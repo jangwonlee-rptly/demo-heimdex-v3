@@ -1,11 +1,13 @@
 """Main FastAPI application."""
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import settings
-from .routes import health, profile, videos, search
+from .routes import health, profile, videos, search, exports
+from .exceptions import HeimdexException
 
 # Configure logging
 logging.basicConfig(
@@ -50,11 +52,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+
+# ============================================================================
+# Exception Handlers
+# ============================================================================
+
+
+@app.exception_handler(HeimdexException)
+async def heimdex_exception_handler(request: Request, exc: HeimdexException):
+    """
+    Handle all Heimdex custom exceptions.
+
+    Returns a structured JSON response with error details.
+
+    Args:
+        request: The FastAPI request object
+        exc: The HeimdexException that was raised
+
+    Returns:
+        JSONResponse with error details and appropriate status code
+    """
+    logger.error(
+        f"HeimdexException: {exc.error_code} - {exc.message}",
+        extra={
+            "error_code": exc.error_code,
+            "status_code": exc.status_code,
+            "details": exc.details,
+            "path": request.url.path,
+        },
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+        },
+    )
+
+
+# Include routers with API versioning
+# Health checks don't need versioning (for K8s probes)
 app.include_router(health.router, tags=["Health"])
-app.include_router(profile.router, tags=["Profile"])
-app.include_router(videos.router, tags=["Videos"])
-app.include_router(search.router, tags=["Search"])
+
+# V1 API routes
+app.include_router(profile.router, prefix="/v1", tags=["v1", "Profile"])
+app.include_router(videos.router, prefix="/v1", tags=["v1", "Videos"])
+app.include_router(search.router, prefix="/v1", tags=["v1", "Search"])
+app.include_router(exports.router, prefix="/v1", tags=["v1", "Exports"])
 
 
 @app.get("/")

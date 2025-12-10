@@ -157,3 +157,45 @@ export interface VideoDetails {
   total_scenes: number;
   reprocess_hint?: string;
 }
+
+/**
+ * Export status enum.
+ */
+export type ExportStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/**
+ * Aspect ratio conversion strategy.
+ */
+export type AspectRatioStrategy = 'center_crop' | 'letterbox' | 'smart_crop';
+
+/**
+ * Export quality preset.
+ */
+export type OutputQuality = 'high' | 'medium';
+
+/**
+ * Scene export request.
+ */
+export interface CreateExportRequest {
+  aspect_ratio_strategy?: AspectRatioStrategy;
+  output_quality?: OutputQuality;
+}
+
+/**
+ * Scene export response.
+ */
+export interface SceneExport {
+  export_id: string;
+  scene_id: string;
+  status: ExportStatus;
+  aspect_ratio_strategy: AspectRatioStrategy;
+  output_quality: OutputQuality;
+  download_url?: string;
+  file_size_bytes?: number;
+  duration_s?: number;
+  resolution?: string;
+  error_message?: string;
+  created_at: string;
+  completed_at?: string;
+  expires_at: string;
+}

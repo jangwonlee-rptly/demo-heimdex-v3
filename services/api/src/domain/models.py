@@ -14,6 +14,30 @@ class VideoStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class ExportStatus(str, Enum):
+    """Scene export processing status."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AspectRatioStrategy(str, Enum):
+    """Aspect ratio conversion strategy for exports."""
+
+    CENTER_CROP = "center_crop"
+    LETTERBOX = "letterbox"
+    SMART_CROP = "smart_crop"
+
+
+class OutputQuality(str, Enum):
+    """Export output quality preset."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+
+
 class UserProfile:
     """User profile model."""
 
@@ -196,3 +220,57 @@ class VideoScene:
         self.tags = tags or []
         self.similarity = similarity
         self.created_at = created_at
+
+
+class SceneExport:
+    """Scene export model for YouTube Shorts feature."""
+
+    def __init__(
+        self,
+        id: UUID,
+        scene_id: UUID,
+        user_id: UUID,
+        aspect_ratio_strategy: AspectRatioStrategy,
+        output_quality: OutputQuality,
+        status: ExportStatus = ExportStatus.PENDING,
+        error_message: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        duration_s: Optional[float] = None,
+        resolution: Optional[str] = None,
+        created_at: Optional[datetime] = None,
+        completed_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
+    ):
+        """Initialize SceneExport.
+
+        Args:
+            id: UUID of the export.
+            scene_id: UUID of the scene being exported.
+            user_id: UUID of the user who created the export.
+            aspect_ratio_strategy: How to handle aspect ratio conversion.
+            output_quality: Video quality preset (high or medium).
+            status: Current processing status (default: pending).
+            error_message: Error message if export failed (optional).
+            storage_path: Path to exported file in storage (optional).
+            file_size_bytes: Size of exported file in bytes (optional).
+            duration_s: Duration of exported video in seconds (optional).
+            resolution: Video resolution (e.g., "1080x1920") (optional).
+            created_at: Timestamp when export was created.
+            completed_at: Timestamp when export completed (optional).
+            expires_at: Timestamp when export expires (created_at + 24 hours).
+        """
+        self.id = id
+        self.scene_id = scene_id
+        self.user_id = user_id
+        self.aspect_ratio_strategy = aspect_ratio_strategy
+        self.output_quality = output_quality
+        self.status = status
+        self.error_message = error_message
+        self.storage_path = storage_path
+        self.file_size_bytes = file_size_bytes
+        self.duration_s = duration_s
+        self.resolution = resolution
+        self.created_at = created_at
+        self.completed_at = completed_at
+        self.expires_at = expires_at

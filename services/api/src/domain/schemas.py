@@ -250,3 +250,22 @@ class HealthResponse(BaseModel):
 
     status: str
     timestamp: datetime
+
+
+class DependencyHealth(BaseModel):
+    """Schema for individual dependency health status."""
+
+    status: str = Field(..., description="Health status: healthy, degraded, or unhealthy")
+    latency_ms: Optional[int] = Field(None, description="Response latency in milliseconds")
+    error: Optional[str] = Field(None, description="Error message if unhealthy")
+
+
+class DetailedHealthResponse(BaseModel):
+    """Schema for detailed health check with dependency status."""
+
+    status: str = Field(..., description="Overall health: healthy, degraded, or unhealthy")
+    timestamp: datetime
+    dependencies: dict[str, DependencyHealth] = Field(
+        ...,
+        description="Health status of each dependency (database, redis, storage)"
+    )
