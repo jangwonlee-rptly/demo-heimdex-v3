@@ -205,7 +205,7 @@ class SidecarBuilder:
         - Convert to lowercase
         - Remove duplicates
         - Filter empty strings
-        - Limit length to 30 characters per tag
+        - Limit length to 40 characters per tag (increased to support detailed entity descriptions)
 
         Args:
             entities: List of entity strings
@@ -226,7 +226,7 @@ class SidecarBuilder:
             tag = tag.strip().lower()
 
             # Skip empty or too long
-            if not tag or len(tag) > 30:
+            if not tag or len(tag) > 40:
                 continue
 
             normalized.append(tag)
@@ -521,9 +521,9 @@ class SidecarBuilder:
                         stats.visual_analysis_called = True
 
                         # Call optimized visual analysis (single frame, strict JSON)
+                        # NOTE: Not passing transcript - visual analysis is now completely independent
                         visual_result = openai_client.analyze_scene_visuals_optimized(
                             frame_path,
-                            transcript_segment if has_meaningful_transcript else None,
                             language=language,
                         )
 

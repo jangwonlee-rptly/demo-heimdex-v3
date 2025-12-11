@@ -649,73 +649,80 @@ export default function VideoDetailsPage() {
         {/* Transcript View */}
         {viewMode === 'transcript' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="card max-h-[calc(100vh-280px)] overflow-y-auto no-scrollbar">
-              <h2 className="text-lg font-semibold text-surface-100 mb-4 sticky top-0 bg-surface-800/95 backdrop-blur-sm py-2 -mt-2">
-                Transcript Segments
-              </h2>
+            {/* Transcript Panel - Refactored for proper header/list separation */}
+            <div className="card flex flex-col h-[calc(100vh-280px)]">
+              {/* Non-scrolling Header */}
+              <div className="flex-shrink-0 pb-4 border-b border-surface-700/30">
+                <h2 className="text-lg font-semibold text-surface-100">
+                  Transcript Segments
+                </h2>
+              </div>
 
-              {scenes.length === 0 ? (
-                <div className="empty-state py-8">
-                  <p className="empty-state-title">No transcript available</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {scenes.map((scene) => {
-                    const sceneDuration = scene.end_s - scene.start_s;
-                    const canExport = sceneDuration <= 180; // YouTube Shorts max duration
+              {/* Scrollable Content Area */}
+              <div className="flex-1 overflow-y-auto no-scrollbar pt-4">
+                {scenes.length === 0 ? (
+                  <div className="empty-state py-8">
+                    <p className="empty-state-title">No transcript available</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {scenes.map((scene) => {
+                      const sceneDuration = scene.end_s - scene.start_s;
+                      const canExport = sceneDuration <= 180; // YouTube Shorts max duration
 
-                    return (
-                      <div
-                        key={scene.id}
-                        className={`scene-card ${selectedScene?.id === scene.id ? 'active' : ''}`}
-                      >
-                        <button
-                          onClick={() => handleSceneClick(scene)}
-                          className="w-full text-left"
+                      return (
+                        <div
+                          key={scene.id}
+                          className={`scene-card ${selectedScene?.id === scene.id ? 'active' : ''}`}
                         >
-                          <div className="flex gap-4">
-                            <div className="flex-shrink-0 w-20">
-                              <div className="text-sm font-medium text-accent-cyan">{formatTimestamp(scene.start_s)}</div>
-                              <div className="text-xs text-surface-600">{formatTimestamp(scene.end_s)}</div>
-                              <div className="text-xs text-surface-500 mt-1">{sceneDuration.toFixed(0)}s</div>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              {scene.transcript_segment ? (
-                                <p className="text-sm text-surface-300 line-clamp-2">{scene.transcript_segment}</p>
-                              ) : (
-                                <p className="text-sm text-surface-600 italic">No transcript</p>
-                              )}
-                            </div>
-                          </div>
-                        </button>
-
-                        {/* Export Button */}
-                        <div className="mt-3 pt-3 border-t border-surface-700/50">
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSceneToExport(scene);
-                              setExportModalOpen(true);
-                            }}
-                            disabled={!canExport}
-                            className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                              canExport
-                                ? 'bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20'
-                                : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
-                            }`}
-                            title={!canExport ? 'Scene too long for YouTube Shorts (max 180s)' : 'Export as YouTube Short'}
+                            onClick={() => handleSceneClick(scene)}
+                            className="w-full text-left"
                           >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                            </svg>
-                            {canExport ? 'Export to Short' : `Too long (${sceneDuration.toFixed(0)}s)`}
+                            <div className="flex gap-4">
+                              <div className="flex-shrink-0 w-20">
+                                <div className="text-sm font-medium text-accent-cyan">{formatTimestamp(scene.start_s)}</div>
+                                <div className="text-xs text-surface-600">{formatTimestamp(scene.end_s)}</div>
+                                <div className="text-xs text-surface-500 mt-1">{sceneDuration.toFixed(0)}s</div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                {scene.transcript_segment ? (
+                                  <p className="text-sm text-surface-300 line-clamp-2">{scene.transcript_segment}</p>
+                                ) : (
+                                  <p className="text-sm text-surface-600 italic">No transcript</p>
+                                )}
+                              </div>
+                            </div>
                           </button>
+
+                          {/* Export Button */}
+                          <div className="mt-3 pt-3 border-t border-surface-700/50">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSceneToExport(scene);
+                                setExportModalOpen(true);
+                              }}
+                              disabled={!canExport}
+                              className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                canExport
+                                  ? 'bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20'
+                                  : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
+                              }`}
+                              title={!canExport ? 'Scene too long for YouTube Shorts (max 180s)' : 'Export as YouTube Short'}
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                              </svg>
+                              {canExport ? 'Export to Short' : `Too long (${sceneDuration.toFixed(0)}s)`}
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="card">

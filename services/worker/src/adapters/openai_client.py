@@ -121,27 +121,25 @@ class OpenAIClient:
     def analyze_scene_visuals_optimized(
         self,
         image_path: Path,
-        transcript_segment: Optional[str] = None,
         language: str = "ko",
     ) -> Optional[dict]:
         """
-        Analyze scene visuals using strict JSON schema for token efficiency.
+        Analyze scene visuals using strict JSON schema with detailed descriptions.
 
-        This method uses a stricter prompt that:
+        This method focuses purely on visual content without relying on transcripts:
         - Returns structured JSON only (no apologies or free-form text)
-        - Uses minimal tokens
-        - Can return "no_content" status for uninformative scenes
+        - Provides detailed visual descriptions of all significant elements
+        - Can return "no_content" status for uninformative scenes (black/blurred only)
 
         Args:
             image_path: Path to single best keyframe
-            transcript_segment: Optional transcript segment for context
             language: Language for the summary ('ko' or 'en')
 
         Returns:
             Optional[dict]: Dict with structure:
             {
                 "status": "ok" | "no_content",
-                "description": "short Korean/English description",
+                "description": "detailed visual description (max 500 chars)",
                 "main_entities": ["entity1", "entity2"],  # if enabled
                 "actions": ["action1", "action2"],  # if enabled
                 "confidence": 0.0-1.0
@@ -155,48 +153,87 @@ class OpenAIClient:
             with open(image_path, "rb") as image_file:
                 image_data = base64.b64encode(image_file.read()).decode("utf-8")
 
-            # Build strict system prompt with richer descriptions
+            # Build strict system prompt with detailed visual descriptions
+            # NOTE: Visual analysis should be completely independent of transcripts
             system_prompts = {
-                "ko": """당신은 비디오 장면 분석 전문가입니다. 다음 JSON 스키마로만 응답하세요:
+                "ko": """당신은 비디오 장면의 시각적 내용을 상세히 분석하는 전문가입니다. 다음 JSON 스키마로만 응답하세요:
 
 {
   "status": "ok" 또는 "no_content",
-  "description": "1-2문장의 구체적이고 설명적인 한국어 장면 묘사 (최대 200자)",
-  "main_entities": ["주요 인물, 사물, 장소 등의 짧은 명사구"],
-  "actions": ["발생하는 행동을 나타내는 짧은 동사구"],
+  "description": "장면의 모든 중요한 시각적 세부사항을 설명하는 상세한 한국어 묘사 (최대 500자)",
+  "main_entities": ["보이는 모든 인물, 사물, 장소, 텍스트 등의 명사구"],
+  "actions": ["관찰되는 모든 행동, 동작, 상태를 나타내는 동사구"],
   "confidence": 0.0에서 1.0 사이의 숫자
 }
 
-규칙:
-- **중요**: 장면에서 무언가 보이면 반드시 분석하세요. status="no_content"는 완전히 검은 화면이나 완전히 흐릿한 경우에만 사용하세요.
-- 사람, 물체, 텍스트, 색상, 배경 등 어떤 것이든 보이는 것을 설명하세요
-- 불확실한 경우에도 보이는 것을 최대한 설명하세요 (confidence를 낮게 설정)
-- status="ok"인 경우: 반드시 description, main_entities, actions를 채우세요
-- description: 누가/무엇이 있는지, 무엇을 하는지, 장소와 분위기를 포함한 구체적 설명 (최대 200자)
-- main_entities: 보이는 모든 주요 대상 (사람, 물체, 장소, 텍스트 등)을 명사구로 나열 (각 항목은 30자 미만)
-- actions: 일어나는 모든 행동이나 상태를 동사구로 나열 (정적인 장면은 "표시", "보임" 등 사용) (각 항목은 30자 미만)
-- 태그로 사용 가능하도록 entities와 actions는 간결하게
-- JSON만 출력하고 추가 설명 없음""",
-                "en": """You are a video scene analysis expert. Respond ONLY with this JSON schema:
+중요 규칙:
+- **시각적 내용에만 집중**: 화면에 보이는 것만 설명하세요. 음성이나 대본은 무시하세요.
+- **status="no_content"**: 완전히 검은 화면이나 완전히 흐릿한 경우에만 사용
+- **상세한 설명 필수**: status="ok"인 경우 반드시 모든 필드를 상세히 채우세요
+
+description 작성 가이드 (최대 500자):
+1. 전체 장면 구성: 실내/외, 배경, 조명, 색감, 분위기
+2. 주요 대상: 사람(외모, 복장, 표정), 물체(크기, 색상, 위치), 텍스트(내용, 스타일)
+3. 행동/상태: 무엇을 하고 있는지, 움직임, 상호작용
+4. 공간/레이아웃: 화면 구도, 카메라 앵글, 원근감
+5. 눈에 띄는 세부사항: 브랜드, 로고, 특이한 요소
+
+main_entities 작성:
+- 화면에 보이는 모든 중요한 대상을 나열
+- 예: "파란색 셔츠 입은 남성", "노트북", "흰색 배경", "회사 로고", "창문"
+- 각 항목은 구체적이고 서술적으로 (최대 40자)
+
+actions 작성:
+- 관찰되는 모든 행동과 상태를 나열
+- 정적 장면도 "표시됨", "놓여있음", "비춰짐" 등으로 표현
+- 예: "키보드 타이핑", "화면 가리킴", "웃음", "텍스트 표시됨"
+- 각 항목은 동사구로 (최대 40자)
+
+불확실한 경우:
+- 추측하지 말고 보이는 것만 설명
+- 불확실하면 confidence를 낮게 설정 (0.3-0.7)
+- 그래도 최대한 상세히 설명 시도
+
+JSON만 출력하고 추가 설명 없음.""",
+                "en": """You are an expert at analyzing detailed visual content in video scenes. Respond ONLY with this JSON schema:
 
 {
   "status": "ok" or "no_content",
-  "description": "1-2 descriptive sentences about the scene (max 200 characters)",
-  "main_entities": ["short noun phrases for people, objects, locations"],
-  "actions": ["short verb phrases for actions happening"],
+  "description": "Detailed description of all significant visual details in the scene (max 500 characters)",
+  "main_entities": ["noun phrases for ALL visible people, objects, locations, text, etc."],
+  "actions": ["verb phrases for ALL observed actions, movements, states"],
   "confidence": number between 0.0 and 1.0
 }
 
-Rules:
-- **IMPORTANT**: If you can see ANYTHING in the scene, you MUST analyze it. Only use status="no_content" for completely black screens or completely blurred content.
-- Describe ANY visible elements: people, objects, text, colors, backgrounds, etc.
-- Even if uncertain, describe what you see (use lower confidence)
-- If status="ok": you MUST fill in description, main_entities, and actions
-- description: Specific details about who/what is present, what's happening, location and mood (max 200 chars)
-- main_entities: ALL visible main subjects (people, objects, locations, text, etc.) as noun phrases (each item under 30 chars)
-- actions: ALL actions or states occurring (for static scenes use "displayed", "shown", etc.) as verb phrases (each item under 30 chars)
-- Keep entities and actions concise for use as clickable tags
-- Output JSON only, no additional text""",
+Critical Rules:
+- **FOCUS ON VISUALS ONLY**: Describe only what you SEE on screen. Ignore audio/transcripts.
+- **status="no_content"**: Use ONLY for completely black screens or completely blurred content
+- **DETAILED DESCRIPTIONS REQUIRED**: If status="ok", you MUST fill all fields thoroughly
+
+description guidelines (max 500 chars):
+1. Overall scene composition: indoor/outdoor, background, lighting, colors, atmosphere
+2. Main subjects: people (appearance, clothing, expressions), objects (size, color, position), text (content, style)
+3. Actions/states: what is happening, movements, interactions
+4. Space/layout: screen composition, camera angle, perspective
+5. Notable details: brands, logos, unique elements
+
+main_entities guidelines:
+- List ALL significant visible subjects
+- Examples: "man in blue shirt", "laptop computer", "white background", "company logo", "window"
+- Each item should be specific and descriptive (max 40 chars)
+
+actions guidelines:
+- List ALL observed actions and states
+- For static scenes use "displayed", "positioned", "shown", etc.
+- Examples: "typing on keyboard", "pointing at screen", "smiling", "text displayed"
+- Each item as verb phrase (max 40 chars)
+
+When uncertain:
+- Don't guess - describe only what you see
+- Use lower confidence if unsure (0.3-0.7)
+- Still attempt maximum detail
+
+Output JSON only, no additional text.""",
             }
 
             system_prompt = system_prompts.get(language, system_prompts["ko"])
@@ -219,20 +256,16 @@ Rules:
                     ""
                 )
 
-            # Build user message
+            # Build user message (DO NOT include transcript - visual analysis should be independent)
             user_prompts = {
-                "ko": "이 비디오 장면을 분석하고 JSON으로 응답하세요.",
-                "en": "Analyze this video scene and respond with JSON.",
+                "ko": "이 비디오 장면의 시각적 내용을 상세히 분석하고 JSON으로 응답하세요. 화면에 보이는 모든 중요한 세부사항을 포함하세요.",
+                "en": "Analyze the visual content of this video scene in detail and respond with JSON. Include all significant visual details you can see on screen.",
             }
             user_message = user_prompts.get(language, user_prompts["ko"])
 
-            # Add transcript context if available
-            if transcript_segment and transcript_segment.strip():
-                transcript_preview = transcript_segment[:200]  # Limit transcript length
-                if language == "ko":
-                    user_message += f"\n\n대본: {transcript_preview}"
-                else:
-                    user_message += f"\n\nTranscript: {transcript_preview}"
+            # NOTE: Intentionally NOT including transcript_segment here
+            # Visual analysis should be completely independent of audio/transcripts
+            # to provide pure visual descriptions
 
             # Create messages
             messages = [

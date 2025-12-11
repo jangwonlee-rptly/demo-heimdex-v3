@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     visual_blur_threshold: float = 50.0  # Min blur score (Laplacian variance) for sharp frames
     visual_semantics_enabled: bool = True  # Enable/disable visual semantics entirely
     visual_semantics_model: str = "gpt-4o-mini"  # Model for visual analysis (upgraded from gpt-5-nano for better accuracy)
-    visual_semantics_max_tokens: int = 150  # Max tokens for visual analysis response (increased for richer descriptions)
+    visual_semantics_max_tokens: int = 600  # Max tokens for detailed visual descriptions (increased from 150 to support 500 char descriptions + entities + actions)
     visual_semantics_temperature: float = 0.0  # Temperature for visual analysis (0 = deterministic)
     visual_semantics_include_entities: bool = True  # Include main_entities in JSON response
     visual_semantics_include_actions: bool = True  # Include actions in JSON response

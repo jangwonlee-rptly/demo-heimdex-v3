@@ -1,0 +1,59 @@
+[2025-12-11 07:38] Fixed Transcript panel header overlap issue
+File: devlog/2512110738.txt
+
+== What we worked on ==
+- Fixed a layout bug in the video transcript view where the "Transcript Segments"
+  title was overlapping with scene cards during scrolling.
+- Refactored the Transcript panel to properly separate the header and scrollable
+  content areas.
+
+== Changes made ==
+- services/frontend/src/app/videos/[id]/page.tsx (lines 649-726):
+  - Refactored Transcript panel from a single scrollable container to a
+    flex-column layout with distinct header and content regions.
+  - Parent container: Changed from `overflow-y-auto` to `flex flex-col` with
+    fixed height `h-[calc(100vh-280px)]`.
+  - Header: Added non-scrolling header with `flex-shrink-0` and visual separator
+    (border-bottom).
+  - Content area: Made scrollable with `flex-1 overflow-y-auto` to take remaining
+    vertical space.
+  - Removed sticky positioning approach that was causing overlap.
+
+== Problems encountered ==
+- Problem 1: Initial implementation used `position: sticky` with `z-index: 10`
+  on the title, but this caused the title to visually overlap scene cards as
+  they scrolled behind it.
+- Problem 2: User wanted the title to stay visible but cards should scroll in
+  the space BELOW the title, with no visual overlap - treating them as two
+  distinct vertical regions.
+
+== How we tried to solve it ==
+- Attempt 1: Added `z-10` to the sticky title to ensure it appeared above scene
+  cards. This made the title stay on top but didn't solve the fundamental issue -
+  cards were still scrolling behind/underneath the title.
+- Analysis: Realized the root issue was architectural - using `position: sticky`
+  within a single scroll container means the sticky element overlays the scrolling
+  content rather than reserving vertical space.
+
+== How we solved it ==
+- Root cause: The original implementation had the header inside the scroll
+  container with sticky positioning, which creates an overlay effect rather than
+  reserving dedicated vertical space.
+
+- Solution: Refactored to a proper flex-column layout with two distinct regions:
+  1. Non-scrolling header region (flex-shrink-0)
+  2. Scrollable content region (flex-1 with overflow-y-auto)
+
+- Key changes:
+  - Parent div: `flex flex-col h-[calc(100vh-280px)]` - fixed height flex container
+  - Header div: `flex-shrink-0 pb-4 border-b` - takes only needed space, doesn't scroll
+  - Content div: `flex-1 overflow-y-auto pt-4` - takes remaining space, scrolls independently
+
+- Result: The header and content are now in separate layout regions. The header
+  stays fixed at the top, and only the content area scrolls. No overlap possible
+  since they occupy different vertical space.
+
+== Next steps / TODOs ==
+- Test the fix in the browser to verify scrolling behavior works as expected
+- Verify that keyboard/mouse scrolling only affects the content area
+- Check that the first card is fully visible below the header without clipping

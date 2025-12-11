@@ -1,0 +1,146 @@
+[2025-12-11 07:57] Enhanced visual summary generation for detailed, transcript-independent scene descriptions
+File: devlog/2512110757.txt
+
+== What we worked on ==
+- Redesigned the visual summary generation system to create detailed, transcript-independent
+  visual descriptions of video scenes.
+- Updated OpenAI vision prompts to provide comprehensive guidelines for analyzing visual content.
+- Removed dependency on audio transcripts from visual analysis to ensure pure visual descriptions.
+- Increased token limits and tag lengths to support richer, more detailed scene metadata.
+
+== Changes made ==
+- services/worker/src/adapters/openai_client.py (lines 121-270):
+  - Removed `transcript_segment` parameter from `analyze_scene_visuals_optimized()` function.
+  - Updated function signature to only accept `image_path` and `language` parameters.
+  - Completely rewrote system prompts for both Korean and English:
+    * Increased description max length from 200 to 500 characters.
+    * Added detailed 5-point guidelines for visual analysis:
+      1. Scene composition (indoor/outdoor, background, lighting, colors, atmosphere)
+      2. Main subjects (people with appearance/clothing/expressions, objects with attributes, text)
+      3. Actions/states (movements, interactions, static displays)
+      4. Spatial layout (screen composition, camera angle, perspective)
+      5. Notable details (brands, logos, unique visual elements)
+    * Explicitly instructed to focus on visual content only, ignore audio/transcripts.
+    * Increased entity tag max length from 30 to 40 characters.
+    * Increased action tag max length from 30 to 40 characters.
+  - Removed code that appended transcript context to user messages.
+  - Added comments explaining visual analysis should be completely independent.
+  - Updated function docstring to reflect new behavior.
+
+- services/worker/src/config.py (line 50):
+  - Increased `visual_semantics_max_tokens` from 150 to 600 (4x increase).
+  - Updated comment to explain this supports detailed 500-char descriptions plus
+    entities and actions arrays.
+
+- services/worker/src/domain/sidecar_builder.py (lines 208-229, 523-528):
+  - Updated `_normalize_tags()` method:
+    * Increased tag length limit from 30 to 40 characters.
+    * Updated docstring to reflect this supports detailed entity descriptions.
+  - Updated `build_sidecar()` visual analysis call:
+    * Removed `transcript_segment` argument from `analyze_scene_visuals_optimized()` call.
+    * Added comment explaining visual analysis is now completely independent.
+
+== Problems addressed ==
+- Problem 1: Visual descriptions were too brief and lacked detail.
+  - Original 200-character limit was insufficient for comprehensive scene descriptions.
+  - Descriptions often missed important visual details like lighting, colors, spatial layout,
+    clothing details, text content, and brand/logo information.
+
+- Problem 2: Visual analysis was contaminated by transcript information.
+  - Passing transcripts to the vision model biased it toward describing what was said
+    rather than what was visually present.
+  - This created redundancy with transcript data and reduced the independent value of
+    visual descriptions.
+  - Visual descriptions should complement transcripts, not duplicate them.
+
+- Problem 3: Entity and action tags were too restrictive.
+  - 30-character limit prevented descriptive tags like "man in blue shirt typing on laptop".
+  - Forced overly generic tags like "man" or "laptop" which lost important context.
+
+== How we solved it ==
+
+Root cause analysis:
+- Visual descriptions were designed for cost optimization (minimal tokens) rather than
+  maximum information density and detail.
+- The system was treating visual and audio as redundant signals rather than complementary
+  independent data streams.
+- Token limits were tuned for brief summaries, not comprehensive visual analysis.
+
+Solution approach:
+1. **Separated visual and audio analysis streams**:
+   - Removed transcript_segment parameter entirely from visual analysis function.
+   - Visual descriptions now focus purely on what's visible on screen.
+   - Audio transcripts remain separate and can be combined with visuals at search time.
+
+2. **Redesigned prompt for comprehensive visual analysis**:
+   - Created structured 5-point framework covering all aspects of visual content.
+   - Increased description length from 200 to 500 characters (2.5x).
+   - Added specific instructions for scene composition, subjects, actions, layout, and details.
+   - Emphasized describing ALL significant visual elements, not just highlights.
+
+3. **Increased resource allocation for quality**:
+   - Token limit increased from 150 to 600 (4x) to support detailed outputs.
+   - Tag length increased from 30 to 40 characters for more descriptive entities/actions.
+   - Cost optimization rules still apply (short scenes with rich transcripts can skip visual
+     analysis), but when visual analysis runs, it's now comprehensive.
+
+4. **Updated prompts to emphasize visual-only analysis**:
+   - Korean and English prompts both explicitly state: "화면에 보이는 것만 설명하세요" /
+     "Describe only what you SEE on screen. Ignore audio/transcripts."
+   - System prompt focuses on observable visual details: colors, clothing, objects, text,
+     spatial relationships, lighting, composition.
+
+Technical implementation:
+- Function signature simplified: analyze_scene_visuals_optimized(image_path, language)
+- User message updated: "이 비디오 장면의 시각적 내용을 상세히 분석하고 JSON으로 응답하세요"
+- System prompt provides comprehensive guidelines for visual analysis
+- Removed all transcript-related code paths from visual analysis
+- Tag normalization updated to support longer, more descriptive tags
+
+== Results and impact ==
+
+Expected improvements:
+1. **Richer visual metadata**: 500-character descriptions can capture:
+   - Detailed appearance (clothing colors/styles, facial expressions, object attributes)
+   - Spatial relationships (who/what is where, foreground/background)
+   - Scene context (indoor/outdoor, lighting, atmosphere, time of day)
+   - Text content (visible words, captions, brands, logos)
+   - Actions and states (both dynamic movements and static presentations)
+
+2. **Independent data streams**: Visual and audio are now truly complementary:
+   - Visual: What you SEE (appearance, objects, text, layout, colors)
+   - Audio: What you HEAR (speech, dialogue, narration, sounds)
+   - Search can leverage both independently or combined for better results
+
+3. **Better searchability**: More detailed descriptions improve semantic search:
+   - Users searching for "blue shirt" will find scenes with that visual detail
+   - Logo/brand searches work better with explicit visual text recognition
+   - Scene composition searches ("outdoor", "bright lighting") are more accurate
+
+4. **More useful tags**: 40-character limit supports descriptive entity/action tags:
+   - Before: "man", "laptop" (generic, low context)
+   - After: "man in blue shirt", "typing on laptop" (specific, high context)
+
+Cost implications:
+- Token usage increases ~3-4x per visual analysis (150→600 tokens)
+- Cost optimization rules still apply:
+  * Short scenes (<1.5s) with rich transcripts (>50 chars) skip visual analysis
+  * Only scenes needing visual signal get analyzed
+- Increased token cost is justified by significantly improved metadata quality
+- Better search results may reduce number of videos that need processing (users find
+  what they need faster)
+
+== Next steps / TODOs ==
+- Test with real videos to validate description quality and detail level
+- Monitor token usage and cost impact in production
+- Consider adding image detail level configuration ("low" vs "high" for OpenAI vision API)
+  * Currently using "low" detail for cost efficiency
+  * "high" detail might provide even richer descriptions for important videos
+- Evaluate if visual descriptions should be used in video-level summaries (currently
+  uses scene descriptions which now have much more visual detail)
+- Consider adjusting search_text weights (currently 60% transcript, 40% visual) based
+  on new visual description richness
+- Add monitoring/analytics to track:
+  * Average visual description length
+  * Most common entity/action tags
+  * Search query match rates for visual vs audio content
