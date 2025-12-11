@@ -73,6 +73,20 @@ class Settings(BaseSettings):
     search_text_max_length: int = 8000  # Max chars for embedding input
     search_text_transcript_weight: float = 0.6  # Relative priority of transcript in search text
 
+    # Transcription quality filtering configuration
+    # These settings help filter out low-quality transcripts (BGM, music, noise)
+    transcription_min_chars_for_speech: int = 40  # Minimum chars for valid speech
+    transcription_min_speech_char_ratio: float = 0.3  # Min ratio of letters/Hangul vs total
+    transcription_max_no_speech_prob: float = 0.8  # Above this, treat segment as no speech
+    transcription_min_speech_segments_ratio: float = 0.3  # Min ratio of speech segments required
+    transcription_music_markers: list[str] = [
+        "♪", "♫", "♬", "♩",  # Music note symbols
+        "[music]", "[Music]", "[MUSIC]",  # Common Whisper music tags
+        "[음악]", "[배경음악]",  # Korean music tags
+        "(music)", "(Music)",
+    ]
+    transcription_banned_phrases: list[str] = []  # Optional: phrases to filter as low-value
+
 
 # Global settings instance
 settings = Settings()

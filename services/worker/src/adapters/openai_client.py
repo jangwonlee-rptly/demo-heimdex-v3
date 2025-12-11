@@ -2,6 +2,9 @@
 import base64
 import json
 import logging
+import re
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from openai import OpenAI
@@ -11,6 +14,122 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TranscriptionResult:
+    """Result of audio transcription with quality assessment.
+
+    Attributes:
+        text: The transcribed text (may be empty if no speech detected)
+        has_speech: Whether meaningful speech was detected
+        reason: Reason for the has_speech determination
+            - "ok": Normal speech detected
+            - "music_only": Mostly music notation/markers
+            - "too_short": Transcript too short to be meaningful
+            - "low_speech_ratio": Too few speech characters vs total
+            - "high_no_speech_prob": Whisper segments indicate no speech
+            - "banned_phrases": Content dominated by banned phrases
+    """
+
+    text: str
+    has_speech: bool
+    reason: str
+
+
+def is_speech_character(char: str) -> bool:
+    """Check if a character is a speech character (letter, digit, Hangul, CJK, etc.)."""
+    if char.isalnum():
+        return True
+    # Check for CJK unified ideographs (Chinese, Japanese Kanji)
+    category = unicodedata.category(char)
+    if category.startswith("Lo"):  # Letter, other (includes CJK, Hangul)
+        return True
+    return False
+
+
+def calculate_speech_char_ratio(text: str) -> float:
+    """Calculate the ratio of speech characters to total characters.
+
+    Args:
+        text: The text to analyze
+
+    Returns:
+        Float between 0.0 and 1.0 representing ratio of speech characters
+    """
+    if not text:
+        return 0.0
+
+    # Remove whitespace for the calculation
+    text_no_whitespace = "".join(text.split())
+    if not text_no_whitespace:
+        return 0.0
+
+    speech_chars = sum(1 for c in text_no_whitespace if is_speech_character(c))
+    return speech_chars / len(text_no_whitespace)
+
+
+def is_mostly_music_notation(text: str, music_markers: list[str]) -> bool:
+    """Check if the text is mostly music notation.
+
+    Args:
+        text: The text to analyze
+        music_markers: List of music markers to check for
+
+    Returns:
+        True if the text appears to be mostly music notation
+    """
+    if not text:
+        return False
+
+    # Remove all music markers and whitespace
+    cleaned = text
+    for marker in music_markers:
+        cleaned = cleaned.replace(marker, "")
+    cleaned = "".join(cleaned.split())
+
+    # If very little remains after removing music markers, it's music only
+    if len(cleaned) < 10:
+        return True
+
+    # Check ratio of music markers in original
+    original_no_whitespace = "".join(text.split())
+    if not original_no_whitespace:
+        return False
+
+    music_char_count = sum(
+        text.count(marker) * len(marker) for marker in music_markers
+    )
+    music_ratio = music_char_count / len(original_no_whitespace)
+
+    # If more than 50% is music markers, treat as music only
+    return music_ratio > 0.5
+
+
+def contains_banned_phrases(text: str, banned_phrases: list[str]) -> bool:
+    """Check if text is dominated by banned phrases.
+
+    Args:
+        text: The text to check
+        banned_phrases: List of phrases to check for
+
+    Returns:
+        True if the text is dominated by banned phrases
+    """
+    if not banned_phrases or not text:
+        return False
+
+    text_lower = text.lower()
+    # Check if any banned phrase makes up a large portion of the text
+    for phrase in banned_phrases:
+        phrase_lower = phrase.lower()
+        count = text_lower.count(phrase_lower)
+        if count > 0:
+            phrase_coverage = (count * len(phrase)) / len(text)
+            if phrase_coverage > 0.5:  # If banned phrase covers >50% of text
+                return True
+
+    return False
+
+
 class OpenAIClient:
     """OpenAI API client wrapper."""
 
@@ -18,9 +137,14 @@ class OpenAIClient:
         """Initialize the OpenAI client."""
         self.client = OpenAI(api_key=settings.openai_api_key)
 
-    def transcribe_audio(self, audio_file_path: Path, language: str = None) -> str:
+    def transcribe_audio_with_quality(
+        self, audio_file_path: Path, language: str = None
+    ) -> TranscriptionResult:
         """
-        Transcribe audio using Whisper.
+        Transcribe audio using Whisper with speech quality assessment.
+
+        Uses verbose_json response format to get segment-level metadata
+        for detecting music-only, noise, or low-speech content.
 
         Args:
             audio_file_path: Path to audio file
@@ -28,10 +152,12 @@ class OpenAIClient:
                      If not provided, Whisper will auto-detect the language.
 
         Returns:
-            str: Transcription text
+            TranscriptionResult: Contains text, has_speech flag, and reason
         """
         if language:
-            logger.info(f"Transcribing audio from {audio_file_path} with language hint: {language}")
+            logger.info(
+                f"Transcribing audio from {audio_file_path} with language hint: {language}"
+            )
         else:
             logger.info(f"Transcribing audio from {audio_file_path} (auto-detect language)")
 
@@ -39,16 +165,129 @@ class OpenAIClient:
             params = {
                 "model": "whisper-1",
                 "file": audio_file,
-                "response_format": "text",
+                "response_format": "verbose_json",
             }
             # Only add language if explicitly specified
             if language:
                 params["language"] = language
 
-            transcript = self.client.audio.transcriptions.create(**params)
+            response = self.client.audio.transcriptions.create(**params)
 
-        logger.info(f"Transcription complete: {len(transcript)} chars")
-        return transcript
+        # Extract full text from response
+        full_text = response.text if hasattr(response, "text") else ""
+        segments = response.segments if hasattr(response, "segments") else []
+
+        logger.info(
+            f"Transcription complete: {len(full_text)} chars, {len(segments)} segments"
+        )
+
+        # Apply quality heuristics
+        result = self._assess_transcription_quality(full_text, segments)
+
+        if not result.has_speech:
+            logger.info(
+                f"Transcript rejected: reason={result.reason}, "
+                f"text_preview='{full_text[:100]}...'"
+            )
+        else:
+            logger.info(f"Transcript accepted: {len(result.text)} chars")
+
+        return result
+
+    def _assess_transcription_quality(
+        self, text: str, segments: list
+    ) -> TranscriptionResult:
+        """
+        Assess transcription quality using multiple heuristics.
+
+        Args:
+            text: The full transcription text
+            segments: List of segment dictionaries from Whisper verbose_json
+
+        Returns:
+            TranscriptionResult with quality assessment
+        """
+        # 1. Check if text is too short
+        text_stripped = text.strip()
+        if len(text_stripped) < settings.transcription_min_chars_for_speech:
+            # But first check if it's not just music notation
+            if is_mostly_music_notation(text_stripped, settings.transcription_music_markers):
+                return TranscriptionResult(
+                    text="", has_speech=False, reason="music_only"
+                )
+            # Short but might be valid (e.g., short clip with brief speech)
+            # Only reject if also has low speech ratio
+            speech_ratio = calculate_speech_char_ratio(text_stripped)
+            if speech_ratio < settings.transcription_min_speech_char_ratio:
+                return TranscriptionResult(
+                    text="", has_speech=False, reason="too_short"
+                )
+
+        # 2. Check if mostly music notation
+        if is_mostly_music_notation(text_stripped, settings.transcription_music_markers):
+            return TranscriptionResult(text="", has_speech=False, reason="music_only")
+
+        # 3. Check speech character ratio
+        speech_ratio = calculate_speech_char_ratio(text_stripped)
+        if speech_ratio < settings.transcription_min_speech_char_ratio:
+            logger.debug(
+                f"Low speech ratio: {speech_ratio:.2f} < {settings.transcription_min_speech_char_ratio}"
+            )
+            return TranscriptionResult(
+                text="", has_speech=False, reason="low_speech_ratio"
+            )
+
+        # 4. Check Whisper's no_speech_prob from segments
+        if segments:
+            no_speech_segments = 0
+            for segment in segments:
+                # Handle both Pydantic objects and dicts (for testing)
+                if hasattr(segment, "no_speech_prob"):
+                    no_speech_prob = segment.no_speech_prob or 0.0
+                else:
+                    no_speech_prob = segment.get("no_speech_prob", 0.0)
+
+                if no_speech_prob > settings.transcription_max_no_speech_prob:
+                    no_speech_segments += 1
+
+            no_speech_ratio = no_speech_segments / len(segments)
+            speech_segments_ratio = 1.0 - no_speech_ratio
+
+            if speech_segments_ratio < settings.transcription_min_speech_segments_ratio:
+                logger.debug(
+                    f"High no_speech ratio: {no_speech_ratio:.2f}, "
+                    f"speech_segments_ratio={speech_segments_ratio:.2f}"
+                )
+                return TranscriptionResult(
+                    text="", has_speech=False, reason="high_no_speech_prob"
+                )
+
+        # 5. Check for banned phrases
+        if contains_banned_phrases(text_stripped, settings.transcription_banned_phrases):
+            return TranscriptionResult(
+                text="", has_speech=False, reason="banned_phrases"
+            )
+
+        # All checks passed - this is valid speech
+        return TranscriptionResult(text=text_stripped, has_speech=True, reason="ok")
+
+    def transcribe_audio(self, audio_file_path: Path, language: str = None) -> str:
+        """
+        Transcribe audio using Whisper.
+
+        This is a backward-compatible wrapper around transcribe_audio_with_quality.
+        Returns empty string if no meaningful speech is detected.
+
+        Args:
+            audio_file_path: Path to audio file
+            language: Optional ISO-639-1 language code (e.g., 'ko', 'en', 'ja', 'ru').
+                     If not provided, Whisper will auto-detect the language.
+
+        Returns:
+            str: Transcription text (empty if no speech detected)
+        """
+        result = self.transcribe_audio_with_quality(audio_file_path, language)
+        return result.text if result.has_speech else ""
 
     def analyze_scene_visuals(
         self,

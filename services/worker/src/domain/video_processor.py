@@ -260,13 +260,26 @@ class VideoProcessor:
                     ffmpeg.extract_audio(video_path, audio_path)
 
                     # Pass transcript_language to Whisper if set (from reprocess request)
-                    full_transcript = openai_client.transcribe_audio(
+                    # Use quality-aware transcription to filter out music/noise
+                    transcription_result = openai_client.transcribe_audio_with_quality(
                         audio_path,
                         language=transcript_language,
                     )
-                    logger.info(f"Transcription complete: {len(full_transcript)} characters")
+
+                    if transcription_result.has_speech:
+                        full_transcript = transcription_result.text
+                        logger.info(
+                            f"Transcription accepted: {len(full_transcript)} characters"
+                        )
+                    else:
+                        full_transcript = ""
+                        logger.info(
+                            f"Video {video_id}: no meaningful speech detected "
+                            f"(reason={transcription_result.reason}), skipping transcript"
+                        )
 
                     # Save transcript as checkpoint for future retries
+                    # (empty string if no speech detected)
                     db.save_transcript(video_id, full_transcript)
                 else:
                     logger.warning("No audio stream found, skipping transcription")

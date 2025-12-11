@@ -1,0 +1,59 @@
+[2025-12-11 13:51] Transcription Quality Filtering - Filter out BGM/music/noise from Whisper transcripts
+File: devlog/2512111351.txt
+
+== What we worked on ==
+- Implemented speech-quality detection to prevent storing junk transcripts
+- Videos downloaded from the internet often have ads, BGM, or music in the audio track
+- Whisper faithfully transcribes these as music notes (♪♪♪) or song lyrics
+- Goal: Treat music-only/noise audio as "no transcript available" instead of storing garbage
+
+== Changes made ==
+- services/worker/src/config.py:
+  - Added transcription quality settings:
+    - transcription_min_chars_for_speech (40)
+    - transcription_min_speech_char_ratio (0.3)
+    - transcription_max_no_speech_prob (0.8)
+    - transcription_min_speech_segments_ratio (0.3)
+    - transcription_music_markers (♪, ♫, [Music], etc.)
+    - transcription_banned_phrases (empty by default)
+
+- services/worker/src/adapters/openai_client.py:
+  - Added TranscriptionResult dataclass (text, has_speech, reason)
+  - Added transcribe_audio_with_quality() using verbose_json format
+  - Added _assess_transcription_quality() with multi-signal heuristics:
+    1. Too short check
+    2. Music notation detection (♪, [Music], etc.)
+    3. Speech character ratio (letters/Hangul vs symbols)
+    4. Whisper segment no_speech_prob analysis
+    5. Banned phrases check
+  - Added helper functions: is_speech_character(), calculate_speech_char_ratio(),
+    is_mostly_music_notation(), contains_banned_phrases()
+  - Updated transcribe_audio() as backward-compatible wrapper
+
+- services/worker/src/domain/video_processor.py:
+  - Updated to use transcribe_audio_with_quality() directly
+  - Added explicit logging of rejection reason when no speech detected
+
+- services/worker/tests/test_transcription_quality.py:
+  - Added comprehensive unit tests for all heuristic functions
+
+== Problems encountered ==
+- Problem 1: AttributeError: 'TranscriptionSegment' object has no attribute 'get'
+  - Whisper API with verbose_json returns Pydantic TranscriptionSegment objects, not dicts
+  - Code was using segment.get("no_speech_prob", 0.0) which failed
+
+== How we tried to solve it ==
+- Checked the error traceback pointing to _assess_transcription_quality()
+- Identified that OpenAI's Python SDK returns typed Pydantic objects for verbose_json
+
+== How we solved it / Current status ==
+- Changed segment access to use hasattr() check:
+  - If Pydantic object: segment.no_speech_prob
+  - If dict (for tests): segment.get("no_speech_prob", 0.0)
+- This maintains backward compatibility with dict-based tests while working with real API
+
+== Next steps / TODOs ==
+- Test with real videos containing BGM/music to verify filtering works correctly
+- May need to tune thresholds based on real-world results
+- Consider adding more music markers if Whisper produces other patterns
+- Optional: Add UI indicator showing "no transcript available" vs empty transcript
