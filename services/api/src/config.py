@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     # Dramatiq broker configuration
     dramatiq_broker: str = "redis"
 
+    # OpenSearch configuration (hybrid search)
+    opensearch_url: str = "http://opensearch:9200"
+    opensearch_index_scenes: str = "scene_docs"
+    opensearch_timeout_s: float = 1.0
+
+    # Hybrid search configuration
+    hybrid_search_enabled: bool = True
+    search_debug: bool = False
+    rrf_k: int = 60
+    candidate_k_dense: int = 200
+    candidate_k_lexical: int = 200
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins into a list.

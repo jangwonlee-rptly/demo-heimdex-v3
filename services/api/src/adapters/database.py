@@ -412,6 +412,58 @@ class Database:
         response = self.client.rpc("search_scenes_by_embedding", params).execute()
         return [VideoScene(**row) for row in response.data]
 
+    def get_scenes_by_ids(
+        self,
+        scene_ids: list[UUID],
+        preserve_order: bool = True,
+    ) -> list[VideoScene]:
+        """Get scenes by a list of IDs.
+
+        Used to hydrate search results after RRF fusion.
+
+        Args:
+            scene_ids: List of scene UUIDs to fetch.
+            preserve_order: If True, return results in the same order as input IDs.
+
+        Returns:
+            list[VideoScene]: List of scenes matching the IDs.
+        """
+        if not scene_ids:
+            return []
+
+        # Convert UUIDs to strings for the query
+        id_strings = [str(sid) for sid in scene_ids]
+
+        response = (
+            self.client.table("video_scenes")
+            .select(
+                "id,video_id,index,start_s,end_s,transcript_segment,"
+                "visual_summary,combined_text,thumbnail_url,"
+                "visual_description,visual_entities,visual_actions,tags,created_at"
+            )
+            .in_("id", id_strings)
+            .execute()
+        )
+
+        # Build scenes from response
+        scenes_by_id: dict[str, VideoScene] = {}
+        for row in response.data:
+            row["id"] = UUID(row["id"])
+            row["video_id"] = UUID(row["video_id"])
+            scene = VideoScene(**row)
+            scenes_by_id[str(scene.id)] = scene
+
+        if preserve_order:
+            # Return in the order of input IDs
+            result = []
+            for sid in scene_ids:
+                scene = scenes_by_id.get(str(sid))
+                if scene:
+                    result.append(scene)
+            return result
+        else:
+            return list(scenes_by_id.values())
+
     def log_search_query(
         self,
         user_id: UUID,

@@ -30,7 +30,8 @@ RUN uv pip install --system \
     numpy>=1.24.0 \
     pillow>=10.0.0 \
     pydantic>=2.5.0 \
-    pydantic-settings>=2.1.0
+    pydantic-settings>=2.1.0 \
+    opensearch-py>=2.4.0
 
 # Copy shared libraries (required for Dramatiq actors)
 COPY libs/ ./libs/

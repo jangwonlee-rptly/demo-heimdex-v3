@@ -10,6 +10,44 @@ services:
       timeout: 3s
       retries: 5
 
+  # OpenSearch for BM25 lexical search (hybrid search)
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # OpenSearch Dashboards (optional, for debugging)
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
   # API Service
   api:
     build:
@@ -35,6 +73,9 @@ services:
 
       # API config
       API_CORS_ORIGINS: http://localhost:3000,http://frontend:3000
+
+      # OpenSearch (hybrid search)
+      OPENSEARCH_URL: http://opensearch:9200
     depends_on:
       redis:
         condition: service_healthy
@@ -61,6 +102,9 @@ services:
 
       # Processing config
       TEMP_DIR: /tmp/heimdex
+
+      # OpenSearch (hybrid search)
+      OPENSEARCH_URL: http://opensearch:9200
     depends_on:
       redis:
         condition: service_healthy
@@ -87,3 +131,4 @@ services:
 
 volumes:
   redis_data:
+  opensearch-data:

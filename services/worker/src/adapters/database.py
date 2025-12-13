@@ -9,6 +9,9 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+# Cache for video owner_id lookups (cleared per video processing job)
+_video_owner_cache: dict[str, str] = {}
+
 
 class VideoStatus:
     """Video status enum (matching database enum)."""
@@ -69,6 +72,34 @@ class Database:
         if not response.data:
             return None
         return response.data[0]
+
+    def get_owner_id_for_video(self, video_id: UUID) -> Optional[str]:
+        """Get the owner_id for a video, with in-memory caching.
+
+        Args:
+            video_id: The UUID of the video.
+
+        Returns:
+            Optional[str]: The owner_id as string, or None if not found.
+        """
+        video_id_str = str(video_id)
+
+        # Check cache first
+        if video_id_str in _video_owner_cache:
+            return _video_owner_cache[video_id_str]
+
+        # Fetch from database
+        video = self.get_video(video_id)
+        if video and "owner_id" in video:
+            owner_id = video["owner_id"]
+            _video_owner_cache[video_id_str] = owner_id
+            return owner_id
+
+        return None
+
+    def clear_owner_cache(self) -> None:
+        """Clear the video owner cache (call at start of video processing)."""
+        _video_owner_cache.clear()
 
     def update_video_status(
         self,
@@ -211,6 +242,7 @@ class Database:
         embedding_metadata: Optional[dict] = None,
         needs_reprocess: bool = False,
         processing_stats: Optional[dict] = None,
+        owner_id: Optional[str] = None,
     ) -> UUID:
         """Create a video scene record.
 
@@ -233,6 +265,7 @@ class Database:
             embedding_metadata: Info about embedding model/generation (v2).
             needs_reprocess: Flag indicating scene may benefit from reprocessing (v2).
             processing_stats: Debug stats about sidecar generation (v2).
+            owner_id: Optional owner_id for OpenSearch indexing (fetched if not provided).
 
         Returns:
             UUID: The UUID of the created scene.
@@ -263,7 +296,75 @@ class Database:
         }
 
         response = self.client.table("video_scenes").insert(data).execute()
-        return UUID(response.data[0]["id"])
+        scene_id = UUID(response.data[0]["id"])
+
+        # Index to OpenSearch for hybrid search (non-blocking on failure)
+        self._index_scene_to_opensearch(
+            scene_id=scene_id,
+            video_id=video_id,
+            owner_id=owner_id,
+            index=index,
+            start_s=start_s,
+            end_s=end_s,
+            transcript_segment=transcript_segment,
+            visual_summary=visual_summary,
+            visual_description=visual_description,
+            combined_text=combined_text,
+            tags=tags,
+            thumbnail_url=thumbnail_url,
+        )
+
+        return scene_id
+
+    def _index_scene_to_opensearch(
+        self,
+        scene_id: UUID,
+        video_id: UUID,
+        owner_id: Optional[str],
+        index: int,
+        start_s: float,
+        end_s: float,
+        transcript_segment: Optional[str],
+        visual_summary: Optional[str],
+        visual_description: Optional[str],
+        combined_text: Optional[str],
+        tags: Optional[list[str]],
+        thumbnail_url: Optional[str],
+    ) -> None:
+        """Index scene to OpenSearch for hybrid search.
+
+        This is a non-blocking operation - failures are logged but don't
+        affect the main scene creation flow.
+        """
+        try:
+            from .opensearch_client import opensearch_client
+
+            # Get owner_id if not provided
+            if owner_id is None:
+                owner_id = self.get_owner_id_for_video(video_id)
+                if owner_id is None:
+                    logger.warning(f"Could not find owner_id for video {video_id}, skipping OpenSearch indexing")
+                    return
+
+            # Upsert to OpenSearch
+            opensearch_client.upsert_scene_doc(
+                scene_id=str(scene_id),
+                video_id=str(video_id),
+                owner_id=owner_id,
+                index=index,
+                start_s=start_s,
+                end_s=end_s,
+                transcript_segment=transcript_segment,
+                visual_summary=visual_summary,
+                visual_description=visual_description,
+                combined_text=combined_text,
+                tags=tags,
+                thumbnail_url=thumbnail_url,
+            )
+
+        except Exception as e:
+            # Log but don't fail - OpenSearch is a secondary index
+            logger.warning(f"Failed to index scene {scene_id} to OpenSearch: {e}")
 
     def get_scene(self, video_id: UUID, index: int) -> Optional[dict]:
         """
@@ -343,7 +444,15 @@ class Database:
         Returns:
             None: This function does not return a value.
         """
+        # Delete from Supabase
         self.client.table("video_scenes").delete().eq("video_id", str(video_id)).execute()
+
+        # Delete from OpenSearch (non-blocking on failure)
+        try:
+            from .opensearch_client import opensearch_client
+            opensearch_client.delete_scenes_for_video(str(video_id))
+        except Exception as e:
+            logger.warning(f"Failed to delete scenes for video {video_id} from OpenSearch: {e}")
 
     def get_scene_by_id(self, scene_id: UUID) -> Optional[dict]:
         """Get a scene by its ID.

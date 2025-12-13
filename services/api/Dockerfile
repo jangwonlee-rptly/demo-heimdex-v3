@@ -22,7 +22,8 @@ RUN uv pip install --system \
     supabase>=2.3.0 \
     dramatiq[redis]>=1.15.0 \
     redis>=5.0.0 \
-    openai>=1.10.0
+    openai>=1.10.0 \
+    opensearch-py>=2.4.0
 
 # Copy shared libraries (required for Dramatiq actors)
 COPY libs/ ./libs/

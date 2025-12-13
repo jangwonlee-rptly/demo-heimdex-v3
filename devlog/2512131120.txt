@@ -1,0 +1,71 @@
+[2025-12-13 11:20] Hybrid Search Deployment Fixes
+File: devlog/2512131120.txt
+
+== What we worked on ==
+- Debugging and fixing deployment issues for the hybrid search implementation
+- Getting OpenSearch container to start properly
+- Resolving missing Python dependency in Docker images
+- Fixing bulk indexing format for OpenSearch reindex script
+
+== Changes made ==
+- docker-compose.yml: Added DISABLE_INSTALL_DEMO_CONFIG=true to OpenSearch service
+  to skip security demo installer that requires admin password
+
+- services/api/Dockerfile: Added opensearch-py>=2.4.0 to hardcoded dependency list
+  (line 26) - Dockerfiles use explicit pip install, not pyproject.toml
+
+- services/worker/Dockerfile: Added opensearch-py>=2.4.0 to hardcoded dependency list
+  (line 34) - same issue as API Dockerfile
+
+- services/worker/src/adapters/opensearch_client.py: Fixed bulk_upsert() method
+  - Changed from incorrect alternating action/doc format to proper _source format
+  - opensearchpy.helpers.bulk expects: {"_op_type": "index", "_index": ..., "_id": ..., "_source": doc}
+  - Added logging of first error for debugging
+
+== Problems encountered ==
+- Problem 1: OpenSearch container exited immediately on startup with error:
+  "No custom admin password found. Please provide a password via the environment
+  variable OPENSEARCH_INITIAL_ADMIN_PASSWORD."
+  - OpenSearch 2.12.0+ requires initial admin password even though we set
+    plugins.security.disabled=true
+
+- Problem 2: API container failed to start with ModuleNotFoundError: No module
+  named 'opensearchpy'
+  - Dependency was added to pyproject.toml but Dockerfiles have hardcoded
+    dependency lists that bypass pyproject.toml
+
+- Problem 3: Reindex script had 100% failure rate on bulk indexing (HTTP 400)
+  - All 1770 scenes failed with "Bulk upsert had 200 errors" per batch
+  - Status code 400 indicates malformed request
+
+== How we tried to solve it ==
+- Problem 1: Checked OpenSearch documentation for security bypass options
+- Problem 2: Examined Dockerfile to understand dependency installation method
+- Problem 3: Read opensearch_client.py bulk_upsert method and compared to
+  opensearchpy.helpers.bulk documentation
+
+== How we solved it / Current status ==
+- Problem 1 (OpenSearch startup): Added DISABLE_INSTALL_DEMO_CONFIG=true
+  environment variable to skip the demo security configuration installer
+  entirely, since we're disabling security anyway.
+
+- Problem 2 (Missing dependency): Added opensearch-py>=2.4.0 directly to the
+  RUN uv pip install command in both Dockerfiles. The Dockerfiles don't read
+  from pyproject.toml - they have inline dependency lists for build caching.
+
+- Problem 3 (Bulk indexing): Fixed bulk_upsert() format. The opensearchpy
+  helpers.bulk() function expects each action as a single dict with:
+    {"_op_type": "index", "_index": name, "_id": id, "_source": doc}
+
+  The original code was using raw NDJSON alternating format:
+    {"index": {"_index": name, "_id": id}}
+    {doc}
+
+  This format is for the low-level client.bulk() method, not helpers.bulk().
+
+== Next steps / TODOs ==
+- Rebuild worker container: docker-compose build worker
+- Re-run reindex script: docker-compose exec worker python -m src.scripts.reindex_opensearch
+- Verify reindex completes successfully
+- Run smoke test: docker-compose exec api python -m src.scripts.smoke_hybrid_search
+- Test hybrid search via API endpoint

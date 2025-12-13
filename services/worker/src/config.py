@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     search_text_max_length: int = 8000  # Max chars for embedding input
     search_text_transcript_weight: float = 0.6  # Relative priority of transcript in search text
 
+    # OpenSearch configuration (hybrid search)
+    opensearch_url: str = "http://opensearch:9200"
+    opensearch_index_scenes: str = "scene_docs"
+    opensearch_timeout_s: float = 2.0  # Slightly longer timeout for indexing operations
+    opensearch_indexing_enabled: bool = True  # Enable/disable OpenSearch indexing
+
     # Transcription quality filtering configuration
     # These settings help filter out low-quality transcripts (BGM, music, noise)
     transcription_min_chars_for_speech: int = 40  # Minimum chars for valid speech

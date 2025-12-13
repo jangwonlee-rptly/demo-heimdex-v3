@@ -16,6 +16,7 @@ dependencies = [
     "dramatiq[redis]>=1.15.0",
     "redis>=5.0.0",
     "openai>=1.10.0",
+    "opensearch-py>=2.4.0",
 ]
 
 [build-system]

@@ -1,0 +1,95 @@
+[2025-12-13 11:08] Hybrid Search Implementation (Supabase pgvector + OpenSearch BM25 + RRF)
+File: devlog/2512131108.txt
+
+== What we worked on ==
+- Upgraded Heimdex search from dense-only (pgvector) to production-grade hybrid search
+- Added OpenSearch container for BM25 lexical retrieval alongside existing Supabase vector search
+- Implemented Reciprocal Rank Fusion (RRF) to combine dense and lexical results
+- Maintained backward compatibility with existing /v1/search API contract
+
+== Changes made ==
+- docker-compose.yml: Added opensearch (single-node, 512MB heap) and opensearch-dashboards services
+- docker-compose.yml: Added opensearch-data volume, OPENSEARCH_URL env var to api/worker
+
+- services/api/src/config.py: Added hybrid search settings (opensearch_url, rrf_k, candidate_k_*)
+- services/worker/src/config.py: Added opensearch_url, opensearch_indexing_enabled
+
+- services/api/pyproject.toml: Added opensearch-py>=2.4.0 dependency
+- services/worker/pyproject.toml: Added opensearch-py>=2.4.0 dependency
+
+- services/api/src/adapters/opensearch_client.py: New file - BM25 search adapter with ping,
+  ensure_index, bm25_search, get_index_stats methods
+
+- services/worker/src/adapters/opensearch_client.py: New file - Indexing adapter with
+  upsert_scene_doc, delete_scene_doc, delete_scenes_for_video, bulk_upsert methods
+
+- services/api/src/domain/search/__init__.py: New module for search domain logic
+- services/api/src/domain/search/fusion.py: New file - RRF algorithm implementation with
+  Candidate/FusedCandidate dataclasses, rrf_fuse, dense_only_fusion, lexical_only_fusion
+
+- services/api/src/routes/search.py: Rewrote search endpoint for hybrid retrieval
+  - Concurrent dense + lexical search using ThreadPoolExecutor
+  - RRF fusion with configurable k parameter (default: 60)
+  - Graceful fallbacks: dense-only if OpenSearch down, lexical-only if embedding fails
+  - Detailed timing logs for each phase (embed, dense, lexical, fusion, hydrate)
+
+- services/api/src/adapters/database.py: Added get_scenes_by_ids() for batch hydration
+
+- services/worker/src/adapters/database.py:
+  - Added get_owner_id_for_video() with in-memory caching
+  - Modified create_scene() to upsert to OpenSearch after Supabase insert
+  - Modified delete_scenes_for_video() to also delete from OpenSearch
+
+- services/api/src/scripts/__init__.py: New scripts module
+- services/api/src/scripts/init_opensearch.py: Index initialization script
+- services/api/src/scripts/smoke_hybrid_search.py: Integration smoke test
+
+- services/worker/src/scripts/__init__.py: New scripts module
+- services/worker/src/scripts/reindex_opensearch.py: Backfill script for existing scenes
+
+- services/api/tests/unit/test_fusion.py: Unit tests for RRF fusion logic
+
+== Problems encountered ==
+- Problem 1: Worker's create_scene() doesn't have owner_id, but OpenSearch needs it for
+  access control filtering. The video_scenes table only has video_id.
+
+- Problem 2: Need to ensure OpenSearch indexing failures don't break video processing.
+  OpenSearch is a secondary index - Supabase remains source of truth.
+
+- Problem 3: Search endpoint needs to handle multiple failure modes gracefully:
+  - OpenSearch unavailable -> dense-only
+  - Embedding generation fails -> lexical-only
+  - Both fail -> error
+
+== How we tried to solve it ==
+- For owner_id: Considered passing it down from the pipeline vs fetching from videos table
+- For resilience: Wrapped all OpenSearch calls in try/except with logging
+- For fallbacks: Built decision tree based on what's available at query time
+
+== How we solved it / Current status ==
+- owner_id: Added get_owner_id_for_video() with in-memory cache (cleared per job).
+  Worker fetches owner_id once per video and caches it for all scenes.
+
+- Resilience: All OpenSearch operations are wrapped in try/except. Failures log warnings
+  but don't propagate exceptions. Video processing continues even if indexing fails.
+
+- Fallbacks: Search endpoint checks opensearch_client.is_available() and embedding success
+  to determine search strategy (hybrid/dense-only/lexical-only). Response schema unchanged.
+
+- RRF Implementation: Using standard formula: score = sum(1/(k+rank)) across systems.
+  Tie-breaking: fused_score desc -> better dense_rank -> better lexical_rank -> scene_id
+
+- Index Mapping: Created comprehensive mapping with:
+  - Keywords: scene_id, video_id, owner_id (filtering)
+  - Text fields: transcript_segment, visual_summary, visual_description, combined_text (BM25)
+  - tags: keyword (filtering) + tags_text as text (BM25 scoring)
+
+== Next steps / TODOs ==
+- Run `docker-compose up -d` to start OpenSearch
+- Run init script: `docker-compose exec api python -m src.scripts.init_opensearch`
+- Backfill existing scenes: `docker-compose exec worker python -m src.scripts.reindex_opensearch`
+- Run smoke test: `docker-compose exec api python -m src.scripts.smoke_hybrid_search --verbose`
+- Run unit tests: `docker-compose exec api pytest tests/unit/test_fusion.py -v`
+- Monitor search latency in production - hybrid adds ~50-100ms from OpenSearch RTT
+- Consider adding Korean analyzer plugin to OpenSearch for better CJK tokenization
+- Future: Add query analysis to route simple keyword queries to lexical-only for speed
