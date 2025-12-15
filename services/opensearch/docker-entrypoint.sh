@@ -6,4 +6,4 @@ set -e
 chown -R opensearch:opensearch /usr/share/opensearch/data
 
 # Switch to opensearch user and run OpenSearch
-exec runuser -u opensearch -- /usr/share/opensearch/opensearch-docker-entrypoint.sh
+exec su -s /bin/bash opensearch -c "/usr/share/opensearch/opensearch-docker-entrypoint.sh"
