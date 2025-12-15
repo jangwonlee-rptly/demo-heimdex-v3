@@ -5,5 +5,5 @@ set -e
 # This is needed because Railway mounts volumes after the container starts
 chown -R opensearch:opensearch /usr/share/opensearch/data
 
-# Switch to opensearch user and run OpenSearch
-exec su -s /bin/bash opensearch -c "/usr/share/opensearch/opensearch-docker-entrypoint.sh"
+# Switch to opensearch user and run OpenSearch using gosu
+exec gosu opensearch /usr/share/opensearch/opensearch-docker-entrypoint.sh

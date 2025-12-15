@@ -2,6 +2,9 @@ FROM opensearchproject/opensearch:2
 
 USER root
 
+# Install gosu for dropping privileges (su/runuser not available in this image)
+RUN yum install -y gosu && yum clean all
+
 # Copy custom entrypoint script that fixes permissions at runtime
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
