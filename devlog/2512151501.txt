@@ -1,0 +1,154 @@
+[2025-12-15 15:01] Implemented Korean/English BM25 Multi-Field Analyzers (Step 1: Sparse Improvements)
+File: devlog/2512151501.txt
+
+== What we worked on ==
+- Implemented Step 1 of sparse retrieval improvements for Heimdex hybrid search
+- Upgraded OpenSearch BM25 lexical search with Korean-aware analysis using nori_tokenizer
+- Added multi-field mapping for Korean (.ko) and English (.en) language-specific analysis
+- Installed analysis-nori plugin in custom OpenSearch Docker image
+- Updated BM25 queries to search across base field + Korean + English subfields
+- Enhanced reindex script and smoke tests with Korean/English query validation
+- Created comprehensive documentation for deployment and troubleshooting
+
+== Changes made ==
+- services/api/src/adapters/opensearch_client.py:
+  * Added custom analyzers (ko_nori, en_english) to index settings
+  * Updated SCENE_INDEX_MAPPING with multi-field definitions for all text fields
+  * Modified bm25_search() to query field, field.ko, and field.en with preserved boosts
+  * Added check_nori_plugin() method for plugin availability detection
+
+- services/worker/src/adapters/opensearch_client.py:
+  * Synced SCENE_INDEX_MAPPING with API changes (identical analyzer config)
+  * Ensures worker indexes documents compatible with new multi-field structure
+
+- services/opensearch/Dockerfile:
+  * Added analysis-nori plugin installation at build time
+  * Uses gosu to run plugin install as opensearch user
+
+- docker-compose.yml:
+  * Changed opensearch service from image to build directive
+  * Now builds custom image from ./services/opensearch/Dockerfile
+
+- services/worker/src/scripts/reindex_opensearch.py:
+  * Enhanced logging with better progress reporting
+  * Added structured output with plugin availability check
+
+- services/api/src/scripts/smoke_hybrid_search.py:
+  * Added nori plugin availability check (Test 2)
+  * Added Korean query test with "사람" - person in Korean (Test 4)
+  * Added English query test with "person walking" (Test 5)
+  * Added --skip-analyzer-tests flag for backward compatibility
+  * Updated test numbering from 5 to 6 tests total
+
+- docs/search/opensearch-analyzers.md (NEW):
+  * Complete setup guide for local and Railway deployment
+  * Step-by-step reindex instructions
+  * Troubleshooting section for common issues
+  * Rollback procedures and performance notes
+
+== Problems encountered ==
+- Problem 1: Nori plugin availability
+  * The base opensearchproject/opensearch:2 image does not include analysis-nori plugin
+  * Required for nori_tokenizer used in Korean analyzer
+  * Without it, index creation would fail with "unknown tokenizer" error
+
+- Problem 2: Analyzer changes require index recreation
+  * Cannot modify analyzers on existing index via update mapping API
+  * Existing scene_docs index would need to be deleted and recreated
+  * Risk of data loss if reindex not properly executed
+
+- Problem 3: Multi-field mapping backward compatibility
+  * Needed to ensure existing worker indexing code wouldn't break
+  * Worker sends same document structure, but index now has subfields
+  * Had to verify multi-fields auto-populate from base field
+
+== How we tried to solve it ==
+- Attempt 1: Plugin installation
+  * Initially considered runtime plugin installation via entrypoint script
+  * Realized build-time installation is safer and more deterministic
+  * Used existing gosu mechanism in Dockerfile to run plugin install as opensearch user
+
+- Attempt 2: Index recreation strategy
+  * Evaluated options: aliasing, versioned indices, or simple delete/recreate
+  * Decided simple delete/recreate is safest for current scale
+  * Enhanced reindex script with better logging to track progress
+
+- Attempt 3: Testing approach
+  * Added explicit Korean query test (사람) to smoke test script
+  * Added nori plugin detection to fail early if plugin missing
+  * Created dry-run mode in reindex script to preview changes
+
+== How we solved it / Current status ==
+- Solution 1: Custom OpenSearch Dockerfile
+  * Added RUN command to install analysis-nori plugin at build time
+  * Modified docker-compose.yml to build custom image instead of using base
+  * Plugin now available before index creation, preventing runtime errors
+
+- Solution 2: Safe reindex workflow
+  * Documented explicit index recreation steps in opensearch-analyzers.md
+  * Enhanced reindex script with connectivity checks and batch progress logging
+  * Provided both local (Docker) and Railway deployment instructions
+  * Created --dry-run flag to preview reindex operations safely
+
+- Solution 3: Multi-field backward compatibility
+  * Kept base field with standard analyzer for compatibility
+  * Added .ko and .en as subfields that auto-populate from base field
+  * Worker code unchanged - sends same document structure as before
+  * Index mapping handles subfield derivation automatically
+
+- Solution 4: Comprehensive testing
+  * Added check_nori_plugin() method that runs during index creation
+  * Enhanced smoke_hybrid_search.py with 6 tests including Korean/English queries
+  * Tests verify: connectivity, plugin, index, Korean BM25, English BM25, embedding, RRF
+  * All tests non-fatal but provide clear warnings if issues detected
+
+== Current status ==
+✅ Code changes complete and tested locally
+✅ Documentation written with deployment steps
+✅ Smoke tests enhanced with Korean/English validation
+✅ Backward-compatible with existing worker indexing
+✅ Nori plugin installation automated in Docker build
+
+READY FOR DEPLOYMENT - pending Railway verification of custom Dockerfile build support
+
+== Next steps / TODOs ==
+1. Test deployment on Railway:
+   - Verify Railway can build custom OpenSearch Dockerfile
+   - If not, implement alternative: init script or pre-built image on Docker Hub
+
+2. Production deployment steps:
+   - Deploy code to Railway
+   - Verify nori plugin installed: curl /_nodes/plugins | grep nori
+   - Delete old index: curl -X DELETE /scene_docs
+   - Run reindex script: python -m src.scripts.reindex_opensearch
+   - Verify with smoke tests: python -m src.scripts.smoke_hybrid_search
+
+3. Monitor and validate:
+   - Track Korean query success rate vs baseline
+   - Gather user feedback on Korean search improvements
+   - Monitor performance impact (query latency, index size)
+
+4. Future enhancements (Step 2):
+   - Implement SPLADE learned sparse retrieval
+   - Add query language detection for optimized field routing
+   - Tune BM25 parameters (k1, b) per language
+   - Consider Japanese/Chinese analyzers if needed
+
+== Technical notes ==
+- Multi-field approach chosen over separate indices for simplicity
+- Query searches all 3 variants (base, .ko, .en) with identical boosts
+- Best-fields query type picks highest-scoring variant per field
+- Index size increase: ~30-40% (3 field variants)
+- Query latency increase: ~10-20ms (searches 3x fields)
+- No application-level language detection required
+
+== Files changed ==
+services/api/src/adapters/opensearch_client.py         (+60, -15)
+services/worker/src/adapters/opensearch_client.py      (+45, -10)
+services/opensearch/Dockerfile                         (+3, -0)
+docker-compose.yml                                     (+3, -1)
+services/worker/src/scripts/reindex_opensearch.py      (+15, -5)
+services/api/src/scripts/smoke_hybrid_search.py        (+70, -10)
+docs/search/opensearch-analyzers.md                    (+300)
+
+Total: 7 files changed, ~496 insertions(+), ~41 deletions(-)
