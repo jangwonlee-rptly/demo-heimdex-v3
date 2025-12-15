@@ -1,0 +1,128 @@
+[2025-12-15 22:16] Added Video Filename Display to Search Results
+File: devlog/2512152216.txt
+
+== What we worked on ==
+- Added video filename display to search results
+- Clicking the filename navigates to the video detail page
+- Implemented efficient batch-fetching of video filenames in search hydration
+
+== Why this change ==
+Users searching for scenes had no context about which video each result came from:
+1. Search results only showed scene metadata (timestamp, description, transcript)
+2. The video_id was available but not human-readable
+3. To identify the source video, users had to click each scene and wait for video load
+4. No quick way to navigate directly to the full video detail page
+
+The new feature:
+1. Shows the filename below each scene's timestamp in search results
+2. Filename is clickable and navigates to /videos/{video_id}
+3. Uses cyan accent color with hover effects for clear affordance
+4. Efficient implementation using batch query (one DB call for all videos)
+
+== Changes made ==
+- services/api/src/domain/schemas.py:
+  * Added video_filename optional field to VideoSceneResponse
+  * Field description explains it's included in search results for display
+
+- services/api/src/adapters/database.py:
+  * Added get_video_filenames_by_ids() method
+  * Takes list of video UUIDs, returns dict mapping video_id → filename
+  * Deduplicates IDs before query for efficiency
+  * Single batch query instead of N+1 queries
+
+- services/api/src/routes/search.py:
+  * Updated _hydrate_scenes() function
+  * Collects unique video_ids from fetched scenes
+  * Batch-fetches filenames using new database method
+  * Includes video_filename in each VideoSceneResponse
+
+- services/frontend/src/types/index.ts:
+  * Added video_filename optional field to VideoScene interface
+
+- services/frontend/src/app/search/page.tsx:
+  * Added filename display below scene timestamp/similarity badges
+  * Clickable span with play icon + filename text
+  * Uses e.stopPropagation() to prevent triggering scene click handler
+  * Navigates to /videos/{video_id} on click
+  * Styled with accent-cyan color, hover:underline effect
+
+== Technical details ==
+
+### Database Query Optimization
+Instead of fetching video data for each scene individually (N+1 problem),
+we batch all video IDs and fetch filenames in one query:
+
+```python
+# Collect unique video IDs from scenes
+video_ids = list(set(scene.video_id for scene in scenes))
+
+# Single batch query
+filename_map = db.get_video_filenames_by_ids(video_ids)
+
+# O(1) lookup per scene
+video_filename = filename_map.get(str(scene.video_id))
+```
+
+### Frontend Navigation Pattern
+The filename link uses stopPropagation to allow independent navigation:
+
+```tsx
+<span
+  onClick={(e) => {
+    e.stopPropagation();  // Don't trigger parent scene click
+    router.push(`/videos/${scene.video_id}`);
+  }}
+  className="text-xs text-accent-cyan hover:text-accent-cyan/80 hover:underline cursor-pointer"
+>
+  {scene.video_filename}
+</span>
+```
+
+== Problems encountered ==
+- Problem 1: N+1 query concern
+  * Each scene has a video_id, but video filename is in videos table
+  * Fetching video for each scene would be O(N) database calls
+  * Search results can have 20+ scenes from multiple videos
+
+== How we solved it ==
+- Solution 1: Batch query with deduplication
+  * Collect all unique video_ids from search results
+  * Single query: SELECT id, filename FROM videos WHERE id IN (...)
+  * Build lookup map, O(1) access per scene
+  * Typical search has ~5-10 unique videos, so very efficient
+
+== Current status ==
+✅ VideoSceneResponse schema updated with video_filename field
+✅ Database method added for batch filename fetching
+✅ Search hydration includes video filenames
+✅ Frontend type updated
+✅ Search results display clickable filename with navigation
+✅ Proper event handling (stopPropagation for independent click)
+
+READY FOR TESTING
+
+== Next steps / TODOs ==
+1. Test in Docker environment to verify end-to-end flow
+2. Consider adding filename to the video player panel header when scene is selected
+3. Consider truncating very long filenames with ellipsis
+4. Add tooltip showing full filename on hover if truncated
+
+== Files changed ==
+services/api/src/domain/schemas.py                (+5, -0)
+services/api/src/adapters/database.py             (+36, -0)
+services/api/src/routes/search.py                 (+5, -0)
+services/frontend/src/types/index.ts              (+1, -0)
+services/frontend/src/app/search/page.tsx         (+16, -0)
+
+Total: 5 files changed, ~63 insertions(+), ~0 deletions(-)
+
+== UI Preview ==
+Search result card now shows:
+
+┌─────────────────────────────────────────────────────┐
+│ [Thumbnail] Scene 3    0.5s - 2.3s    [85% match]   │
+│             ▶ my_vacation_video.mp4  ← clickable    │
+│             A person walking through a park...      │
+│             "The weather is beautiful today"        │
+│             [tag1] [tag2] [tag3]                    │
+└─────────────────────────────────────────────────────┘

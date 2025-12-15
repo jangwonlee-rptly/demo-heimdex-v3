@@ -1,0 +1,41 @@
+[2025-12-15 12:55] Fix OpenSearch Docker entrypoint for Railway deployment
+File: devlog/2512151255.txt
+
+== What we worked on ==
+- Debugging OpenSearch container startup failure on Railway
+- The container was failing with: `/usr/local/bin/docker-entrypoint.sh: line 9: exec: su: not found`
+
+== Changes made ==
+- services/opensearch/Dockerfile: Added gosu download from GitHub releases
+- services/opensearch/docker-entrypoint.sh: Changed from `su` to `gosu` for privilege dropping
+
+== Problems encountered ==
+- Problem 1: `su` command not found in OpenSearch container on Railway
+  - The entrypoint script was using `exec su -s /bin/bash opensearch -c "..."` to drop privileges
+  - The OpenSearch base image (Amazon Linux 2023) doesn't include `su` or `runuser`
+
+- Problem 2: `gosu` not available via yum on Amazon Linux 2023
+  - First attempted: `RUN yum install -y gosu && yum clean all`
+  - Failed with: "No match for argument: gosu" / "Unable to find a match: gosu"
+
+== How we tried to solve it ==
+- Attempt 1: Previous commit (537fe7f) replaced `runuser` with `su` - didn't work
+- Attempt 2: Tried installing gosu via yum package manager - package not in AL2023 repos
+
+== How we solved it / Current status ==
+- Downloaded gosu binary directly from GitHub releases:
+  ```
+  RUN curl -fsSL "https://github.com/tianon/gosu/releases/download/1.17/gosu-amd64" -o /usr/local/bin/gosu \
+      && chmod +x /usr/local/bin/gosu \
+      && gosu --version
+  ```
+- Updated entrypoint to use simpler gosu syntax:
+  ```
+  exec gosu opensearch /usr/share/opensearch/opensearch-docker-entrypoint.sh
+  ```
+- Status: Changes made locally, pending deployment to Railway to verify fix
+
+== Next steps / TODOs ==
+- Commit and push changes to trigger Railway rebuild
+- Verify OpenSearch starts successfully on Railway
+- If deploying to ARM architecture in future, add architecture detection for gosu download

@@ -214,6 +214,22 @@ export default function SearchPage() {
                             </span>
                           )}
                         </div>
+                        {scene.video_filename && (
+                          <div className="mb-1.5">
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/videos/${scene.video_id}`);
+                              }}
+                              className="text-xs text-accent-cyan hover:text-accent-cyan/80 hover:underline cursor-pointer inline-flex items-center gap-1"
+                            >
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polygon points="5 3 19 12 5 21 5 3" />
+                              </svg>
+                              {scene.video_filename}
+                            </span>
+                          </div>
+                        )}
                         {(scene.visual_description || scene.visual_summary) && (
                           <p className="text-sm text-surface-300 line-clamp-2 mb-1.5">
                             {scene.visual_description || scene.visual_summary}

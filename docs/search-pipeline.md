@@ -162,9 +162,14 @@ All search behavior is controlled via environment variables (`.env`):
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `HYBRID_SEARCH_ENABLED` | `true` | Enables/disables hybrid search (dense+lexical). If `false`, uses dense-only |
+| `FUSION_METHOD` | `minmax_mean` | Fusion algorithm: `minmax_mean` (score-based) or `rrf` (rank-based) |
+| `FUSION_WEIGHT_DENSE` | `0.7` | Weight for dense scores in minmax_mean fusion (must sum to 1.0 with lexical) |
+| `FUSION_WEIGHT_LEXICAL` | `0.3` | Weight for lexical scores in minmax_mean fusion (must sum to 1.0 with dense) |
+| `FUSION_MINMAX_EPS` | `1e-9` | Epsilon to avoid division by zero in min-max normalization |
 | `RRF_K` | `60` | RRF constant for rank fusion (higher = less difference between top/bottom ranks) |
 | `CANDIDATE_K_DENSE` | `200` | Number of candidates to retrieve from pgvector before fusion |
 | `CANDIDATE_K_LEXICAL` | `200` | Number of candidates to retrieve from OpenSearch before fusion |
+| `SEARCH_DEBUG` | `false` | If true, include debug fields (raw/norm scores, ranks) in response |
 | `OPENSEARCH_URL` | `http://opensearch:9200` | OpenSearch cluster URL |
 | `OPENSEARCH_INDEX_SCENES` | `scene_docs` | Index name for scene documents |
 | `OPENSEARCH_TIMEOUT_S` | `1.0` | Timeout for OpenSearch requests |
@@ -658,7 +663,251 @@ Final Ranking: A (0.0323) > B (0.0164) > C (0.0161)
 
 ## Ranking & Scoring
 
-### Exact Scoring Formula
+### Score Scale Incompatibility (The Problem)
+
+When combining results from multiple retrieval systems, we face a fundamental challenge:
+
+| System | Score Range | Typical Values | Example |
+|--------|-------------|----------------|---------|
+| **Dense (pgvector)** | [0.0, 1.0] | 0.3 - 0.9 | "walking dog" → 0.78 |
+| **Lexical (BM25)** | [0, ∞) | 5 - 50 | "walking dog" → 23.4 |
+
+**Why this matters:** If we simply add or average raw scores, BM25's larger values dominate:
+- Dense: 0.78, Lexical: 23.4 → Average: 12.09 (99% from lexical!)
+- This defeats the purpose of hybrid search
+
+**Solution:** Normalize scores before combining, or use rank-based fusion (RRF).
+
+---
+
+### Fusion Methods
+
+Heimdex supports two fusion methods, configurable via `FUSION_METHOD` environment variable:
+
+#### 1. Min-Max Weighted Mean (Default)
+
+**Config:** `FUSION_METHOD=minmax_mean`
+
+**Algorithm:**
+1. Normalize each system's scores to [0, 1] using min-max normalization
+2. Combine with weighted arithmetic mean
+
+**Min-Max Normalization Formula:**
+```
+norm(x) = (x - min) / (max - min + eps)
+
+Where:
+  - min = minimum score in that system's candidate list
+  - max = maximum score in that system's candidate list
+  - eps = 1e-9 (avoid division by zero)
+```
+
+**Edge Cases:**
+- Empty list → Skip system (contributes 0)
+- Single element → Normalized to 1.0 (full contribution)
+- All same score (max == min) → All normalized to 1.0 (uniform contribution)
+
+**Weighted Mean Formula:**
+```
+final_score = w_dense × dense_norm + w_lexical × lexical_norm
+
+Where:
+  - w_dense = FUSION_WEIGHT_DENSE (default: 0.7)
+  - w_lexical = FUSION_WEIGHT_LEXICAL (default: 0.3)
+  - Weights must sum to 1.0
+```
+
+**If scene only in one system:**
+- Missing normalized score treated as 0.0
+- Scene still gets partial score from present system
+
+**Example:**
+```
+Dense candidates:   a=0.95, b=0.85, c=0.75
+Lexical candidates: b=30.0, d=25.0, e=20.0
+
+Step 1: Normalize dense scores
+  a: (0.95-0.75)/(0.95-0.75) = 1.0
+  b: (0.85-0.75)/(0.95-0.75) = 0.5
+  c: (0.75-0.75)/(0.95-0.75) = 0.0
+
+Step 2: Normalize lexical scores
+  b: (30-20)/(30-20) = 1.0
+  d: (25-20)/(30-20) = 0.5
+  e: (20-20)/(30-20) = 0.0
+
+Step 3: Weighted mean (0.7/0.3)
+  a: 0.7×1.0 + 0.3×0.0 = 0.70  (dense only)
+  b: 0.7×0.5 + 0.3×1.0 = 0.65  (both systems!)
+  c: 0.7×0.0 + 0.3×0.0 = 0.00  (lowest dense)
+  d: 0.7×0.0 + 0.3×0.5 = 0.15  (lexical only)
+  e: 0.7×0.0 + 0.3×0.0 = 0.00  (lowest lexical)
+
+Final ranking: a (0.70) > b (0.65) > d (0.15) > c, e (0.00)
+```
+
+**When to use Min-Max Mean:**
+- You want explicit control over system weights
+- Your scores within each system are reliable
+- You want to tune based on query patterns (more semantic vs keyword-focused)
+
+---
+
+#### 2. Reciprocal Rank Fusion (RRF)
+
+**Config:** `FUSION_METHOD=rrf`
+
+**Algorithm:**
+- Uses rank positions instead of raw scores
+- Naturally handles scale differences (ignores scores entirely)
+
+**RRF Formula:**
+```
+RRF_score(scene) = Σ_i [ 1 / (k + rank_i(scene)) ]
+
+Where:
+  - i ∈ {dense, lexical} (retrieval systems)
+  - k = RRF_K (default: 60)
+  - rank_i = 1-indexed rank in system i (0 contribution if not present)
+```
+
+**Example:**
+```
+Dense: a=rank1, b=rank2
+Lexical: b=rank1, c=rank2
+
+With k=60:
+  a: 1/(60+1) + 0       = 0.0164
+  b: 1/(60+2) + 1/(60+1) = 0.0161 + 0.0164 = 0.0325  ← highest (both systems)
+  c: 0       + 1/(60+2) = 0.0161
+
+Final ranking: b (0.0325) > a (0.0164) > c (0.0161)
+```
+
+**Tuning the k parameter:**
+- k=60: Standard choice (original paper recommendation)
+- k<60: Top ranks get much higher weight (more aggressive)
+- k>60: Flatter curve, less difference between ranks (more egalitarian)
+
+**When to use RRF:**
+- Raw scores have outliers or are unreliable
+- You want equal weighting without tuning
+- Scores from one system vary wildly across queries
+
+---
+
+### Configuration Reference
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FUSION_METHOD` | `minmax_mean` | Fusion algorithm: `minmax_mean` or `rrf` |
+| `FUSION_WEIGHT_DENSE` | `0.7` | Weight for dense scores (minmax_mean only) |
+| `FUSION_WEIGHT_LEXICAL` | `0.3` | Weight for lexical scores (minmax_mean only) |
+| `FUSION_MINMAX_EPS` | `1e-9` | Epsilon to avoid division by zero |
+| `RRF_K` | `60` | K constant for RRF (rrf only) |
+
+**Per-Request Overrides:**
+
+Clients can override fusion settings per request:
+
+```json
+POST /api/search
+{
+  "query": "person walking",
+  "limit": 10,
+  "fusion_method": "minmax_mean",
+  "weight_dense": 0.5,
+  "weight_lexical": 0.5
+}
+```
+
+**Validation:** Weights must sum to approximately 1.0 (tolerance: 0.01)
+
+---
+
+### Response Schema
+
+**Score Fields in Results:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `score` | float | The ranking score used for ordering |
+| `score_type` | string | Fusion method: `minmax_mean`, `rrf`, `dense_only`, `lexical_only` |
+| `similarity` | float | **DEPRECATED** - Alias for `score` (backward compatibility) |
+
+**Debug Fields (when `SEARCH_DEBUG=true`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dense_score_raw` | float | Raw cosine similarity from pgvector |
+| `lexical_score_raw` | float | Raw BM25 score from OpenSearch |
+| `dense_score_norm` | float | Min-max normalized dense score [0, 1] |
+| `lexical_score_norm` | float | Min-max normalized lexical score [0, 1] |
+| `dense_rank` | int | Rank in dense retrieval (1-indexed) |
+| `lexical_rank` | int | Rank in lexical retrieval (1-indexed) |
+
+**Response Metadata:**
+
+```json
+{
+  "query": "person walking",
+  "results": [...],
+  "total": 10,
+  "latency_ms": 245,
+  "fusion_method": "minmax_mean",
+  "fusion_weights": {"dense": 0.7, "lexical": 0.3}
+}
+```
+
+---
+
+### Tuning Guidance
+
+**Recommended Starting Points:**
+
+| Use Case | Dense Weight | Lexical Weight | Rationale |
+|----------|--------------|----------------|-----------|
+| **General search** | 0.7 | 0.3 | Semantic understanding primary, keywords secondary |
+| **Exact phrase queries** | 0.3 | 0.7 | Users expect exact text matches |
+| **Multilingual content** | 0.8 | 0.2 | Embeddings handle cross-lingual better |
+| **Noisy transcripts** | 0.5 | 0.5 | Balance errors in both systems |
+
+**How to Tune:**
+
+1. **Start with defaults** (0.7/0.3)
+2. **Collect relevance feedback** - Are top results what users want?
+3. **Test with representative queries:**
+   - Semantic queries: "happy moment", "people discussing"
+   - Keyword queries: "iPhone 15", exact transcript phrases
+4. **Adjust weights** based on which system performs better
+5. **Consider RRF** if one system has erratic scores
+
+**Min-Max vs RRF Tradeoffs:**
+
+| Aspect | Min-Max Mean | RRF |
+|--------|--------------|-----|
+| Tunability | High (explicit weights) | Low (only k parameter) |
+| Outlier sensitivity | Can be affected | Very robust |
+| Score interpretability | [0, 1] normalized | Small reciprocal values |
+| Implicit weighting | Explicit via weights | ~50/50 implicit |
+
+---
+
+### Exact Scoring Formulas
+
+**Hybrid Mode (Min-Max Mean - Default):**
+```
+final_score = w_dense × dense_norm + w_lexical × lexical_norm
+
+Where:
+  - dense_norm = (dense_score - min_dense) / (max_dense - min_dense + eps)
+  - lexical_norm = (lexical_score - min_lexical) / (max_lexical - min_lexical + eps)
+  - w_dense = FUSION_WEIGHT_DENSE (default: 0.7)
+  - w_lexical = FUSION_WEIGHT_LEXICAL (default: 0.3)
+  - eps = FUSION_MINMAX_EPS (default: 1e-9)
+```
 
 **Hybrid Mode (RRF):**
 ```
@@ -666,9 +915,9 @@ fused_score(scene) = Σ_i [ 1 / (k + rank_i(scene)) ]
 
 Where:
   - i ∈ {dense, lexical} (retrieval systems)
-  - k = 60 (RRF constant, from settings.RRF_K)
+  - k = RRF_K (default: 60)
   - rank_i(scene) = 1-indexed rank of scene in system i
-                    (None if scene not in that system's results)
+                    (0 contribution if scene not in that system's results)
 ```
 
 **Dense-Only Mode:**

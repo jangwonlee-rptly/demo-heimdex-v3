@@ -1,4 +1,4 @@
-"""Scene search endpoint with hybrid retrieval (dense + lexical + RRF)."""
+"""Scene search endpoint with hybrid retrieval (dense + lexical + configurable fusion)."""
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,11 +11,12 @@ from ..auth import get_current_user, User
 from ..config import settings
 from ..domain.schemas import SearchRequest, SearchResponse, VideoSceneResponse
 from ..domain.search.fusion import (
-    rrf_fuse,
+    fuse,
     dense_only_fusion,
     lexical_only_fusion,
     Candidate,
     FusedCandidate,
+    ScoreType,
 )
 from ..adapters.database import db
 from ..adapters.openai_client import openai_client
@@ -24,6 +25,24 @@ from ..adapters.opensearch_client import opensearch_client
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _validate_fusion_weights(weight_dense: float, weight_lexical: float) -> None:
+    """Validate that fusion weights sum to approximately 1.0.
+
+    Args:
+        weight_dense: Weight for dense scores.
+        weight_lexical: Weight for lexical scores.
+
+    Raises:
+        HTTPException: If weights don't sum to ~1.0 (tolerance 0.01).
+    """
+    if abs(weight_dense + weight_lexical - 1.0) > 0.01:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Fusion weights must sum to 1.0, got dense={weight_dense}, "
+                   f"lexical={weight_lexical}, sum={weight_dense + weight_lexical}"
+        )
 
 
 def _run_dense_search(
@@ -94,8 +113,13 @@ def _run_lexical_search(
 
 def _hydrate_scenes(
     fused_results: list[FusedCandidate],
+    include_debug: bool = False,
 ) -> tuple[list[VideoSceneResponse], int]:
     """Fetch full scene data for fused results.
+
+    Args:
+        fused_results: List of fused candidates from fusion.
+        include_debug: If True, include debug fields (raw/norm scores, ranks).
 
     Returns:
         tuple: (list of VideoSceneResponse objects, elapsed time in ms)
@@ -111,29 +135,56 @@ def _hydrate_scenes(
     # Fetch scenes from database
     scenes = db.get_scenes_by_ids(scene_ids, preserve_order=True)
 
-    # Build lookup for fused scores
-    fused_scores = {r.scene_id: r.fused_score for r in fused_results}
+    # Fetch video filenames for all scenes (batch query)
+    video_ids = list(set(scene.video_id for scene in scenes))
+    filename_map = db.get_video_filenames_by_ids(video_ids)
+
+    # Build lookup for fused results
+    fused_by_id = {r.scene_id: r for r in fused_results}
 
     # Convert to response objects
     responses = []
     for scene in scenes:
-        responses.append(VideoSceneResponse(
-            id=scene.id,
-            video_id=scene.video_id,
-            index=scene.index,
-            start_s=scene.start_s,
-            end_s=scene.end_s,
-            transcript_segment=scene.transcript_segment,
-            visual_summary=scene.visual_summary,
-            combined_text=scene.combined_text,
-            thumbnail_url=scene.thumbnail_url,
-            visual_description=scene.visual_description,
-            visual_entities=scene.visual_entities,
-            visual_actions=scene.visual_actions,
-            tags=scene.tags,
-            similarity=fused_scores.get(str(scene.id)),  # Use fused score as similarity
-            created_at=scene.created_at,
-        ))
+        fused = fused_by_id.get(str(scene.id))
+        if not fused:
+            continue
+
+        # Build response with score information
+        response_data = {
+            "id": scene.id,
+            "video_id": scene.video_id,
+            "video_filename": filename_map.get(str(scene.video_id)),
+            "index": scene.index,
+            "start_s": scene.start_s,
+            "end_s": scene.end_s,
+            "transcript_segment": scene.transcript_segment,
+            "visual_summary": scene.visual_summary,
+            "combined_text": scene.combined_text,
+            "thumbnail_url": scene.thumbnail_url,
+            "visual_description": scene.visual_description,
+            "visual_entities": scene.visual_entities,
+            "visual_actions": scene.visual_actions,
+            "tags": scene.tags,
+            "created_at": scene.created_at,
+            # New score fields
+            "score": fused.score,
+            "score_type": fused.score_type.value,
+            # Legacy field for backward compatibility
+            "similarity": fused.score,
+        }
+
+        # Add debug fields if enabled
+        if include_debug:
+            response_data.update({
+                "dense_score_raw": fused.dense_score_raw,
+                "lexical_score_raw": fused.lexical_score_raw,
+                "dense_score_norm": fused.dense_score_norm,
+                "lexical_score_norm": fused.lexical_score_norm,
+                "dense_rank": fused.dense_rank,
+                "lexical_rank": fused.lexical_rank,
+            })
+
+        responses.append(VideoSceneResponse(**response_data))
 
     elapsed_ms = int((time.time() - start) * 1000)
     return responses, elapsed_ms
@@ -150,19 +201,26 @@ async def search_scenes(
     Uses hybrid search combining:
     - Dense vector search (pgvector) for semantic similarity
     - BM25 lexical search (OpenSearch) for keyword matching
-    - Reciprocal Rank Fusion (RRF) to combine results
+    - Configurable fusion method (Min-Max Mean or RRF) to combine results
 
-    Falls back to dense-only if OpenSearch is unavailable.
+    Fusion Methods:
+    - minmax_mean (default): Normalizes scores to [0,1] and combines with weighted mean
+    - rrf: Reciprocal Rank Fusion using rank positions, more stable with outliers
+
+    Falls back to dense-only or lexical-only if one system fails.
 
     Args:
-        request: Search request parameters including query text, filters, and limits.
+        request: Search request parameters including query text, filters, limits,
+                 and optional fusion overrides (fusion_method, weight_dense, weight_lexical).
         current_user: The authenticated user (injected).
 
     Returns:
-        SearchResponse: Search results including matching scenes, total count, and latency.
+        SearchResponse: Search results including matching scenes, total count, latency,
+                        and fusion metadata (method, weights used).
 
     Raises:
         HTTPException:
+            - 400: If fusion weights don't sum to 1.0.
             - 404: If the specified video is not found.
             - 403: If the user is not authorized to access the video.
             - 500: If both retrieval methods fail.
@@ -177,6 +235,15 @@ async def search_scenes(
     fusion_ms = 0
     hydrate_ms = 0
 
+    # Determine fusion configuration (request overrides server defaults)
+    fusion_method = request.fusion_method or settings.fusion_method
+    weight_dense = request.weight_dense if request.weight_dense is not None else settings.fusion_weight_dense
+    weight_lexical = request.weight_lexical if request.weight_lexical is not None else settings.fusion_weight_lexical
+
+    # Validate weights if both are provided in request
+    if request.weight_dense is not None or request.weight_lexical is not None:
+        _validate_fusion_weights(weight_dense, weight_lexical)
+
     # Get user's preferred language for logging
     user_profile = db.get_user_profile(user_id)
     user_language = user_profile.preferred_language if user_profile else "ko"
@@ -184,7 +251,8 @@ async def search_scenes(
     logger.info(
         f"Search request from user {user_id} (language: {user_language}): "
         f"query='{request.query}', video_id={request.video_id}, limit={request.limit}, "
-        f"hybrid_enabled={settings.hybrid_search_enabled}"
+        f"hybrid_enabled={settings.hybrid_search_enabled}, "
+        f"fusion_method={fusion_method}, weights=({weight_dense:.2f}/{weight_lexical:.2f})"
     )
 
     # If video_id is provided, verify user has access to it
@@ -227,6 +295,7 @@ async def search_scenes(
     dense_candidates: list[Candidate] = []
     lexical_candidates: list[Candidate] = []
     fused_results: list[FusedCandidate] = []
+    actual_score_type: ScoreType = ScoreType.MINMAX_MEAN  # Will be updated based on path taken
 
     if use_hybrid:
         # Run both retrievals concurrently
@@ -261,15 +330,21 @@ async def search_scenes(
                 except Exception as e:
                     logger.error(f"{search_type} search failed: {e}")
 
-        # Fuse results
+        # Fuse results using configured method
         fusion_start = time.time()
         if dense_candidates or lexical_candidates:
-            fused_results = rrf_fuse(
+            fused_results = fuse(
                 dense_candidates=dense_candidates,
                 lexical_candidates=lexical_candidates,
+                method=fusion_method,
+                weight_dense=weight_dense,
+                weight_lexical=weight_lexical,
                 rrf_k=settings.rrf_k,
+                eps=settings.fusion_minmax_eps,
                 top_k=request.limit,
             )
+            if fused_results:
+                actual_score_type = fused_results[0].score_type
         fusion_ms = int((time.time() - fusion_start) * 1000)
 
     elif use_lexical_only:
@@ -281,7 +356,13 @@ async def search_scenes(
             request.video_id,
             request.limit,
         )
-        fused_results = lexical_only_fusion(lexical_candidates, request.limit)
+        fused_results = lexical_only_fusion(
+            lexical_candidates,
+            request.limit,
+            normalize=(fusion_method == "minmax_mean"),  # Normalize if using minmax
+            eps=settings.fusion_minmax_eps,
+        )
+        actual_score_type = ScoreType.LEXICAL_ONLY
 
     elif query_embedding is not None:
         # Dense-only mode (OpenSearch unavailable or hybrid disabled)
@@ -293,7 +374,13 @@ async def search_scenes(
             request.limit,
             request.threshold,
         )
-        fused_results = dense_only_fusion(dense_candidates, request.limit)
+        fused_results = dense_only_fusion(
+            dense_candidates,
+            request.limit,
+            normalize=(fusion_method == "minmax_mean"),  # Normalize if using minmax
+            eps=settings.fusion_minmax_eps,
+        )
+        actual_score_type = ScoreType.DENSE_ONLY
 
     else:
         # Both embedding and OpenSearch failed
@@ -302,8 +389,11 @@ async def search_scenes(
             detail="Failed to process search query",
         )
 
-    # Hydrate scenes
-    scene_responses, hydrate_ms = _hydrate_scenes(fused_results)
+    # Hydrate scenes with debug info if enabled
+    scene_responses, hydrate_ms = _hydrate_scenes(
+        fused_results,
+        include_debug=settings.search_debug,
+    )
 
     # Calculate total latency
     latency_ms = int((time.time() - start_time) * 1000)
@@ -323,12 +413,17 @@ async def search_scenes(
     # Log timing breakdown
     search_mode = "hybrid" if use_hybrid else ("lexical" if use_lexical_only else "dense")
     logger.info(
-        f"Search completed: mode={search_mode}, results={len(scene_responses)}, "
-        f"latency={latency_ms}ms "
+        f"Search completed: mode={search_mode}, fusion={actual_score_type.value}, "
+        f"results={len(scene_responses)}, latency={latency_ms}ms "
         f"(embed={embedding_ms}ms, dense={dense_ms}ms, lexical={lexical_ms}ms, "
         f"fusion={fusion_ms}ms, hydrate={hydrate_ms}ms), "
         f"dense_candidates={len(dense_candidates)}, lexical_candidates={len(lexical_candidates)}"
     )
+
+    # Build fusion metadata for response
+    fusion_weights = None
+    if actual_score_type == ScoreType.MINMAX_MEAN:
+        fusion_weights = {"dense": weight_dense, "lexical": weight_lexical}
 
     # Build response
     response = SearchResponse(
@@ -336,6 +431,8 @@ async def search_scenes(
         results=scene_responses,
         total=len(scene_responses),
         latency_ms=latency_ms,
+        fusion_method=actual_score_type.value,
+        fusion_weights=fusion_weights,
     )
 
     # Reset OpenSearch availability cache for next request

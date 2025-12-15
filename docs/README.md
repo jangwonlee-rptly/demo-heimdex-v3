@@ -79,6 +79,21 @@ Historical development notes and decisions
 
 ## Search Subsystem Documentation
 
+### [Search Pipeline Deep Dive](./search-pipeline-deep-dive.md)
+**Implementation-level deep dive** for senior engineers:
+- Exhaustive scoring signal tables with weights and code pointers
+- Timeout behavior per component (embedding, pgvector, OpenSearch)
+- Cancellation and error handling semantics
+- Risk analysis and cross-tenant isolation verification
+- 10 prioritized improvements (quick wins to major refactors)
+- Complete code pointer index (every function, every stage)
+
+**Read this** if you need to:
+- Understand exactly why a scene ranked above another
+- Verify multi-tenant isolation is correctly enforced
+- Plan search infrastructure improvements
+- Onboard onto the search codebase quickly
+
 ### [OpenSearch Analyzers](./search/opensearch-analyzers.md)
 Detailed guide for Korean/English analyzer setup:
 - Index mapping with multi-field strategy
@@ -86,7 +101,7 @@ Detailed guide for Korean/English analyzer setup:
 - Deployment steps for local and Railway
 - Troubleshooting guide
 
-**Note:** This is supplementary to the main [Search Pipeline](./search-pipeline.md) documentation
+**Note:** These are supplementary to the main [Search Pipeline](./search-pipeline.md) documentation
 
 ---
 
@@ -96,11 +111,14 @@ Detailed guide for Korean/English analyzer setup:
 
 - **Understand how search works** → [Search Pipeline](./search-pipeline.md)
 - **Debug search results** → [Search Pipeline: Observability & Debugging](./search-pipeline.md#observability--debugging)
+- **Understand why Scene A ranked above Scene B** → [Deep Dive: Scoring Signals](./search-pipeline-deep-dive.md#scoring-signal-table)
 - **Optimize search performance** → [Search Pipeline: Performance & Unit Economics](./search-pipeline.md#performance--unit-economics)
+- **Plan search improvements** → [Deep Dive: Gaps & Improvements](./search-pipeline-deep-dive.md#gaps-risks-and-improvement-opportunities)
 - **Add a new video processing feature** → [Phase 1](./PHASE1_IMPLEMENTATION_SUMMARY.md) + [Architecture Overview](./ARCHITECTURE_OVERVIEW.md)
 - **Modify scene export** → [YouTube Shorts Export Feature](./FEATURE_SPEC_YOUTUBE_SHORTS_EXPORT.md)
 - **Deploy to production** → [Search Pipeline: Edge Cases](./search-pipeline.md#edge-cases--fallbacks) + [OpenSearch Analyzers](./search/opensearch-analyzers.md)
 - **Understand cost structure** → [Search Pipeline: Unit Economics](./search-pipeline.md#performance--unit-economics)
+- **Find a specific function** → [Deep Dive: Code Pointer Index](./search-pipeline-deep-dive.md#appendix-code-pointer-index-exhaustive)
 
 ---
 

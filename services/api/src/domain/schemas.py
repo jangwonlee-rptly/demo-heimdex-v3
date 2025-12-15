@@ -185,10 +185,19 @@ class VideoListResponse(BaseModel):
 
 # Video Scene Schemas
 class VideoSceneResponse(BaseModel):
-    """Schema for video scene response."""
+    """Schema for video scene response.
+
+    When returned from search results, includes scoring information.
+    The 'similarity' field is kept for backward compatibility but 'score' is preferred.
+    """
 
     id: UUID
     video_id: UUID
+    video_filename: Optional[str] = Field(
+        None,
+        description="Filename of the video this scene belongs to. "
+                    "Included in search results for display purposes."
+    )
     index: int
     start_s: float
     end_s: float
@@ -200,7 +209,52 @@ class VideoSceneResponse(BaseModel):
     visual_entities: Optional[list[str]] = None
     visual_actions: Optional[list[str]] = None
     tags: Optional[list[str]] = None
-    similarity: Optional[float] = None  # Only present in search results
+
+    # Search scoring fields (only present in search results)
+    # Primary score field - the actual ranking score used
+    score: Optional[float] = Field(
+        None,
+        description="The ranking score used for ordering results. "
+                    "Scale depends on score_type: minmax_mean/dense_only/lexical_only=[0,1], rrf=[0,0.03]"
+    )
+    # Type of fusion/scoring method used
+    score_type: Optional[str] = Field(
+        None,
+        description="Type of scoring: 'minmax_mean', 'rrf', 'dense_only', or 'lexical_only'"
+    )
+
+    # Legacy field for backward compatibility (deprecated, use 'score' instead)
+    similarity: Optional[float] = Field(
+        None,
+        description="DEPRECATED: Use 'score' field instead. Kept for backward compatibility."
+    )
+
+    # Debug fields (only present when SEARCH_DEBUG=true)
+    dense_score_raw: Optional[float] = Field(
+        None,
+        description="Raw dense (vector similarity) score before normalization. Debug only."
+    )
+    lexical_score_raw: Optional[float] = Field(
+        None,
+        description="Raw lexical (BM25) score before normalization. Debug only."
+    )
+    dense_score_norm: Optional[float] = Field(
+        None,
+        description="Min-max normalized dense score [0,1]. Debug only."
+    )
+    lexical_score_norm: Optional[float] = Field(
+        None,
+        description="Min-max normalized lexical score [0,1]. Debug only."
+    )
+    dense_rank: Optional[int] = Field(
+        None,
+        description="Rank in dense retrieval results (1-indexed). Debug only."
+    )
+    lexical_rank: Optional[int] = Field(
+        None,
+        description="Rank in lexical retrieval results (1-indexed). Debug only."
+    )
+
     created_at: Optional[datetime] = None  # Not returned by search RPC
 
     model_config = {"from_attributes": True}
@@ -208,21 +262,60 @@ class VideoSceneResponse(BaseModel):
 
 # Search Schemas
 class SearchRequest(BaseModel):
-    """Schema for search request."""
+    """Schema for search request.
+
+    Supports optional fusion configuration overrides per request.
+    If not provided, server defaults from environment variables are used.
+    """
 
     query: str = Field(..., min_length=1, max_length=1000)
     video_id: Optional[UUID] = None  # If provided, search only in this video
     limit: int = Field(10, ge=1, le=100)
     threshold: float = Field(0.2, ge=0.0, le=1.0)
 
+    # Fusion configuration overrides (optional)
+    fusion_method: Optional[str] = Field(
+        None,
+        description="Fusion method: 'minmax_mean' (default) or 'rrf'. "
+                    "minmax_mean normalizes and weights scores; rrf uses rank-based fusion.",
+        pattern="^(minmax_mean|rrf)$",
+    )
+    weight_dense: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Weight for dense (semantic) scores in minmax_mean fusion. "
+                    "Must sum with weight_lexical to ~1.0. Default: 0.7",
+    )
+    weight_lexical: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Weight for lexical (BM25) scores in minmax_mean fusion. "
+                    "Must sum with weight_dense to ~1.0. Default: 0.3",
+    )
+
 
 class SearchResponse(BaseModel):
-    """Schema for search response."""
+    """Schema for search response.
+
+    Includes fusion metadata so clients understand how scores were computed.
+    """
 
     query: str
     results: list[VideoSceneResponse]
     total: int
     latency_ms: int
+
+    # Fusion metadata (helps clients understand score semantics)
+    fusion_method: Optional[str] = Field(
+        None,
+        description="Fusion method used: 'minmax_mean', 'rrf', 'dense_only', or 'lexical_only'"
+    )
+    fusion_weights: Optional[dict] = Field(
+        None,
+        description="Fusion weights used (only for minmax_mean): {'dense': 0.7, 'lexical': 0.3}"
+    )
 
 
 class VideoDetailsResponse(BaseModel):

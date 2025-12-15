@@ -116,6 +116,7 @@ export interface ProcessingStats {
 export interface VideoScene {
   id: string;
   video_id: string;
+  video_filename?: string; // Present only in search results
   index: number;
   start_s: number;
   end_s: number;

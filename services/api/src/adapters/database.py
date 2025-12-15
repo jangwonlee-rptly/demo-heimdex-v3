@@ -464,6 +464,43 @@ class Database:
         else:
             return list(scenes_by_id.values())
 
+    def get_video_filenames_by_ids(
+        self,
+        video_ids: list[UUID],
+    ) -> dict[str, str]:
+        """Get video filenames for a list of video IDs.
+
+        Used to enrich search results with video filenames.
+
+        Args:
+            video_ids: List of video UUIDs to fetch filenames for.
+
+        Returns:
+            dict[str, str]: Mapping of video_id (string) to filename.
+        """
+        if not video_ids:
+            return {}
+
+        # Convert UUIDs to strings and deduplicate
+        id_strings = list(set(str(vid) for vid in video_ids))
+
+        response = (
+            self.client.table("videos")
+            .select("id,filename")
+            .in_("id", id_strings)
+            .execute()
+        )
+
+        # Build mapping
+        filename_map: dict[str, str] = {}
+        for row in response.data:
+            video_id = row["id"]
+            filename = row.get("filename")
+            if filename:
+                filename_map[video_id] = filename
+
+        return filename_map
+
     def log_search_query(
         self,
         user_id: UUID,

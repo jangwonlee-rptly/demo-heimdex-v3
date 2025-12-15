@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     candidate_k_dense: int = 200
     candidate_k_lexical: int = 200
 
+    # Fusion method configuration
+    # Options: "minmax_mean" (default) | "rrf"
+    # minmax_mean: Min-Max normalize scores, then weighted arithmetic mean
+    # rrf: Reciprocal Rank Fusion (rank-based, more stable with outliers)
+    fusion_method: str = "minmax_mean"
+
+    # Weights for minmax_mean fusion (must sum to 1.0)
+    # dense (semantic/vector similarity) vs lexical (BM25 keyword matching)
+    # Default 0.7/0.3 favors semantic understanding while preserving keyword signal
+    fusion_weight_dense: float = 0.7
+    fusion_weight_lexical: float = 0.3
+
+    # Small epsilon to avoid division by zero in min-max normalization
+    fusion_minmax_eps: float = 1e-9
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins into a list.
