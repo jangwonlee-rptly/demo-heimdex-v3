@@ -20,6 +20,19 @@ SCENE_INDEX_MAPPING = {
         "number_of_shards": 1,
         "number_of_replicas": 0,
         "refresh_interval": "1s",
+        # Custom analyzers for Korean and English
+        "analysis": {
+            "analyzer": {
+                "ko_nori": {
+                    "type": "custom",
+                    "tokenizer": "nori_tokenizer",
+                    "filter": ["lowercase"],
+                },
+                "en_english": {
+                    "type": "english",
+                },
+            }
+        },
     },
     "mappings": {
         "properties": {
@@ -31,28 +44,48 @@ SCENE_INDEX_MAPPING = {
             "index": {"type": "integer"},
             "start_s": {"type": "float"},
             "end_s": {"type": "float"},
-            # Text fields for BM25 search
+            # Text fields for BM25 search with multi-field Korean/English analysis
             "transcript_segment": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "visual_summary": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "visual_description": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "combined_text": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
-            # Tags: keyword for filtering + text for BM25
+            # Tags: keyword for filtering + text for BM25 with multi-field analysis
             "tags": {"type": "keyword"},
             "tags_text": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             # Metadata
             "thumbnail_url": {"type": "keyword", "index": False},

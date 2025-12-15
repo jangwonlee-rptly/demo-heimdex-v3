@@ -12,7 +12,9 @@ services:
 
   # OpenSearch for BM25 lexical search (hybrid search)
   opensearch:
-    image: opensearchproject/opensearch:2
+    build:
+      context: ./services/opensearch
+      dockerfile: Dockerfile
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true

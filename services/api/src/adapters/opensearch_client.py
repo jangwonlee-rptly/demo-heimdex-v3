@@ -20,6 +20,19 @@ SCENE_INDEX_MAPPING = {
         "number_of_shards": 1,
         "number_of_replicas": 0,
         "refresh_interval": "1s",
+        # Custom analyzers for Korean and English
+        "analysis": {
+            "analyzer": {
+                "ko_nori": {
+                    "type": "custom",
+                    "tokenizer": "nori_tokenizer",
+                    "filter": ["lowercase"],
+                },
+                "en_english": {
+                    "type": "english",
+                },
+            }
+        },
     },
     "mappings": {
         "properties": {
@@ -31,28 +44,48 @@ SCENE_INDEX_MAPPING = {
             "index": {"type": "integer"},
             "start_s": {"type": "float"},
             "end_s": {"type": "float"},
-            # Text fields for BM25 search
+            # Text fields for BM25 search with multi-field Korean/English analysis
             "transcript_segment": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "visual_summary": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "visual_description": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             "combined_text": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
-            # Tags: keyword for filtering + text for BM25
+            # Tags: keyword for filtering + text for BM25 with multi-field analysis
             "tags": {"type": "keyword"},
             "tags_text": {
                 "type": "text",
                 "analyzer": "standard",
+                "fields": {
+                    "ko": {"type": "text", "analyzer": "ko_nori"},
+                    "en": {"type": "text", "analyzer": "en_english"},
+                },
             },
             # Metadata
             "thumbnail_url": {"type": "keyword", "index": False},
@@ -108,6 +141,30 @@ class OpenSearchClient:
         """Reset the availability cache for next check."""
         self._available = None
 
+    def check_nori_plugin(self) -> bool:
+        """Check if the analysis-nori plugin is installed.
+
+        Returns:
+            bool: True if nori plugin is available, False otherwise.
+        """
+        try:
+            # Get node info to check installed plugins
+            node_info = self.client.nodes.info(node_id="_all", filter_path="nodes.*.plugins")
+
+            for node_id, node_data in node_info.get("nodes", {}).items():
+                plugins = node_data.get("plugins", [])
+                for plugin in plugins:
+                    plugin_name = plugin.get("name", "")
+                    if "nori" in plugin_name.lower():
+                        logger.info(f"Nori plugin found: {plugin_name}")
+                        return True
+
+            logger.warning("Nori plugin not found in OpenSearch installation")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to check nori plugin: {e}")
+            return False
+
     def ensure_index(self) -> bool:
         """Ensure the scene index exists with proper mapping.
 
@@ -115,6 +172,13 @@ class OpenSearchClient:
             bool: True if index exists or was created, False on error.
         """
         index_name = settings.opensearch_index_scenes
+
+        # Log plugin availability (non-fatal check)
+        try:
+            self.check_nori_plugin()
+        except Exception as e:
+            logger.warning(f"Could not check nori plugin availability: {e}")
+
         try:
             if not self.client.indices.exists(index=index_name):
                 logger.info(f"Creating OpenSearch index: {index_name}")
@@ -164,6 +228,7 @@ class OpenSearchClient:
             filter_conditions.append({"term": {"video_id": video_id}})
 
         # Multi-match query across text fields with boosts
+        # Search both Korean (.ko) and English (.en) analyzed subfields plus base field
         search_body = {
             "size": size,
             "query": {
@@ -174,11 +239,26 @@ class OpenSearchClient:
                             "multi_match": {
                                 "query": query,
                                 "fields": [
+                                    # Tags - highest boost
                                     "tags_text^4",
+                                    "tags_text.ko^4",
+                                    "tags_text.en^4",
+                                    # Transcript - high boost
                                     "transcript_segment^3",
+                                    "transcript_segment.ko^3",
+                                    "transcript_segment.en^3",
+                                    # Visual description - medium boost
                                     "visual_description^2",
+                                    "visual_description.ko^2",
+                                    "visual_description.en^2",
+                                    # Visual summary - medium boost
                                     "visual_summary^2",
+                                    "visual_summary.ko^2",
+                                    "visual_summary.en^2",
+                                    # Combined text - base boost
                                     "combined_text^1",
+                                    "combined_text.ko^1",
+                                    "combined_text.en^1",
                                 ],
                                 "type": "best_fields",
                                 "operator": "or",

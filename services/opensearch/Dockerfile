@@ -7,6 +7,10 @@ RUN curl -fsSL "https://github.com/tianon/gosu/releases/download/1.17/gosu-amd64
     && chmod +x /usr/local/bin/gosu \
     && gosu --version
 
+# Install analysis-nori plugin for Korean language support
+# Switch to opensearch user temporarily for plugin installation
+RUN gosu opensearch /usr/share/opensearch/bin/opensearch-plugin install analysis-nori --batch
+
 # Copy custom entrypoint script that fixes permissions at runtime
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

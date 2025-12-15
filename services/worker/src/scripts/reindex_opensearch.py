@@ -73,25 +73,36 @@ def main() -> int:
     from ..adapters.opensearch_client import opensearch_client
     from ..config import settings
 
-    logger.info("Starting OpenSearch reindex")
+    logger.info("=" * 60)
+    logger.info("OpenSearch Reindex Script")
+    logger.info("=" * 60)
     logger.info(f"OpenSearch URL: {settings.opensearch_url}")
     logger.info(f"Index name: {settings.opensearch_index_scenes}")
     logger.info(f"Batch size: {args.batch_size}")
     logger.info(f"Sleep between batches: {args.sleep}s")
     logger.info(f"Dry run: {args.dry_run}")
+    if args.video_id:
+        logger.info(f"Video filter: {args.video_id}")
+    logger.info("")
 
     if args.dry_run:
         logger.info("DRY RUN MODE - No actual indexing will occur")
+        logger.info("")
 
     # Ensure OpenSearch is available and index exists
     if not args.dry_run:
+        logger.info("Checking OpenSearch connectivity...")
         if not opensearch_client.ping():
             logger.error("OpenSearch is not available")
             return 1
+        logger.info("  OK: OpenSearch is reachable")
 
+        logger.info("Ensuring index exists with correct mapping...")
         if not opensearch_client.ensure_index():
             logger.error("Failed to ensure OpenSearch index exists")
             return 1
+        logger.info("  OK: Index exists")
+        logger.info("")
 
     # Get all scenes with their video owner info
     offset = 0
