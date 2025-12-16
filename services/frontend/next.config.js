@@ -15,7 +15,7 @@ const nextConfig = {
       },
     ],
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config) => {
     // Fix for Supabase.js ESM import issues
     config.resolve.extensionAlias = {
       '.js': ['.js', '.ts', '.tsx', '.jsx'],
@@ -23,8 +23,17 @@ const nextConfig = {
       '.cjs': ['.cjs', '.cts'],
     };
 
+    // Additional fallbacks for node modules
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      net: false,
+      tls: false,
+    };
+
     return config;
   },
+  transpilePackages: ['@supabase/supabase-js'],
 }
 
 module.exports = nextConfig
