@@ -15,7 +15,10 @@ const nextConfig = {
       },
     ],
   },
-  webpack: (config) => {
+  experimental: {
+    esmExternals: 'loose',
+  },
+  webpack: (config, { isServer }) => {
     // Fix for Supabase.js ESM import issues
     config.resolve.extensionAlias = {
       '.js': ['.js', '.ts', '.tsx', '.jsx'],
@@ -29,7 +32,21 @@ const nextConfig = {
       fs: false,
       net: false,
       tls: false,
+      crypto: false,
     };
+
+    // Force webpack to handle @supabase packages as ESM
+    config.module = config.module || {};
+    config.module.rules = config.module.rules || [];
+
+    config.module.rules.push({
+      test: /\.m?js$/,
+      include: /node_modules\/@supabase/,
+      type: 'javascript/auto',
+      resolve: {
+        fullySpecified: false,
+      },
+    });
 
     return config;
   },
