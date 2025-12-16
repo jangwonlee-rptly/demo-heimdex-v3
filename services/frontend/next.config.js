@@ -15,6 +15,16 @@ const nextConfig = {
       },
     ],
   },
+  webpack: (config, { isServer }) => {
+    // Fix for Supabase.js ESM import issues
+    config.resolve.extensionAlias = {
+      '.js': ['.js', '.ts', '.tsx', '.jsx'],
+      '.mjs': ['.mjs', '.mts'],
+      '.cjs': ['.cjs', '.cts'],
+    };
+
+    return config;
+  },
 }
 
 module.exports = nextConfig
