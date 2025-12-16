@@ -24,13 +24,10 @@ redis_pool = ConnectionPool.from_url(
     settings.redis_url,
     max_connections=10,
     socket_keepalive=True,
-    socket_keepalive_options={
-        1: 1,  # TCP_KEEPIDLE: Start keepalives after 1 second
-        2: 1,  # TCP_KEEPINTVL: Interval between keepalives
-        3: 3,  # TCP_KEEPCNT: Number of keepalives before death
-    },
-    socket_connect_timeout=5,
-    socket_timeout=5,
+    # Remove socket_keepalive_options to avoid EINVAL on Railway
+    # Railway's internal networking handles keepalive automatically
+    socket_connect_timeout=10,  # Increased timeout for Railway's network
+    socket_timeout=10,  # Increased timeout for Railway's network
     retry_on_timeout=True,
     health_check_interval=30,  # Check connection health every 30s
 )
