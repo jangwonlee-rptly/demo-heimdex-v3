@@ -5,7 +5,6 @@ detection strategies:
 - AdaptiveDetector: Better for videos with varying content
 - ContentDetector: Traditional content-based detection
 - ThresholdDetector: Based on brightness/fades
-- HashDetector: Perceptual hash-based detection (requires pillow)
 
 The module supports a "best-of-all" strategy that runs all detectors
 and selects the one that produces the most scenes, optimizing for
@@ -18,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from scenedetect import detect, VideoStream, open_video
-from scenedetect.detectors import AdaptiveDetector, ContentDetector, ThresholdDetector, HashDetector
+from scenedetect.detectors import AdaptiveDetector, ContentDetector, ThresholdDetector
 from scenedetect.scene_detector import SceneDetector as PySceneDetector
 
 from ..config import settings
@@ -32,7 +31,6 @@ class SceneDetectionStrategy(str, Enum):
     ADAPTIVE = "adaptive"
     CONTENT = "content"
     THRESHOLD = "threshold"
-    HASH = "hash"
     BEST = "best"  # Try all and pick the one with most scenes
 
 
@@ -52,11 +50,6 @@ class DetectorConfig:
     threshold_threshold: float = 12.0
     threshold_method: str = "FLOOR"  # FLOOR, CEILING, or BOTH
 
-    # HashDetector parameters
-    hash_threshold: float = 0.395
-    hash_size: int = 16
-    hash_lowpass: int = 2
-
 
 @dataclass
 class DetectorPreferences:
@@ -65,7 +58,6 @@ class DetectorPreferences:
     adaptive: Optional[dict] = None
     content: Optional[dict] = None
     threshold: Optional[dict] = None
-    hash: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "DetectorPreferences":
@@ -76,7 +68,6 @@ class DetectorPreferences:
             adaptive=data.get("adaptive"),
             content=data.get("content"),
             threshold=data.get("threshold"),
-            hash=data.get("hash"),
         )
 
     def to_dict(self) -> dict:
@@ -88,8 +79,6 @@ class DetectorPreferences:
             result["content"] = self.content
         if self.threshold:
             result["threshold"] = self.threshold
-        if self.hash:
-            result["hash"] = self.hash
         return result
 
     def get_config_for_detector(self, detector_type: SceneDetectionStrategy) -> DetectorConfig:
@@ -113,14 +102,6 @@ class DetectorPreferences:
                 config.threshold_threshold = self.threshold["threshold"]
             if "method" in self.threshold:
                 config.threshold_method = self.threshold["method"]
-
-        elif detector_type == SceneDetectionStrategy.HASH and self.hash:
-            if "threshold" in self.hash:
-                config.hash_threshold = self.hash["threshold"]
-            if "size" in self.hash:
-                config.hash_size = self.hash["size"]
-            if "lowpass" in self.hash:
-                config.hash_lowpass = self.hash["lowpass"]
 
         return config
 
@@ -210,19 +191,6 @@ def create_detector(
         )
         return ThresholdDetector(
             threshold=config.threshold_threshold,
-            min_scene_len=min_scene_len_frames,
-        )
-
-    elif strategy == SceneDetectionStrategy.HASH:
-        logger.info(
-            f"Creating HashDetector with threshold={config.hash_threshold}, "
-            f"size={config.hash_size}, lowpass={config.hash_lowpass}, "
-            f"min_scene_len={min_scene_len_frames} frames ({min_scene_len_seconds}s)"
-        )
-        return HashDetector(
-            threshold=config.hash_threshold,
-            size=config.hash_size,
-            lowpass=config.hash_lowpass,
             min_scene_len=min_scene_len_frames,
         )
 
@@ -417,7 +385,6 @@ class SceneDetector:
             SceneDetectionStrategy.ADAPTIVE,
             SceneDetectionStrategy.CONTENT,
             SceneDetectionStrategy.THRESHOLD,
-            SceneDetectionStrategy.HASH,
         ]
 
         results: list[DetectionResult] = []

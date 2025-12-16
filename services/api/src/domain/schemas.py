@@ -12,7 +12,7 @@ class SceneDetectorPreferences(BaseModel):
     """Schema for user's scene detector preferences.
 
     Each detector type can have custom threshold settings.
-    Format: {"adaptive": {...}, "content": {...}, "threshold": {...}, "hash": {...}}
+    Format: {"adaptive": {...}, "content": {...}, "threshold": {...}}
     """
 
     adaptive: Optional[dict] = Field(
@@ -26,10 +26,6 @@ class SceneDetectorPreferences(BaseModel):
     threshold: Optional[dict] = Field(
         None,
         description="ThresholdDetector settings: {threshold: float, method: str}"
-    )
-    hash: Optional[dict] = Field(
-        None,
-        description="HashDetector settings: {threshold: float, size: int, lowpass: int}"
     )
 
 
