@@ -18,22 +18,19 @@ COPY services/worker/pyproject.toml ./
 
 # Install PyTorch CPU-only version FIRST (separate layer for caching)
 # This is the slowest dependency, so we want it cached
-RUN --mount=type=cache,id=uv-torch,target=/root/.cache/uv \
-    uv pip install --system \
+RUN uv pip install --system \
     --index-url https://download.pytorch.org/whl/cpu \
     torch==2.1.0
 
 # Install other heavy dependencies (separate layer)
 # Use opencv-python-headless (no GUI = smaller and faster)
-RUN --mount=type=cache,id=uv-cv,target=/root/.cache/uv \
-    uv pip install --system \
+RUN uv pip install --system \
     opencv-python-headless==4.8.1.78 \
     numpy==1.26.0 \
     scenedetect==0.6.2
 
 # Install remaining dependencies (lighter, changes more often)
-RUN --mount=type=cache,id=uv-deps,target=/root/.cache/uv \
-    uv pip install --system \
+RUN uv pip install --system \
     dramatiq[redis]>=1.15.0 \
     redis>=5.0.0 \
     psycopg[binary]>=3.1.0 \
