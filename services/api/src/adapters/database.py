@@ -386,7 +386,7 @@ class Database:
         video_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
     ) -> list[VideoScene]:
-        """Search for scenes using vector similarity.
+        """Search for scenes using vector similarity (legacy single-embedding).
 
         Args:
             query_embedding: The vector embedding of the search query.
@@ -411,6 +411,147 @@ class Database:
 
         response = self.client.rpc("search_scenes_by_embedding", params).execute()
         return [VideoScene(**row) for row in response.data]
+
+    def search_scenes_transcript_embedding(
+        self,
+        query_embedding: list[float],
+        user_id: UUID,
+        video_id: Optional[UUID] = None,
+        match_count: int = 200,
+        threshold: float = 0.2,
+    ) -> list[tuple[str, int, float]]:
+        """Search scenes by transcript embedding (multi-dense channel).
+
+        Args:
+            query_embedding: The vector embedding of the search query.
+            user_id: User ID for tenant scoping (required).
+            video_id: Filter by specific video ID (optional).
+            match_count: Maximum number of results to return.
+            threshold: Similarity threshold (0.0 to 1.0).
+
+        Returns:
+            list[tuple[str, int, float]]: List of (scene_id, rank, similarity) tuples.
+        """
+        # Convert embedding list to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "match_threshold": threshold,
+            "match_count": match_count,
+            "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id),  # Always required for tenancy
+        }
+
+        try:
+            response = self.client.rpc("search_scenes_by_transcript_embedding", params).execute()
+            results = []
+            for rank, row in enumerate(response.data, start=1):
+                results.append((str(row["id"]), rank, float(row["similarity"])))
+
+            if settings.search_debug and results:
+                logger.info(f"Transcript search: {len(results)} results, top score={results[0][2]:.4f}")
+            else:
+                logger.debug(f"Transcript search: {len(results)} results")
+
+            return results
+        except Exception as e:
+            logger.error(f"Transcript embedding search failed: {e}", exc_info=True)
+            return []
+
+    def search_scenes_visual_embedding(
+        self,
+        query_embedding: list[float],
+        user_id: UUID,
+        video_id: Optional[UUID] = None,
+        match_count: int = 200,
+        threshold: float = 0.15,
+    ) -> list[tuple[str, int, float]]:
+        """Search scenes by visual embedding (multi-dense channel).
+
+        Args:
+            query_embedding: The vector embedding of the search query.
+            user_id: User ID for tenant scoping (required).
+            video_id: Filter by specific video ID (optional).
+            match_count: Maximum number of results to return.
+            threshold: Similarity threshold (0.0 to 1.0).
+
+        Returns:
+            list[tuple[str, int, float]]: List of (scene_id, rank, similarity) tuples.
+        """
+        # Convert embedding list to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "match_threshold": threshold,
+            "match_count": match_count,
+            "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id),  # Always required for tenancy
+        }
+
+        try:
+            response = self.client.rpc("search_scenes_by_visual_embedding", params).execute()
+            results = []
+            for rank, row in enumerate(response.data, start=1):
+                results.append((str(row["id"]), rank, float(row["similarity"])))
+
+            if settings.search_debug and results:
+                logger.info(f"Visual search: {len(results)} results, top score={results[0][2]:.4f}")
+            else:
+                logger.debug(f"Visual search: {len(results)} results")
+
+            return results
+        except Exception as e:
+            logger.error(f"Visual embedding search failed: {e}", exc_info=True)
+            return []
+
+    def search_scenes_summary_embedding(
+        self,
+        query_embedding: list[float],
+        user_id: UUID,
+        video_id: Optional[UUID] = None,
+        match_count: int = 200,
+        threshold: float = 0.2,
+    ) -> list[tuple[str, int, float]]:
+        """Search scenes by summary embedding (multi-dense channel).
+
+        Args:
+            query_embedding: The vector embedding of the search query.
+            user_id: User ID for tenant scoping (required).
+            video_id: Filter by specific video ID (optional).
+            match_count: Maximum number of results to return.
+            threshold: Similarity threshold (0.0 to 1.0).
+
+        Returns:
+            list[tuple[str, int, float]]: List of (scene_id, rank, similarity) tuples.
+        """
+        # Convert embedding list to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "match_threshold": threshold,
+            "match_count": match_count,
+            "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id),  # Always required for tenancy
+        }
+
+        try:
+            response = self.client.rpc("search_scenes_by_summary_embedding", params).execute()
+            results = []
+            for rank, row in enumerate(response.data, start=1):
+                results.append((str(row["id"]), rank, float(row["similarity"])))
+
+            if settings.search_debug and results:
+                logger.info(f"Summary search: {len(results)} results, top score={results[0][2]:.4f}")
+            else:
+                logger.debug(f"Summary search: {len(results)} results")
+
+            return results
+        except Exception as e:
+            logger.error(f"Summary embedding search failed: {e}", exc_info=True)
+            return []
 
     def get_scenes_by_ids(
         self,

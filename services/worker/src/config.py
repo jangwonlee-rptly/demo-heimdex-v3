@@ -69,7 +69,24 @@ class Settings(BaseSettings):
     # Sidecar schema version for future migrations
     sidecar_schema_version: str = "v2"
 
-    # Search text optimization
+    # Multi-embedding configuration (Option B: per-channel embeddings)
+    multi_embedding_enabled: bool = True  # Enable multi-channel embeddings (transcript, visual, summary)
+    embedding_version: str = "v3-multi"  # Embedding schema version for v3 multi-channel
+
+    # Per-channel embedding text limits (safety: prevent excessive token usage)
+    embedding_transcript_max_length: int = 4800  # Max chars for transcript embedding (conservative for clean signal)
+    embedding_visual_max_length: int = 3200  # Max chars for visual description + tags embedding
+    embedding_summary_max_length: int = 2000  # Max chars for summary embedding (if available)
+
+    # Channel-specific settings
+    embedding_visual_include_tags: bool = True  # Include tags in visual channel embedding
+    embedding_summary_enabled: bool = False  # Enable summary channel (set to True when summary field is implemented)
+
+    # Embedding retry/backoff configuration (safety)
+    embedding_max_retries: int = 3  # Max retry attempts per channel on transient failures
+    embedding_retry_delay_s: float = 1.0  # Initial retry delay (exponential backoff)
+
+    # Search text optimization (legacy single-embedding, kept for backward compat)
     search_text_max_length: int = 8000  # Max chars for embedding input
     search_text_transcript_weight: float = 0.6  # Relative priority of transcript in search text
 

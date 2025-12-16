@@ -57,6 +57,89 @@ class Settings(BaseSettings):
     # Small epsilon to avoid division by zero in min-max normalization
     fusion_minmax_eps: float = 1e-9
 
+    # Multi-embedding dense retrieval configuration (Option B: per-channel embeddings)
+    multi_dense_enabled: bool = False
+    multi_dense_timeout_s: float = 1.5  # Timeout per retrieval task (not whole request)
+
+    # Per-channel candidate K values (how many results to fetch from each channel)
+    candidate_k_transcript: int = 200
+    candidate_k_visual: int = 200
+    candidate_k_summary: int = 200
+    # candidate_k_lexical already defined above
+
+    # Per-channel similarity thresholds (0.0 to 1.0)
+    threshold_transcript: float = 0.2
+    threshold_visual: float = 0.15  # Lower threshold for visual (text often short/sparse)
+    threshold_summary: float = 0.2
+
+    # Multi-channel fusion weights (must sum to 1.0)
+    # Default allocation: transcript is most important, lexical helps with keywords,
+    # visual adds context, summary provides overview
+    weight_transcript: float = 0.45
+    weight_visual: float = 0.25
+    weight_summary: float = 0.10
+    weight_lexical_multi: float = 0.20  # Separate from fusion_weight_lexical for legacy mode
+
+    # Multi-dense fusion method (reuses fusion_method setting)
+    # Options: "minmax_mean" (default) | "rrf"
+
+    def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
+        """Validate and redistribute multi-dense channel weights.
+
+        Returns:
+            tuple: (is_valid, error_message, redistributed_weights)
+                   If valid, error_message is empty and redistributed_weights contains
+                   the normalized weights. If a channel is disabled (weight=0),
+                   its weight is redistributed proportionally to other channels.
+
+        Raises:
+            None: Returns error information instead of raising
+        """
+        weights = {
+            "transcript": self.weight_transcript,
+            "visual": self.weight_visual,
+            "summary": self.weight_summary,
+            "lexical": self.weight_lexical_multi,
+        }
+
+        # Validate all weights are in [0, 1]
+        for channel, weight in weights.items():
+            if not (0.0 <= weight <= 1.0):
+                return (
+                    False,
+                    f"Channel '{channel}' weight must be in [0, 1], got {weight}",
+                    {},
+                )
+
+        # Check if weights sum to ~1.0 (with tolerance)
+        total_weight = sum(weights.values())
+        if abs(total_weight - 1.0) > 1e-6:
+            return (
+                False,
+                f"Multi-dense channel weights must sum to 1.0, got {total_weight:.6f} "
+                f"(transcript={self.weight_transcript}, visual={self.weight_visual}, "
+                f"summary={self.weight_summary}, lexical={self.weight_lexical_multi})",
+                {},
+            )
+
+        # Filter out zero-weight channels and redistribute
+        active_weights = {ch: w for ch, w in weights.items() if w > 0.0}
+
+        if not active_weights:
+            return (
+                False,
+                "At least one channel must have non-zero weight",
+                {},
+            )
+
+        # Redistribute weights to sum to 1.0 (handles floating-point precision)
+        active_total = sum(active_weights.values())
+        redistributed = {
+            ch: w / active_total for ch, w in active_weights.items()
+        }
+
+        return (True, "", redistributed)
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins into a list.

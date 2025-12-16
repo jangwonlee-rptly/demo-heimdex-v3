@@ -1,0 +1,106 @@
+## 2025-12-16 12:55 - Fixed Embedding Backfill Bug & Initialized OpenSearch
+
+### Issue 1: V3 Embedding Backfill URL Accumulation Bug
+
+**Problem:**
+The backfill_scene_embeddings_v3.py script was generating malformed URLs with hundreds of
+duplicate `&limit=100` parameters, causing the Supabase API requests to look like:
+```
+?select=*&order=id.asc&id=gt.135ff059-4edf-48be-b647-f1323d1d94a9
+&limit=100&limit=100&limit=100&limit=100&limit=100&limit=100...
+```
+
+**Root Cause:**
+The script was building a query object once (lines 277-293) and then reusing it across all
+iterations of the while loop. Each call to `.limit(batch_size)` was appending another
+`&limit=100` parameter instead of replacing it.
+
+**Fix:**
+Refactored the pagination logic to rebuild the query fresh on each batch iteration:
+- Moved query construction inside the while loop (lines 302-313)
+- Each batch now gets a clean query object with filters and ordering
+- Checkpoint mechanism (`checkpoint.last_scene_id`) properly applied to each fresh query
+- Removed the stale query building code outside the loop
+
+**Location:** services/worker/src/scripts/backfill_scene_embeddings_v3.py
+
+**Status:** At interruption point, 234,400 scenes processed (102,315 updated, 132,085 skipped)
+The script can now be resumed cleanly without URL accumulation issues.
+
+---
+
+### Issue 2: OpenSearch Index Not Found Warning
+
+**Problem:**
+Search requests were returning warnings:
+```
+WARNING - POST http://opensearch:9200/scene_docs/_search [status:404 request:0.002s]
+WARNING - Index scene_docs not found, returning empty results
+```
+
+Hybrid search was falling back to pure semantic search without BM25 lexical matching.
+
+**Root Cause:**
+The `scene_docs` OpenSearch index had never been created. While OpenSearch service was
+running, the index initialization and data backfill steps were never executed.
+
+**Fix:**
+1. **Initialized the index:**
+   ```bash
+   docker-compose exec api python -m src.scripts.init_opensearch
+   ```
+   - Created `scene_docs` index with proper mappings
+   - Verified Nori plugin for Korean language analysis
+   - Configured multi-field analysis (standard, Korean, English)
+
+2. **Backfilled existing scenes:**
+   ```bash
+   docker-compose exec worker python -m src.scripts.reindex_opensearch
+   ```
+   - Indexed all 1,770 existing scenes from Supabase
+   - Joined with videos table to get owner_id for security filtering
+   - Bulk indexed at ~284.8 docs/sec
+   - 0 errors, 6.2 seconds total runtime
+
+**Index Configuration:**
+- Analyzers: standard, ko_nori (Korean), en_english
+- Multi-field text analysis on: transcript_segment, visual_description, visual_summary,
+  combined_text, tags_text
+- BM25 search with field boosting: tags^4, transcript^3, visual^2, combined^1
+- Security: owner_id filtering for multi-tenant isolation
+
+**Verification:**
+```bash
+curl http://localhost:9200/scene_docs/_stats
+# Result: 1770 docs, 4.2 MB, 0 deleted
+```
+
+**Impact:**
+Hybrid search now properly fuses:
+- Dense semantic search (vector similarity via pgvector)
+- Lexical BM25 search (keyword matching via OpenSearch)
+- Fusion method: minmax_mean with 0.7 dense / 0.3 lexical weights
+
+---
+
+### Files Modified
+
+1. services/worker/src/scripts/backfill_scene_embeddings_v3.py
+   - Fixed query object reuse bug in pagination loop
+   - Queries now rebuilt fresh each iteration
+
+### Scripts Executed
+
+1. services/api/src/scripts/init_opensearch.py
+   - Created scene_docs index with Korean/English analyzers
+
+2. services/worker/src/scripts/reindex_opensearch.py
+   - Backfilled 1,770 scenes into OpenSearch
+   - Rate: 284.8 docs/sec
+
+### Next Steps
+
+1. Resume v3 embedding backfill from checkpoint (234,400/total processed)
+2. Monitor OpenSearch index grows as new scenes are added
+3. Consider adding automatic index initialization to docker-compose startup
+4. Tune BM25 field weights if needed based on search quality feedback

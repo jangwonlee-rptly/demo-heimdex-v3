@@ -32,6 +32,8 @@ class ScoreType(str, Enum):
     RRF = "rrf"
     DENSE_ONLY = "dense_only"
     LEXICAL_ONLY = "lexical_only"
+    MULTI_DENSE_MINMAX_MEAN = "multi_dense_minmax_mean"  # v3-multi: N dense + BM25
+    MULTI_DENSE_RRF = "multi_dense_rrf"  # v3-multi: N dense + BM25 with RRF
 
 
 @dataclass
@@ -65,6 +67,14 @@ class FusedCandidate:
     # Normalized scores (only populated for minmax_mean fusion)
     dense_score_norm: Optional[float] = None  # Min-max normalized dense score [0, 1]
     lexical_score_norm: Optional[float] = None  # Min-max normalized lexical score [0, 1]
+
+    # v3-multi: Per-channel debug info (only populated for multi-dense fusion)
+    channel_scores: Optional[dict[str, dict]] = None  # Per-channel raw+norm scores + ranks
+    # Structure: {
+    #   "transcript": {"rank": 5, "score_raw": 0.85, "score_norm": 0.92},
+    #   "visual": {"rank": 12, "score_raw": 0.72, "score_norm": 0.68},
+    #   "bm25": {"rank": 3, "score_raw": 23.4, "score_norm": 0.95},
+    # }
 
     # Legacy alias for backward compatibility
     @property
@@ -498,3 +508,309 @@ def fuse(
         )
     else:
         raise ValueError(f"Unknown fusion method: {method}. Use 'minmax_mean' or 'rrf'.")
+
+
+def multi_channel_minmax_fuse(
+    channel_candidates: dict[str, list[Candidate]],
+    channel_weights: dict[str, float],
+    eps: float = 1e-9,
+    top_k: int = 10,
+    include_debug: bool = False,
+) -> list[FusedCandidate]:
+    """
+    Fuse multiple dense channels + lexical using min-max normalization and weighted mean.
+
+    This implements Option B multi-embedding fusion: each channel is normalized independently,
+    then combined using weighted arithmetic mean. Missing channels contribute 0.0.
+
+    Algorithm:
+        1. For each channel independently: min-max normalize scores → [0, 1]
+        2. For each scene in union of all channels:
+           final_score = sum(weight[ch] * norm_score[ch] for ch in channels)
+        3. Sort by final_score descending, return top_k
+
+    Args:
+        channel_candidates: Dict mapping channel name → list of Candidates
+            Example: {
+                "transcript": [Candidate("a", 1, 0.85), ...],
+                "visual": [Candidate("b", 1, 0.72), ...],
+                "bm25": [Candidate("a", 1, 23.4), ...],
+            }
+        channel_weights: Dict mapping channel name → weight (must sum to ≈1.0)
+            Example: {"transcript": 0.45, "visual": 0.25, "bm25": 0.30}
+        eps: Epsilon for min-max normalization (default: 1e-9)
+        top_k: Number of results to return after fusion
+        include_debug: If True, populate channel_scores field with per-channel debug info
+
+    Returns:
+        list[FusedCandidate]: Top-k fused results sorted by score descending
+
+    Raises:
+        ValueError: If weights don't sum to approximately 1.0 (tolerance 0.01)
+        ValueError: If channel_candidates has channels not in channel_weights
+
+    Safety:
+        - Empty channels are skipped (no error)
+        - Scene missing from channel → contributes 0.0 for that channel
+        - Weights automatically redistributed if channel is empty/missing
+
+    Example:
+        >>> transcript_cands = [Candidate("a", 1, 0.85), Candidate("b", 2, 0.75)]
+        >>> visual_cands = [Candidate("b", 1, 0.80), Candidate("c", 2, 0.70)]
+        >>> bm25_cands = [Candidate("a", 1, 25.0), Candidate("c", 2, 20.0)]
+        >>> channels = {"transcript": transcript_cands, "visual": visual_cands, "bm25": bm25_cands}
+        >>> weights = {"transcript": 0.45, "visual": 0.25, "bm25": 0.30}
+        >>> results = multi_channel_minmax_fuse(channels, weights, top_k=10)
+    """
+    # Validate weights
+    total_weight = sum(channel_weights.values())
+    if abs(total_weight - 1.0) > 0.01:
+        raise ValueError(
+            f"Channel weights must sum to 1.0, got {total_weight:.3f}. "
+            f"Weights: {channel_weights}"
+        )
+
+    # Validate all channels in candidates are in weights
+    for ch_name in channel_candidates.keys():
+        if ch_name not in channel_weights:
+            raise ValueError(
+                f"Channel '{ch_name}' in candidates but not in weights. "
+                f"Weights keys: {list(channel_weights.keys())}"
+            )
+
+    # Handle edge case: no candidates at all
+    all_candidates = [c for candidates in channel_candidates.values() for c in candidates]
+    if not all_candidates:
+        return []
+
+    # Build per-channel normalized score lookups
+    channel_norm_by_id: dict[str, dict[str, float]] = {}
+    channel_by_id: dict[str, dict[str, Candidate]] = {}
+    active_channels = []  # Channels that have non-empty candidates
+
+    for ch_name, candidates in channel_candidates.items():
+        if not candidates:
+            # Empty channel - skip normalization but track for weight redistribution
+            channel_norm_by_id[ch_name] = {}
+            channel_by_id[ch_name] = {}
+            continue
+
+        active_channels.append(ch_name)
+
+        # Build lookup by ID
+        channel_by_id[ch_name] = {c.scene_id: c for c in candidates}
+
+        # Normalize scores within this channel
+        scores = [c.score for c in candidates]
+        norm_scores = minmax_normalize(scores, eps)
+
+        # Build normalized lookup
+        channel_norm_by_id[ch_name] = {}
+        for i, candidate in enumerate(candidates):
+            channel_norm_by_id[ch_name][candidate.scene_id] = norm_scores[i]
+
+    # Redistribute weights if some channels are empty (graceful degradation)
+    active_weights = {ch: channel_weights[ch] for ch in active_channels}
+    if active_weights:
+        active_weight_sum = sum(active_weights.values())
+        # Normalize active weights to sum to 1.0
+        redistributed_weights = {
+            ch: w / active_weight_sum for ch, w in active_weights.items()
+        }
+    else:
+        # No active channels - return empty
+        return []
+
+    # Get all unique scene IDs across all channels
+    all_ids = set()
+    for candidates in channel_candidates.values():
+        all_ids.update(c.scene_id for c in candidates)
+
+    # Calculate weighted mean for each scene
+    fused_results: list[FusedCandidate] = []
+
+    for scene_id in all_ids:
+        final_score = 0.0
+        debug_info: dict[str, dict] = {}
+
+        for ch_name in active_channels:
+            norm_score = channel_norm_by_id[ch_name].get(scene_id, 0.0)
+            weight = redistributed_weights[ch_name]
+            final_score += weight * norm_score
+
+            # Collect debug info if requested
+            if include_debug:
+                candidate = channel_by_id[ch_name].get(scene_id)
+                if candidate:
+                    debug_info[ch_name] = {
+                        "rank": candidate.rank,
+                        "score_raw": candidate.score,
+                        "score_norm": norm_score,
+                    }
+
+        # Create fused candidate
+        # For backward compatibility, also populate dense_rank/lexical_rank if present
+        dense_rank = None
+        lexical_rank = None
+        dense_score_raw = None
+        lexical_score_raw = None
+        dense_score_norm = None
+        lexical_score_norm = None
+
+        # Map first dense channel to dense_* fields for backward compat
+        first_dense_channel = None
+        for ch in ["transcript", "visual", "summary"]:  # Try in order
+            if ch in channel_by_id and scene_id in channel_by_id[ch]:
+                first_dense_channel = ch
+                break
+
+        if first_dense_channel:
+            cand = channel_by_id[first_dense_channel][scene_id]
+            dense_rank = cand.rank
+            dense_score_raw = cand.score
+            dense_score_norm = channel_norm_by_id[first_dense_channel].get(scene_id)
+
+        # Map BM25 to lexical_* fields
+        if "bm25" in channel_by_id and scene_id in channel_by_id["bm25"]:
+            cand = channel_by_id["bm25"][scene_id]
+            lexical_rank = cand.rank
+            lexical_score_raw = cand.score
+            lexical_score_norm = channel_norm_by_id["bm25"].get(scene_id)
+
+        fused_results.append(
+            FusedCandidate(
+                scene_id=scene_id,
+                score=final_score,
+                score_type=ScoreType.MULTI_DENSE_MINMAX_MEAN,
+                dense_rank=dense_rank,
+                lexical_rank=lexical_rank,
+                dense_score_raw=dense_score_raw,
+                lexical_score_raw=lexical_score_raw,
+                dense_score_norm=dense_score_norm,
+                lexical_score_norm=lexical_score_norm,
+                channel_scores=debug_info if include_debug else None,
+            )
+        )
+
+    # Sort by score descending with tie-breaking
+    def sort_key(candidate: FusedCandidate) -> tuple:
+        # Prioritize by score, then by best rank across all channels
+        best_rank = float("inf")
+        if candidate.channel_scores:
+            ranks = [ch["rank"] for ch in candidate.channel_scores.values()]
+            if ranks:
+                best_rank = min(ranks)
+        elif candidate.dense_rank or candidate.lexical_rank:
+            best_rank = min(
+                r for r in [candidate.dense_rank, candidate.lexical_rank] if r is not None
+            ) or float("inf")
+
+        return (
+            -candidate.score,  # Higher score first
+            best_rank,  # Lower rank (better position) first
+            candidate.scene_id,  # Stable tiebreaker
+        )
+
+    fused_results.sort(key=sort_key)
+
+    return fused_results[:top_k]
+
+
+def multi_channel_rrf_fuse(
+    channel_candidates: dict[str, list[Candidate]],
+    rrf_k: int = 60,
+    top_k: int = 10,
+    include_debug: bool = False,
+) -> list[FusedCandidate]:
+    """
+    Fuse multiple channels using Reciprocal Rank Fusion (RRF).
+
+    RRF is rank-based fusion that is robust to score scale differences.
+    Formula: RRF_score = sum(1 / (k + rank_i) for i in all_channels)
+
+    Args:
+        channel_candidates: Dict mapping channel name → list of Candidates
+        rrf_k: RRF constant (default: 60, higher = less emphasis on top ranks)
+        top_k: Number of results to return after fusion
+        include_debug: If True, populate channel_scores field
+
+    Returns:
+        list[FusedCandidate]: Top-k fused results sorted by RRF score descending
+
+    Example:
+        >>> channels = {"transcript": [...], "visual": [...], "bm25": [...]}
+        >>> results = multi_channel_rrf_fuse(channels, rrf_k=60, top_k=10)
+    """
+    # Handle edge case
+    all_candidates = [c for candidates in channel_candidates.values() for c in candidates]
+    if not all_candidates:
+        return []
+
+    # Build per-channel lookup
+    channel_by_id: dict[str, dict[str, Candidate]] = {}
+    for ch_name, candidates in channel_candidates.items():
+        channel_by_id[ch_name] = {c.scene_id: c for c in candidates}
+
+    # Get all unique scene IDs
+    all_ids = set()
+    for candidates in channel_candidates.values():
+        all_ids.update(c.scene_id for c in candidates)
+
+    # Calculate RRF score for each scene
+    fused_results: list[FusedCandidate] = []
+
+    for scene_id in all_ids:
+        rrf_score = 0.0
+        debug_info: dict[str, dict] = {}
+
+        for ch_name, candidates_dict in channel_by_id.items():
+            if scene_id in candidates_dict:
+                candidate = candidates_dict[scene_id]
+                rrf_score += 1.0 / (rrf_k + candidate.rank)
+
+                if include_debug:
+                    debug_info[ch_name] = {
+                        "rank": candidate.rank,
+                        "score_raw": candidate.score,
+                        "rrf_contribution": 1.0 / (rrf_k + candidate.rank),
+                    }
+
+        # Backward compat mapping (same as minmax version)
+        dense_rank = None
+        lexical_rank = None
+        dense_score_raw = None
+        lexical_score_raw = None
+
+        first_dense_channel = None
+        for ch in ["transcript", "visual", "summary"]:
+            if ch in channel_by_id and scene_id in channel_by_id[ch]:
+                first_dense_channel = ch
+                break
+
+        if first_dense_channel:
+            cand = channel_by_id[first_dense_channel][scene_id]
+            dense_rank = cand.rank
+            dense_score_raw = cand.score
+
+        if "bm25" in channel_by_id and scene_id in channel_by_id["bm25"]:
+            cand = channel_by_id["bm25"][scene_id]
+            lexical_rank = cand.rank
+            lexical_score_raw = cand.score
+
+        fused_results.append(
+            FusedCandidate(
+                scene_id=scene_id,
+                score=rrf_score,
+                score_type=ScoreType.MULTI_DENSE_RRF,
+                dense_rank=dense_rank,
+                lexical_rank=lexical_rank,
+                dense_score_raw=dense_score_raw,
+                lexical_score_raw=lexical_score_raw,
+                channel_scores=debug_info if include_debug else None,
+            )
+        )
+
+    # Sort by RRF score descending
+    fused_results.sort(key=lambda c: (-c.score, c.scene_id))
+
+    return fused_results[:top_k]

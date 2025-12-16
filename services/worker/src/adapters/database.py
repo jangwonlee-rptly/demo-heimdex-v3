@@ -243,6 +243,12 @@ class Database:
         needs_reprocess: bool = False,
         processing_stats: Optional[dict] = None,
         owner_id: Optional[str] = None,
+        # v3-multi embedding fields
+        embedding_transcript: Optional[list[float]] = None,
+        embedding_visual: Optional[list[float]] = None,
+        embedding_summary: Optional[list[float]] = None,
+        embedding_version: Optional[str] = None,
+        multi_embedding_metadata: Optional[dict] = None,
     ) -> UUID:
         """Create a video scene record.
 
@@ -273,6 +279,12 @@ class Database:
         # Convert embedding list to pgvector format
         embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
+        # Helper function to convert embedding to pgvector format
+        def to_pgvector(emb: Optional[list[float]]) -> Optional[str]:
+            if emb is None:
+                return None
+            return "[" + ",".join(str(x) for x in emb) + "]"
+
         data = {
             "video_id": str(video_id),
             "index": index,
@@ -294,6 +306,18 @@ class Database:
             "needs_reprocess": needs_reprocess,
             "processing_stats": processing_stats,
         }
+
+        # Add v3-multi embedding fields if present
+        if embedding_transcript is not None:
+            data["embedding_transcript"] = to_pgvector(embedding_transcript)
+        if embedding_visual is not None:
+            data["embedding_visual"] = to_pgvector(embedding_visual)
+        if embedding_summary is not None:
+            data["embedding_summary"] = to_pgvector(embedding_summary)
+        if embedding_version is not None:
+            data["embedding_version"] = embedding_version
+        if multi_embedding_metadata is not None:
+            data["embedding_metadata"] = multi_embedding_metadata  # Override with multi-metadata
 
         response = self.client.table("video_scenes").insert(data).execute()
         scene_id = UUID(response.data[0]["id"])

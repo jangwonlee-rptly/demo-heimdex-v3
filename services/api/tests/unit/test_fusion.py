@@ -8,6 +8,8 @@ from src.domain.search.fusion import (
     dense_only_fusion,
     lexical_only_fusion,
     fuse,
+    multi_channel_minmax_fuse,
+    multi_channel_rrf_fuse,
     Candidate,
     FusedCandidate,
     ScoreType,
@@ -662,3 +664,362 @@ class TestFusionEdgeCases:
 
         # All zeros should normalize to 1.0 (constant case)
         assert all(r.dense_score_norm == 1.0 for r in result)
+
+
+class TestMultiChannelMinMaxFusion:
+    """Tests for multi_channel_minmax_fuse (v3-multi Option B)."""
+
+    def test_basic_multi_channel_fusion(self):
+        """Basic fusion with 4 channels (3 dense + 1 lexical)."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id="a", rank=1, score=0.95),
+                Candidate(scene_id="b", rank=2, score=0.85),
+            ],
+            "dense_visual": [
+                Candidate(scene_id="b", rank=1, score=0.90),
+                Candidate(scene_id="c", rank=2, score=0.80),
+            ],
+            "dense_summary": [
+                Candidate(scene_id="c", rank=1, score=0.88),
+            ],
+            "lexical": [
+                Candidate(scene_id="a", rank=1, score=25.0),
+                Candidate(scene_id="d", rank=2, score=20.0),
+            ],
+        }
+
+        weights = {
+            "dense_transcript": 0.45,
+            "dense_visual": 0.25,
+            "dense_summary": 0.10,
+            "lexical": 0.20,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            eps=1e-9,
+            top_k=10,
+            include_debug=False,
+        )
+
+        # Should return union of all scenes
+        scene_ids = {r.scene_id for r in result}
+        assert scene_ids == {"a", "b", "c", "d"}
+
+        # All should have MULTI_DENSE_MINMAX_MEAN score type
+        assert all(r.score_type == ScoreType.MULTI_DENSE_MINMAX_MEAN for r in result)
+
+        # "b" appears in both transcript and visual, should rank highly
+        assert result[0].scene_id in ["a", "b"]  # Top scores
+
+    def test_weight_redistribution_when_channel_missing(self):
+        """Weights should redistribute when a channel has no results."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="a", rank=1, score=0.95)],
+            "dense_visual": [],  # Empty channel
+            "lexical": [Candidate(scene_id="b", rank=1, score=25.0)],
+        }
+
+        weights = {
+            "dense_transcript": 0.50,
+            "dense_visual": 0.30,  # This should be redistributed
+            "lexical": 0.20,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+        )
+
+        # Should gracefully handle empty channel
+        assert len(result) == 2
+        scene_ids = {r.scene_id for r in result}
+        assert scene_ids == {"a", "b"}
+
+        # Weights should redistribute: transcript gets 0.50/0.70, lexical gets 0.20/0.70
+        # "a": (0.50/0.70) * 1.0 + (0.20/0.70) * 0.0 ≈ 0.714
+        # "b": (0.50/0.70) * 0.0 + (0.20/0.70) * 1.0 ≈ 0.286
+        assert result[0].scene_id == "a"  # Higher redistributed weight
+
+    def test_weight_validation_must_sum_to_one(self):
+        """Weights must sum to 1.0 (within tolerance)."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="a", rank=1, score=0.95)],
+        }
+
+        invalid_weights = {
+            "dense_transcript": 0.60,
+            "dense_visual": 0.60,  # Sum is 1.2
+        }
+
+        with pytest.raises(ValueError, match="sum to 1.0"):
+            multi_channel_minmax_fuse(
+                channel_candidates=channels,
+                channel_weights=invalid_weights,
+                top_k=10,
+            )
+
+    def test_debug_mode_includes_channel_scores(self):
+        """Debug mode should include per-channel score breakdown."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="a", rank=1, score=0.95)],
+            "lexical": [Candidate(scene_id="a", rank=1, score=25.0)],
+        }
+
+        weights = {
+            "dense_transcript": 0.80,
+            "lexical": 0.20,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+            include_debug=True,
+        )
+
+        assert len(result) == 1
+        assert result[0].channel_scores is not None
+        assert "dense_transcript" in result[0].channel_scores
+        assert "lexical" in result[0].channel_scores
+
+        # Check channel_scores structure
+        transcript_scores = result[0].channel_scores["dense_transcript"]
+        assert "rank" in transcript_scores
+        assert "score_raw" in transcript_scores
+        assert "score_norm" in transcript_scores
+        assert transcript_scores["rank"] == 1
+        assert transcript_scores["score_raw"] == 0.95
+
+    def test_scene_present_in_one_channel_only(self):
+        """Scenes appearing in only one channel should still rank correctly."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="transcript_only", rank=1, score=0.90)],
+            "dense_visual": [Candidate(scene_id="visual_only", rank=1, score=0.85)],
+        }
+
+        weights = {
+            "dense_transcript": 0.70,
+            "dense_visual": 0.30,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+        )
+
+        # transcript_only: 0.70 * 1.0 + 0.30 * 0.0 = 0.70
+        # visual_only: 0.70 * 0.0 + 0.30 * 1.0 = 0.30
+        assert result[0].scene_id == "transcript_only"  # Higher weight
+        assert result[1].scene_id == "visual_only"
+
+    def test_empty_channels_returns_empty_result(self):
+        """All empty channels should return empty result."""
+        channels = {
+            "dense_transcript": [],
+            "dense_visual": [],
+            "lexical": [],
+        }
+
+        weights = {
+            "dense_transcript": 0.45,
+            "dense_visual": 0.35,
+            "lexical": 0.20,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+        )
+
+        assert result == []
+
+    def test_top_k_limit_respected(self):
+        """Should return at most top_k results."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id=f"s{i}", rank=i, score=1.0 - i * 0.1)
+                for i in range(1, 21)
+            ],
+        }
+
+        weights = {"dense_transcript": 1.0}
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=5,
+        )
+
+        assert len(result) == 5
+
+    def test_multi_channel_normalization_independence(self):
+        """Each channel should normalize independently."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id="a", rank=1, score=0.90),
+                Candidate(scene_id="b", rank=2, score=0.80),
+            ],
+            "dense_visual": [
+                Candidate(scene_id="a", rank=1, score=0.50),  # Lower absolute scores
+                Candidate(scene_id="c", rank=2, score=0.40),
+            ],
+        }
+
+        weights = {
+            "dense_transcript": 0.50,
+            "dense_visual": 0.50,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+            include_debug=True,
+        )
+
+        # Find "a" in results
+        result_a = next(r for r in result if r.scene_id == "a")
+
+        # Check that both channels contributed normalized scores
+        # transcript: (0.90 - 0.80) / (0.90 - 0.80) = 1.0
+        # visual: (0.50 - 0.40) / (0.50 - 0.40) = 1.0
+        # Final: 0.50 * 1.0 + 0.50 * 1.0 = 1.0
+        assert result_a.score == pytest.approx(1.0, abs=0.01)
+
+
+class TestMultiChannelRRFFusion:
+    """Tests for multi_channel_rrf_fuse (v3-multi Option B with RRF)."""
+
+    def test_basic_multi_channel_rrf(self):
+        """Basic RRF fusion with multiple channels."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id="a", rank=1, score=0.95),
+                Candidate(scene_id="b", rank=2, score=0.85),
+            ],
+            "dense_visual": [
+                Candidate(scene_id="b", rank=1, score=0.90),
+                Candidate(scene_id="c", rank=2, score=0.80),
+            ],
+            "lexical": [
+                Candidate(scene_id="a", rank=1, score=25.0),
+            ],
+        }
+
+        result = multi_channel_rrf_fuse(
+            channel_candidates=channels,
+            k=60,
+            top_k=10,
+            include_debug=False,
+        )
+
+        # Should return union of all scenes
+        scene_ids = {r.scene_id for r in result}
+        assert scene_ids == {"a", "b", "c"}
+
+        # All should have MULTI_DENSE_RRF score type
+        assert all(r.score_type == ScoreType.MULTI_DENSE_RRF for r in result)
+
+        # "a" appears in transcript (rank 1) and lexical (rank 1)
+        # "b" appears in transcript (rank 2) and visual (rank 1)
+        # "a" and "b" should rank highest
+        assert result[0].scene_id in ["a", "b"]
+
+    def test_rrf_handles_empty_channels_gracefully(self):
+        """RRF should handle empty channels gracefully."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="a", rank=1, score=0.95)],
+            "dense_visual": [],  # Empty
+            "lexical": [Candidate(scene_id="b", rank=1, score=25.0)],
+        }
+
+        result = multi_channel_rrf_fuse(
+            channel_candidates=channels,
+            k=60,
+            top_k=10,
+        )
+
+        assert len(result) == 2
+        scene_ids = {r.scene_id for r in result}
+        assert scene_ids == {"a", "b"}
+
+    def test_rrf_k_parameter_effect(self):
+        """Higher k should flatten score differences."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id="first", rank=1, score=0.99),
+                Candidate(scene_id="tenth", rank=10, score=0.70),
+            ],
+        }
+
+        result_low_k = multi_channel_rrf_fuse(channels, k=1, top_k=10)
+        result_high_k = multi_channel_rrf_fuse(channels, k=100, top_k=10)
+
+        # Low k should have bigger score difference
+        score_diff_low_k = result_low_k[0].score - result_low_k[1].score
+        score_diff_high_k = result_high_k[0].score - result_high_k[1].score
+
+        assert score_diff_low_k > score_diff_high_k
+
+    def test_rrf_debug_includes_channel_scores(self):
+        """Debug mode should include per-channel rank information."""
+        channels = {
+            "dense_transcript": [Candidate(scene_id="a", rank=1, score=0.95)],
+            "lexical": [Candidate(scene_id="a", rank=2, score=20.0)],
+        }
+
+        result = multi_channel_rrf_fuse(
+            channel_candidates=channels,
+            k=60,
+            top_k=10,
+            include_debug=True,
+        )
+
+        assert result[0].channel_scores is not None
+        assert "dense_transcript" in result[0].channel_scores
+        assert "lexical" in result[0].channel_scores
+        assert result[0].channel_scores["dense_transcript"]["rank"] == 1
+        assert result[0].channel_scores["lexical"]["rank"] == 2
+
+
+class TestMultiChannelTenancyInvariants:
+    """Tests to ensure multi-channel fusion preserves tenancy safety."""
+
+    def test_fusion_does_not_leak_scene_ids(self):
+        """Fusion should only return scene IDs present in input channels."""
+        channels = {
+            "dense_transcript": [
+                Candidate(scene_id="user_a_scene_1", rank=1, score=0.95),
+            ],
+            "lexical": [
+                Candidate(scene_id="user_a_scene_2", rank=1, score=25.0),
+            ],
+        }
+
+        weights = {
+            "dense_transcript": 0.70,
+            "lexical": 0.30,
+        }
+
+        result = multi_channel_minmax_fuse(
+            channel_candidates=channels,
+            channel_weights=weights,
+            top_k=10,
+        )
+
+        # Should only return scenes from input
+        result_scene_ids = {r.scene_id for r in result}
+        assert result_scene_ids == {"user_a_scene_1", "user_a_scene_2"}
+
+        # Should NOT introduce any new scene IDs
+        input_scene_ids = set()
+        for candidates in channels.values():
+            input_scene_ids.update(c.scene_id for c in candidates)
+
+        assert result_scene_ids.issubset(input_scene_ids)

@@ -1,0 +1,2947 @@
+## 2025-12-16 13:15 - Comprehensive Video Ingest & Search Pipeline Documentation
+
+### Executive Summary
+
+This document provides exhaustive documentation of the video processing and search architecture following recent major updates to the system. The architecture implements a sophisticated multi-stage pipeline with:
+
+- **v3-multi per-channel embeddings**: Separate embeddings for transcript, visual, and summary channels
+- **Hybrid search fusion**: Combines dense semantic search (pgvector) with lexical BM25 (OpenSearch)
+- **Korean language support**: Nori tokenizer for Korean text analysis
+- **Quality-aware processing**: Intelligent frame selection, transcription filtering, cost optimization
+- **Scalable architecture**: Parallel processing, graceful degradation, retry resilience
+
+---
+
+## Table of Contents
+
+1. [Video Upload & Ingest Pipeline](#1-video-upload--ingest-pipeline)
+2. [Video Processing Pipeline](#2-video-processing-pipeline)
+3. [Embedding Generation (v3-multi)](#3-embedding-generation-v3-multi)
+4. [OpenSearch Integration](#4-opensearch-integration)
+5. [Search Pipeline](#5-search-pipeline)
+6. [Database Schema](#6-database-schema)
+7. [Data Flow Diagrams](#7-data-flow-diagrams)
+8. [Configuration Reference](#8-configuration-reference)
+9. [Recent Updates](#9-recent-updates)
+10. [Key File Locations](#10-key-file-locations)
+
+---
+
+## 1. Video Upload & Ingest Pipeline
+
+### 1.1 Upload Flow
+
+**API Endpoint**: `POST /videos/upload-url`
+
+**Location**: `services/api/src/routes/videos.py:93-158`
+
+**Purpose**: Generate storage path and create video record
+
+**Request**:
+```json
+{
+  "filename": "my_video.mp4",
+  "file_extension": "mp4"
+}
+```
+
+**Flow**:
+```
+1. Client requests upload URL with filename and extension
+2. Server sanitizes filename (handles Korean/Unicode, removes special chars)
+3. Generates storage path: {user_id}/{video_id}.{extension}
+4. Creates video record in DB with status=PENDING
+5. Returns video_id and storage_path to client
+6. Client uploads video directly to Supabase Storage
+7. Client notifies completion via POST /videos/{video_id}/uploaded
+```
+
+**Key Implementation** (videos.py:119-137):
+```python
+sanitized_filename = sanitize_filename(filename)
+video_id = uuid4()
+storage_path = f"{user_id}/{video_id}.{file_extension}"
+
+video = db.create_video(
+    owner_id=user_id,
+    storage_path=storage_path,
+    filename=sanitized_filename
+)
+```
+
+**Filename Sanitization**:
+- Preserves Korean/Unicode characters
+- Removes special characters except `-._`
+- Strips leading/trailing whitespace
+- Ensures safe filesystem paths
+
+### 1.2 Processing Trigger
+
+**API Endpoint**: `POST /videos/{video_id}/uploaded`
+
+**Location**: `services/api/src/routes/videos.py:160-221`
+
+**Purpose**: Enqueue video for background processing
+
+**Flow**:
+```
+1. Verify video ownership (RLS check)
+2. Validate video exists and status=PENDING
+3. Enqueue Dramatiq task: process_video.send(video_id)
+4. Return 202 Accepted
+```
+
+**Queue Architecture**:
+- **Broker**: Redis (redis://redis:6379/0)
+- **Framework**: Dramatiq
+- **Actor**: `process_video` from `libs.tasks.video_processing`
+- **Worker**: Separate Python process consuming from queue
+
+---
+
+## 2. Video Processing Pipeline
+
+### 2.1 Main Processing Flow
+
+**Entry Point**: `services/worker/src/domain/video_processor.py:113-426`
+
+**Function**: `VideoProcessor.process_video(video_id: UUID)`
+
+**Processing Stages**:
+
+#### STAGE 1: Setup & Download (Lines 138-178)
+
+```python
+# Create isolated working directory
+work_dir = Path(settings.temp_dir) / str(video_id)
+work_dir.mkdir(parents=True, exist_ok=True)
+
+# Fetch video metadata from database
+video = db.get_video(video_id)
+owner_id = UUID(video["owner_id"])
+storage_path = video["storage_path"]
+filename = video.get("filename")
+
+# Get user language preferences
+user_profile = db.get_user_profile(owner_id)
+language = user_profile.get("preferred_language", "ko")  # Default: Korean
+transcript_language = video.get("transcript_language")  # Force language for reprocess
+
+# Update status to PROCESSING
+db.update_video_status(video_id, VideoStatus.PROCESSING)
+
+# Download video from Supabase storage
+video_path = work_dir / "video.mp4"
+storage.download_file(storage_path, video_path)
+```
+
+**Key Features**:
+- Isolated temp directories per video (prevents collision)
+- User language preferences (affects prompts, transcription)
+- Optional forced language for reprocessing
+- Status tracking for visibility
+
+#### STAGE 2: Extract Metadata (Lines 182-237)
+
+```python
+metadata = ffmpeg.probe_video(video_path)
+# Extracts:
+# - duration_s: float
+# - frame_rate: float
+# - width, height: int
+# - EXIF metadata: GPS coordinates, camera make/model
+# - video_created_at: timestamp from EXIF
+
+# Update database with metadata
+db.update_video_metadata(
+    video_id=video_id,
+    duration_s=metadata.duration_s,
+    frame_rate=metadata.frame_rate,
+    width=metadata.width,
+    height=metadata.height,
+    video_created_at=metadata.created_at,
+    exif_metadata=exif_metadata,
+    location_latitude=location_latitude,
+    location_longitude=location_longitude,
+    camera_make=camera_make,
+    camera_model=camera_model,
+)
+```
+
+**EXIF Extraction** (added in migration 013):
+- GPS coordinates (lat/long)
+- Camera make/model
+- Original creation timestamp
+- Stored as JSONB for extensibility
+
+#### STAGE 3: Scene Detection (Lines 240-251)
+
+**Location**: `services/worker/src/domain/scene_detector.py`
+
+**Strategy**: Best-of-all approach (runs multiple detectors, picks best result)
+
+```python
+scenes, detection_result = scene_detector.detect_scenes_with_preferences(
+    video_path,
+    video_duration_s=metadata.duration_s,
+    fps=metadata.frame_rate,
+    preferences=detector_preferences,  # User-specific thresholds
+    use_best=True,  # Try all detectors, pick one with most scenes
+)
+# Returns: List[Scene] with (index, start_s, end_s)
+```
+
+**Available Detectors**:
+
+| Detector | Best For | Default Threshold |
+|----------|----------|-------------------|
+| AdaptiveDetector | Varying content, most videos | 3.0 |
+| ContentDetector | Traditional content changes | 27.0 |
+| ThresholdDetector | Brightness/fade transitions | 12.0 |
+| HashDetector | Perceptual hash-based | N/A |
+
+**User Preferences** (stored in user_profiles.scene_detector_preferences):
+```json
+{
+  "adaptive": {"threshold": 3.0},
+  "content": {"threshold": 27.0},
+  "threshold": {"threshold": 12.0}
+}
+```
+
+**Fallback**: If all detectors fail, creates single scene for entire video
+
+#### STAGE 4: Audio Transcription (Lines 254-291)
+
+**Model**: OpenAI Whisper-1
+
+**Caching Strategy**: Saves transcript to DB for idempotency
+
+```python
+# Check cache first (for retry resilience)
+full_transcript = db.get_cached_transcript(video_id)
+
+if not full_transcript:
+    if ffmpeg.has_audio_stream(video_path):
+        # Extract audio to separate file
+        audio_path = work_dir / "audio.mp3"
+        ffmpeg.extract_audio(video_path, audio_path)
+
+        # Transcribe with quality filtering
+        transcription_result = openai_client.transcribe_audio_with_quality(
+            audio_path,
+            language=transcript_language,  # None = auto-detect
+        )
+
+        if transcription_result.has_speech:
+            full_transcript = transcription_result.text
+        else:
+            # Rejected: music_only, too_short, low_speech_ratio, etc.
+            full_transcript = ""
+
+        # Save as checkpoint (enables retry)
+        db.save_transcript(video_id, full_transcript)
+```
+
+**Quality Filtering** (worker config.py:99-111):
+
+| Criteria | Threshold | Rejection Reason |
+|----------|-----------|------------------|
+| Min chars for speech | 40 | `too_short` |
+| Min speech char ratio | 0.3 (30%) | `low_speech_ratio` |
+| Max no_speech_prob | 0.8 | `high_no_speech_prob` |
+| Music markers | ♪, [music], etc. | `music_only` |
+
+**Implementation** (openai_client.py:16-271):
+```python
+@dataclass
+class TranscriptionResult:
+    text: str
+    has_speech: bool
+    rejection_reason: Optional[str] = None
+    speech_char_ratio: Optional[float] = None
+    music_marker_count: Optional[int] = None
+
+def transcribe_audio_with_quality(audio_path, language=None):
+    # Step 1: Transcribe with Whisper
+    result = openai.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+        response_format="verbose_json",
+        language=language,  # None = auto-detect
+    )
+
+    text = result.text.strip()
+
+    # Step 2: Check music markers
+    music_patterns = [r"♪", r"\[music\]", r"\(music\)", ...]
+    music_marker_count = sum(len(re.findall(p, text, re.IGNORECASE)) for p in music_patterns)
+
+    # Step 3: Calculate speech character ratio
+    speech_chars = sum(1 for c in text if c.isalpha() or is_hangul(c))
+    speech_char_ratio = speech_chars / len(text) if text else 0.0
+
+    # Step 4: Check Whisper segment confidence
+    high_no_speech_segments = sum(
+        1 for seg in result.segments
+        if seg.get("no_speech_prob", 0.0) > settings.transcript_reject_no_speech_prob
+    )
+
+    # Step 5: Apply rejection rules
+    if music_marker_count > 3:
+        return TranscriptionResult("", False, "music_only", ...)
+
+    if len(text) < settings.transcript_min_chars and speech_char_ratio < 0.5:
+        return TranscriptionResult("", False, "too_short", ...)
+
+    if speech_char_ratio < settings.transcript_min_speech_char_ratio:
+        return TranscriptionResult("", False, "low_speech_ratio", ...)
+
+    if high_no_speech_segments > len(result.segments) * 0.5:
+        return TranscriptionResult("", False, "high_no_speech_prob", ...)
+
+    return TranscriptionResult(text, True)
+```
+
+**Cost Optimization**: Skips transcription if no audio stream detected
+
+#### STAGE 5: Parallel Scene Processing (Lines 293-353)
+
+**Concurrency**: ThreadPoolExecutor with configurable workers (default=3)
+
+```python
+# Get existing scene indices (for idempotency on retry)
+existing_scene_indices = db.get_existing_scene_indices(video_id)
+
+# Filter scenes to process
+scenes_to_process = [s for s in scenes if s.index not in existing_scene_indices]
+
+logger.info(f"Processing {len(scenes_to_process)}/{len(scenes)} scenes (skipping {len(existing_scene_indices)} existing)")
+
+# Create API rate limit semaphore
+api_semaphore = Semaphore(settings.max_api_concurrency)  # Default: 3
+
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    futures = {
+        executor.submit(
+            VideoProcessor._process_single_scene,
+            scene, video_path, full_transcript, video_id, owner_id,
+            work_dir, language, len(scenes), metadata.duration_s, filename,
+            api_semaphore
+        ): scene
+        for scene in scenes_to_process
+    }
+
+    for future in as_completed(futures):
+        success, result, scene_index = future.result()
+        if not success:
+            logger.error(f"Scene {scene_index} failed: {result}")
+```
+
+**Key Features**:
+- **Idempotency**: Skips already-processed scenes on retry
+- **Rate limiting**: Semaphore controls concurrent API calls
+- **Graceful degradation**: Continues processing even if some scenes fail
+- **Progress tracking**: Logs success/failure per scene
+
+#### STAGE 6: Video Summary Generation (Lines 374-405)
+
+```python
+# Aggregate scene descriptions
+scene_descriptions = db.get_scene_descriptions(video_id)
+# Returns: [{"index": 0, "description": "...", "transcript": "..."}, ...]
+
+# Generate video-level summary
+video_summary = openai_client.summarize_video_from_scenes(
+    scene_descriptions,
+    transcript_language=language,
+)
+
+# Update video metadata
+db.update_video_metadata(
+    video_id=video_id,
+    video_summary=video_summary,
+    has_rich_semantics=True,
+)
+```
+
+**Model**: GPT-4o-mini
+
+**Prompt**: Synthesizes scene descriptions into coherent video summary
+
+#### STAGE 7: Mark Complete (Line 408)
+
+```python
+db.update_video_status(video_id, VideoStatus.READY)
+```
+
+**Status Flow**: `PENDING` → `PROCESSING` → `READY` (or `FAILED` on error)
+
+### 2.2 Single Scene Processing
+
+**Function**: `VideoProcessor._process_single_scene()`
+
+**Location**: `services/worker/src/domain/video_processor.py:28-110`
+
+**Sidecar Builder**: `services/worker/src/domain/sidecar_builder.py`
+
+**Processing Steps**:
+
+#### Step 1: Extract Transcript Segment (Lines 994-1033)
+
+```python
+def _extract_transcript_segment(
+    transcript: str,
+    start_s: float,
+    end_s: float,
+    video_duration_s: float,
+) -> str:
+    # Calculate proportional character positions
+    start_ratio = start_s / video_duration_s
+    end_ratio = end_s / video_duration_s
+
+    start_idx = int(start_ratio * len(transcript))
+    end_idx = int(end_ratio * len(transcript))
+
+    segment = transcript[start_idx:end_idx].strip()
+
+    # Expand short segments for context (min 200 chars)
+    if len(segment) < 200 and len(transcript) > 200:
+        context_chars = (200 - len(segment)) // 2
+        start_idx = max(0, start_idx - context_chars)
+        end_idx = min(len(transcript), end_idx + context_chars)
+        segment = transcript[start_idx:end_idx].strip()
+
+    return segment
+```
+
+**Proportional Slicing**: Maps scene time boundaries to character positions
+
+**Context Expansion**: Ensures minimum 200 chars for meaningful context
+
+#### Step 2: Extract Keyframes (Lines 1036-1078)
+
+```python
+def _extract_keyframes(
+    video_path: Path,
+    scene: Scene,
+    work_dir: Path,
+    frame_rate: float,
+) -> list[Path]:
+    scene_duration_s = scene.end_s - scene.start_s
+
+    # Calculate number of frames to extract
+    num_frames = min(
+        settings.max_keyframes_per_scene,  # Default: 3
+        max(1, int(scene_duration_s / 2))  # At least 1 per 2 seconds
+    )
+
+    # Generate evenly spaced timestamps
+    timestamps = [
+        scene.start_s + (i * scene_duration_s / num_frames)
+        for i in range(num_frames)
+    ]
+
+    # Extract frames using FFmpeg
+    frame_paths = []
+    for i, ts in enumerate(timestamps):
+        frame_path = work_dir / f"scene_{scene.index}_frame_{i}.jpg"
+        ffmpeg.extract_frame(video_path, ts, frame_path)
+        frame_paths.append(frame_path)
+
+    return frame_paths
+```
+
+**Frame Distribution**: Evenly spaced to capture scene diversity
+
+**Cost Optimization**: Max 3 frames per scene (reduces API costs)
+
+#### Step 3: Frame Quality Assessment (Lines 731-741)
+
+**Location**: `services/worker/src/domain/frame_quality.py`
+
+```python
+@dataclass
+class FrameQuality:
+    path: Path
+    brightness: float
+    blur: float  # Laplacian variance
+    quality_score: float
+
+def rank_frames_by_quality(frame_paths: list[Path]) -> list[FrameQuality]:
+    results = []
+
+    for path in frame_paths:
+        img = cv2.imread(str(path))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Brightness: mean pixel value (0-255)
+        brightness = np.mean(gray)
+
+        # Blur: Laplacian variance (higher = sharper)
+        blur = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+        # Reject black frames (brightness < 15)
+        if brightness < settings.frame_brightness_threshold:
+            quality_score = 0.0
+        # Reject blurry frames (blur < 50)
+        elif blur < settings.frame_blur_threshold:
+            quality_score = 0.0
+        else:
+            # Combined score (normalized)
+            quality_score = (brightness / 255.0) * (min(blur, 500) / 500.0)
+
+        results.append(FrameQuality(path, brightness, blur, quality_score))
+
+    # Sort by quality descending
+    results.sort(key=lambda x: -x.quality_score)
+    return results
+```
+
+**Quality Metrics**:
+- **Brightness**: Mean pixel value (0-255 scale)
+- **Blur**: Laplacian variance (edge sharpness)
+- **Combined Score**: Weighted product of normalized metrics
+
+**Rejection Thresholds**:
+- Brightness < 15.0: Black/dark frames
+- Blur < 50.0: Blurry/out-of-focus frames
+
+#### Step 4: Visual Analysis (Lines 754-819)
+
+**Model**: GPT-4o-mini (upgraded from gpt-4o-nano for better accuracy)
+
+**Max Tokens**: 600 (increased to support detailed descriptions)
+
+```python
+def _analyze_visual_content(
+    frame_paths: list[FrameQuality],
+    scene_index: int,
+    language: str,
+) -> tuple[str, list[str], list[str], float]:
+    # Try best quality frames (up to 2 retries)
+    for attempt, frame in enumerate(frame_paths[:settings.visual_semantics_max_frame_retries + 1]):
+        # Encode frame as base64
+        with open(frame.path, "rb") as f:
+            img_data = base64.b64encode(f.read()).decode()
+
+        # Call GPT-4o-mini with vision
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=600,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a video scene analyzer. Provide structured analysis in JSON format.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"""Analyze this video frame and provide:
+1. A detailed 1-2 sentence visual description (max 500 chars)
+2. List of main entities/objects visible
+3. List of actions/activities occurring
+4. Your confidence level (0.0-1.0)
+
+Return as JSON:
+{{
+  "status": "ok" | "no_content",
+  "description": "...",
+  "main_entities": ["person", "laptop", ...],
+  "actions": ["typing", "drinking", ...],
+  "confidence": 0.85
+}}
+
+If the frame is blank, blurry, or has no meaningful content, return {{"status": "no_content"}}.
+Language: {language}"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_data}"},
+                        },
+                    ],
+                }
+            ],
+        )
+
+        # Parse structured JSON response
+        result = json.loads(response.choices[0].message.content)
+
+        if result["status"] == "ok":
+            return (
+                result["description"],
+                result.get("main_entities", []),
+                result.get("actions", []),
+                result.get("confidence", 0.0),
+            )
+        elif attempt < settings.visual_semantics_max_frame_retries:
+            logger.warning(f"Scene {scene_index}: Frame {attempt} returned no_content, trying next frame")
+            continue
+        else:
+            # All frames failed
+            return ("", [], [], 0.0)
+```
+
+**Structured Output**:
+```json
+{
+  "status": "ok" | "no_content",
+  "description": "A person sitting at a desk typing on a laptop with a coffee mug nearby",
+  "main_entities": ["person", "desk", "laptop", "coffee_mug"],
+  "actions": ["sitting", "typing"],
+  "confidence": 0.85
+}
+```
+
+**Retry Logic**:
+- Tries up to 2 best frames if first returns `no_content`
+- Gracefully degrades to empty values if all frames fail
+
+**Cost Optimization** (Lines 747-751):
+```python
+# Skip visual analysis for short scenes with rich transcript
+if (
+    scene_duration_s < settings.visual_semantics_min_duration_s  # 1.5s
+    and len(transcript_segment) > settings.visual_semantics_transcript_threshold  # 50 chars
+):
+    logger.info(f"Scene {scene_index}: Skipping visual analysis (short scene with rich transcript)")
+    return build_sidecar_without_visual()
+```
+
+**Savings**: ~30-40% reduction in API costs by skipping redundant analysis
+
+#### Step 5: Build Sidecar Metadata (Lines 878-991)
+
+```python
+def build_sidecar(
+    scene_index: int,
+    transcript_segment: str,
+    visual_description: str,
+    visual_entities: list[str],
+    visual_actions: list[str],
+    language: str,
+) -> dict:
+    # Normalize tags (dedupe, lowercase)
+    tags = list(dict.fromkeys(
+        [tag.lower().strip() for tag in visual_entities + visual_actions if tag.strip()]
+    ))
+
+    # Generate search_text (transcript-first strategy)
+    if transcript_segment:
+        search_text = transcript_segment
+    elif visual_description:
+        search_text = visual_description
+    elif tags:
+        search_text = " ".join(tags)
+    else:
+        search_text = ""
+
+    # Generate combined_text (backward compatibility)
+    parts = []
+    if transcript_segment:
+        parts.append(f"Audio: {transcript_segment}")
+    if visual_description:
+        parts.append(f"Visual: {visual_description}")
+    combined_text = " | ".join(parts) if parts else ""
+
+    # Generate embeddings (both legacy and v3-multi)
+    if settings.multi_embedding_enabled:
+        (
+            embedding_transcript,
+            embedding_visual,
+            embedding_summary,
+            multi_metadata,
+        ) = SidecarBuilder._create_multi_channel_embeddings(
+            transcript_segment=transcript_segment,
+            visual_description=visual_description,
+            tags=tags,
+            summary=None,  # Not yet implemented
+            scene_index=scene_index,
+            language=language,
+        )
+
+        # Legacy embedding for backward compat
+        legacy_embedding, legacy_metadata = SidecarBuilder._create_embedding_with_retry(
+            search_text, "legacy", scene_index, language
+        )
+    else:
+        # Legacy-only mode
+        legacy_embedding, legacy_metadata = SidecarBuilder._create_embedding_with_retry(
+            search_text, "legacy", scene_index, language
+        )
+
+    return {
+        "transcript_segment": transcript_segment,
+        "visual_description": visual_description,
+        "visual_summary": visual_description,  # Alias for backward compat
+        "visual_entities": visual_entities,
+        "visual_actions": visual_actions,
+        "tags": tags,
+        "search_text": search_text,
+        "combined_text": combined_text,
+        "embedding": legacy_embedding,
+        "embedding_transcript": embedding_transcript,
+        "embedding_visual": embedding_visual,
+        "embedding_summary": embedding_summary,
+        "embedding_version": settings.embedding_version,  # "v3-multi"
+        "embedding_metadata": multi_metadata.to_dict() if multi_metadata else legacy_metadata,
+        "sidecar_version": "v2",
+    }
+```
+
+**Key Fields**:
+- **search_text**: Transcript-first fallback chain (transcript > visual > tags)
+- **combined_text**: Legacy format ("Audio: ... | Visual: ...")
+- **tags**: Deduplicated, normalized entities + actions
+- **embeddings**: Both legacy (single) and v3-multi (per-channel)
+
+#### Step 6: Upload Thumbnail (Lines 828-836)
+
+```python
+# Select best quality frame
+best_frame = ranked_frames[0]
+
+# Upload to Supabase Storage
+thumbnail_storage_path = f"{owner_id}/{video_id}/thumbnails/scene_{scene_index}.jpg"
+storage.upload_file(best_frame.path, thumbnail_storage_path)
+
+thumbnail_url = f"{settings.supabase_url}/storage/v1/object/public/videos/{thumbnail_storage_path}"
+```
+
+**Storage Path**: `{owner_id}/{video_id}/thumbnails/scene_{index}.jpg`
+
+**Access**: Public read via Supabase Storage CDN
+
+#### Step 7: Save to Database (Lines 77-103)
+
+```python
+db.create_scene(
+    video_id=video_id,
+    index=scene.index,
+    start_s=scene.start_s,
+    end_s=scene.end_s,
+    thumbnail_url=thumbnail_url,
+    **sidecar_data,  # All metadata from build_sidecar()
+)
+# Automatically triggers OpenSearch indexing (non-blocking)
+```
+
+**Automatic Indexing**: Database adapter calls `_index_scene_to_opensearch()` after insert
+
+---
+
+## 3. Embedding Generation (v3-multi)
+
+### 3.1 Multi-Channel Architecture
+
+**Migration**: `infra/migrations/015_add_multi_embedding_channels.sql`
+
+**New Schema Fields**:
+```sql
+ALTER TABLE video_scenes
+    ADD COLUMN embedding_transcript vector(1536),
+    ADD COLUMN embedding_visual vector(1536),
+    ADD COLUMN embedding_summary vector(1536),
+    ADD COLUMN embedding_version TEXT,
+    ADD COLUMN embedding_metadata JSONB;
+```
+
+**Backward Compatibility**:
+- Maintains existing `embedding` column (legacy single embedding)
+- Old API code continues to work
+- New columns are additive (no data loss)
+
+### 3.2 Configuration
+
+**Location**: `services/worker/src/config.py:72-87`
+
+```python
+# Enable v3-multi generation
+multi_embedding_enabled: bool = True
+embedding_version: str = "v3-multi"
+
+# Model configuration
+embedding_model: str = "text-embedding-3-small"
+embedding_dimensions: int = 1536
+
+# Per-channel max lengths (characters)
+embedding_transcript_max_length: int = 4800  # Conservative for clean signal
+embedding_visual_max_length: int = 3200
+embedding_summary_max_length: int = 2000
+
+# Channel-specific settings
+embedding_visual_include_tags: bool = True  # Append tags to visual text
+embedding_summary_enabled: bool = False  # Not yet implemented
+
+# Retry configuration
+embedding_retry_max_attempts: int = 3
+embedding_retry_delay_s: float = 1.0  # Exponential backoff
+```
+
+### 3.3 Channel Definitions
+
+**Function**: `SidecarBuilder._create_multi_channel_embeddings()`
+
+**Location**: `services/worker/src/domain/sidecar_builder.py:549-640`
+
+#### Channel 1: Transcript
+
+**Input**: Transcript segment only (clean ASR signal)
+
+```python
+transcript_text = (transcript_segment or "").strip()
+
+# Truncate if too long
+if len(transcript_text) > settings.embedding_transcript_max_length:
+    transcript_text = SidecarBuilder._smart_truncate(
+        transcript_text, settings.embedding_transcript_max_length
+    )
+
+# Generate embedding (or NULL if empty)
+emb_transcript, meta_transcript = SidecarBuilder._create_embedding_with_retry(
+    transcript_text, "transcript", scene_index, language
+)
+```
+
+**Rationale**: Pure audio signal without visual contamination
+
+**Empty Handling**: Returns NULL if transcript is empty (no fake content)
+
+#### Channel 2: Visual
+
+**Input**: Visual description + space-joined tags
+
+```python
+visual_parts = []
+
+# Add visual description
+if visual_description and visual_description.strip():
+    visual_parts.append(visual_description.strip())
+
+# Add tags (if enabled)
+if settings.embedding_visual_include_tags and tags:
+    unique_tags = list(dict.fromkeys(tags))  # Dedupe
+    tags_text = " ".join(unique_tags)
+    if tags_text:
+        visual_parts.append(tags_text)
+
+# Combine parts
+visual_text = " ".join(visual_parts)
+
+# Truncate if too long
+if len(visual_text) > settings.embedding_visual_max_length:
+    visual_text = SidecarBuilder._smart_truncate(
+        visual_text, settings.embedding_visual_max_length
+    )
+
+# Generate embedding (or NULL if empty)
+emb_visual, meta_visual = SidecarBuilder._create_embedding_with_retry(
+    visual_text, "visual", scene_index, language
+)
+```
+
+**Rationale**: Combines structured (entities/actions) + unstructured (description) visual signals
+
+**Empty Handling**: Returns NULL if no visual content
+
+#### Channel 3: Summary
+
+**Input**: Scene/video-level summary (optional)
+
+```python
+emb_summary = None
+
+if settings.embedding_summary_enabled and summary and summary.strip():
+    summary_text = summary.strip()
+
+    # Truncate if too long
+    if len(summary_text) > settings.embedding_summary_max_length:
+        summary_text = SidecarBuilder._smart_truncate(
+            summary_text, settings.embedding_summary_max_length
+        )
+
+    # Generate embedding
+    emb_summary, meta_summary = SidecarBuilder._create_embedding_with_retry(
+        summary_text, "summary", scene_index, language
+    )
+```
+
+**Status**: Currently disabled (`embedding_summary_enabled=False`)
+
+**Future Use**:
+- Scene-level summaries (synthesized from transcript + visual)
+- Video-level summaries (for global context)
+
+### 3.4 Embedding Metadata
+
+**Structure** (Lines 68-93):
+```python
+{
+  "channels": {
+    "transcript": {
+      "model": "text-embedding-3-small",
+      "dimensions": 1536,
+      "input_text_hash": "a3f2e9b1...",  # SHA-256 hash (first 16 chars)
+      "input_text_length": 245,
+      "created_at": "2025-01-15T10:30:00Z",
+      "language": "ko"
+    },
+    "visual": {
+      "model": "text-embedding-3-small",
+      "dimensions": 1536,
+      "input_text_hash": "c7d4a8e2...",
+      "input_text_length": 180,
+      "created_at": "2025-01-15T10:30:01Z",
+      "language": "ko"
+    },
+    "summary": null  // Not enabled
+  },
+  "legacy": {  // Original single embedding for backward compat
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "input_text_hash": "b5f3c9a7...",
+    "input_text_length": 8000
+  }
+}
+```
+
+**Hash Purpose**: Cache invalidation, duplicate detection
+
+### 3.5 Safety & Retry Logic
+
+**Function**: `SidecarBuilder._create_embedding_with_retry()`
+
+**Location**: `services/worker/src/domain/sidecar_builder.py:463-546`
+
+```python
+def _create_embedding_with_retry(
+    text: str,
+    channel_name: str,
+    scene_index: int,
+    language: str,
+    max_retries: int = 3,
+) -> tuple[Optional[list[float]], Optional[EmbeddingMetadata]]:
+    # Safety: Empty text → NULL embedding (no fake content)
+    if not text or not text.strip():
+        logger.info(f"Scene {scene_index}: {channel_name} is empty, returning NULL embedding")
+        return None, None
+
+    # Generate input hash for metadata
+    text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    # Retry loop with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            # Call OpenAI API
+            embedding = openai_client.create_embedding(text)
+
+            # Build metadata
+            metadata = EmbeddingMetadata(
+                model=settings.embedding_model,
+                dimensions=settings.embedding_dimensions,
+                input_text_hash=text_hash,
+                input_text_length=len(text),
+                created_at=datetime.utcnow().isoformat() + "Z",
+                language=language,
+            )
+
+            logger.info(f"Scene {scene_index}: {channel_name} embedding created (length={len(text)})")
+            return embedding, metadata
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                # Exponential backoff
+                delay = settings.embedding_retry_delay_s * (2 ** attempt)
+                logger.warning(f"Scene {scene_index}: {channel_name} embedding failed (attempt {attempt+1}/{max_retries}), retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                # All retries exhausted
+                logger.error(f"Scene {scene_index}: {channel_name} embedding failed after {max_retries} attempts. Returning NULL.")
+                return None, None
+```
+
+**Safety Rules**:
+1. Empty text → NULL embedding (no hallucinated content)
+2. Exponential backoff on transient failures (1s, 2s, 4s)
+3. Max retries: 3 (configurable)
+4. Graceful degradation: NULL on exhaustion
+
+**Cost Impact**: Failed embeddings don't incur charges
+
+### 3.6 Smart Truncation
+
+**Function**: `SidecarBuilder._smart_truncate()`
+
+**Location**: `services/worker/src/domain/sidecar_builder.py:643-673`
+
+```python
+def _smart_truncate(text: str, max_length: int) -> str:
+    """Truncate text intelligently at sentence boundaries."""
+    if len(text) <= max_length:
+        return text
+
+    # Try to truncate at sentence boundary
+    truncated = text[:max_length]
+
+    # Find last sentence-ending punctuation
+    sentence_endings = [". ", "! ", "? ", ".\n", "!\n", "?\n"]
+    last_sentence_idx = -1
+
+    for ending in sentence_endings:
+        idx = truncated.rfind(ending)
+        if idx > last_sentence_idx:
+            last_sentence_idx = idx
+
+    # If found sentence boundary, truncate there
+    if last_sentence_idx > max_length * 0.7:  # At least 70% of target length
+        return truncated[:last_sentence_idx + 1].strip()
+
+    # Otherwise, hard truncate with ellipsis
+    return truncated.rstrip() + "..."
+```
+
+**Strategy**: Prefer sentence boundaries over mid-word cuts
+
+**Threshold**: Only use sentence boundary if it's at least 70% of target length
+
+### 3.7 Backfill Script
+
+**File**: `services/worker/src/scripts/backfill_scene_embeddings_v3.py`
+
+**Purpose**: Regenerate v3-multi embeddings for existing scenes
+
+**Features**:
+- **Checkpointing**: Resume from last processed scene
+- **Rate limiting**: Configurable delay between API calls (default: 0.1s)
+- **Batch processing**: Fetch scenes in batches (default: 100)
+- **Idempotency**: Only regenerates missing/outdated embeddings
+- **Validation**: Checks content before API calls
+
+**Usage**:
+```bash
+# Process all scenes
+python -m src.scripts.backfill_scene_embeddings_v3
+
+# Process specific video
+python -m src.scripts.backfill_scene_embeddings_v3 --video-id <uuid>
+
+# Process with custom batch size and rate limit
+python -m src.scripts.backfill_scene_embeddings_v3 \
+  --batch-size 100 \
+  --rate-limit-delay 0.1 \
+  --max-scenes 1000
+
+# Force regenerate even if embeddings exist
+python -m src.scripts.backfill_scene_embeddings_v3 --force-regenerate
+
+# Dry run (show what would be done)
+python -m src.scripts.backfill_scene_embeddings_v3 --dry-run
+```
+
+**Checkpoint File**: `.backfill_v3_checkpoint.json`
+
+**Checkpoint Structure**:
+```json
+{
+  "last_scene_id": "uuid",
+  "total_processed": 234400,
+  "total_updated": 102315,
+  "total_skipped": 132085,
+  "total_errors": 0,
+  "started_at": "2025-01-15T08:00:00Z",
+  "updated_at": "2025-01-15T10:30:00Z"
+}
+```
+
+**Resume Capability**: Automatically resumes from `last_scene_id` on restart
+
+---
+
+## 4. OpenSearch Integration
+
+### 4.1 Index Configuration
+
+**File**: `services/worker/src/adapters/opensearch_client.py:18-95`
+
+**Index Name**: `scene_docs` (configurable via `opensearch_index_scenes`)
+
+**Analyzers**:
+```json
+{
+  "analysis": {
+    "analyzer": {
+      "ko_nori": {
+        "type": "custom",
+        "tokenizer": "nori_tokenizer",  // Korean tokenization with Nori plugin
+        "filter": ["lowercase"]
+      },
+      "en_english": {
+        "type": "english"  // English stemming
+      }
+    }
+  }
+}
+```
+
+**Field Mappings**:
+```json
+{
+  "properties": {
+    "scene_id": {"type": "keyword"},  // Exact match
+    "video_id": {"type": "keyword"},  // For filtering
+    "owner_id": {"type": "keyword"},  // Tenant isolation
+    "index": {"type": "integer"},
+    "start_s": {"type": "float"},
+    "end_s": {"type": "float"},
+
+    // Multi-field text (standard + Korean + English analyzers)
+    "transcript_segment": {
+      "type": "text",
+      "analyzer": "standard",
+      "fields": {
+        "ko": {"type": "text", "analyzer": "ko_nori"},
+        "en": {"type": "text", "analyzer": "en_english"}
+      }
+    },
+    "visual_description": { /* same multi-field structure */ },
+    "visual_summary": { /* same multi-field structure */ },
+    "combined_text": { /* same multi-field structure */ },
+
+    // Tags for filtering + BM25
+    "tags": {"type": "keyword"},  // Exact match array
+    "tags_text": {  // Space-joined for BM25
+      "type": "text",
+      "analyzer": "standard",
+      "fields": {
+        "ko": {"type": "text", "analyzer": "ko_nori"},
+        "en": {"type": "text", "analyzer": "en_english"}
+      }
+    },
+
+    "thumbnail_url": {"type": "keyword", "index": false},
+    "created_at": {"type": "date"}
+  }
+}
+```
+
+**Multi-Field Strategy**:
+- **Standard analyzer**: Universal baseline (works for all languages)
+- **ko_nori analyzer**: Korean tokenization (e.g., "노트북" → ["노트북"])
+- **en_english analyzer**: English stemming (e.g., "typing" → ["type"])
+
+**Search Benefit**: Single query searches across all 3 analyzer variants
+
+### 4.2 Index Initialization
+
+**Script**: `services/api/src/scripts/init_opensearch.py`
+
+**Usage**:
+```bash
+docker-compose exec api python -m src.scripts.init_opensearch
+```
+
+**Steps**:
+1. Check if index already exists
+2. Verify Nori plugin installed (required for Korean analysis)
+3. Create index with mappings
+4. Log success/failure
+
+**Nori Plugin Verification**:
+```python
+# Check installed plugins
+plugins_response = opensearch.cat.plugins(format="json")
+installed_plugins = [p["component"] for p in plugins_response]
+
+if "analysis-nori" not in installed_plugins:
+    logger.error("Nori plugin not installed. Install with: bin/opensearch-plugin install analysis-nori")
+    sys.exit(1)
+```
+
+### 4.3 Indexing Flow
+
+**Real-Time Indexing**: `services/worker/src/adapters/database.py:343-391`
+
+```python
+def _index_scene_to_opensearch(self, scene_id, video_id, owner_id, ...):
+    """Index scene to OpenSearch (non-blocking on failure)."""
+    try:
+        # Get owner_id if not provided (needed for tenant isolation)
+        if owner_id is None:
+            owner_id = self.get_owner_id_for_video(video_id)
+
+        # Upsert scene document
+        opensearch_client.upsert_scene_doc(
+            scene_id=str(scene_id),
+            video_id=str(video_id),
+            owner_id=owner_id,
+            index=index,
+            start_s=start_s,
+            end_s=end_s,
+            transcript_segment=transcript_segment,
+            visual_summary=visual_summary,
+            visual_description=visual_description,
+            combined_text=combined_text,
+            tags=tags,
+            thumbnail_url=thumbnail_url,
+        )
+
+        logger.info(f"Indexed scene {scene_id} to OpenSearch")
+
+    except Exception as e:
+        # Log but don't fail - OpenSearch is secondary index
+        logger.warning(f"Failed to index scene {scene_id}: {e}")
+```
+
+**Document Structure** (opensearch_client.py:199-215):
+```python
+doc = {
+    "scene_id": scene_id,
+    "video_id": video_id,
+    "owner_id": owner_id,
+    "index": index,
+    "start_s": start_s,
+    "end_s": end_s,
+    "transcript_segment": transcript_segment or "",
+    "visual_summary": visual_summary or "",
+    "visual_description": visual_description or "",
+    "combined_text": combined_text or "",
+    "tags": tags or [],
+    "tags_text": " ".join(tags) if tags else "",  // Space-joined for BM25
+    "thumbnail_url": thumbnail_url,
+    "created_at": created_at.isoformat() if created_at else datetime.utcnow().isoformat(),
+}
+
+# Upsert with scene_id as document ID (idempotent)
+opensearch.index(
+    index=settings.opensearch_index_scenes,
+    id=scene_id,  // Idempotent upserts
+    body=doc,
+    refresh=False,  // Async refresh for performance
+)
+```
+
+**Idempotency**: Uses `scene_id` as document ID for upsert behavior
+
+**Non-Blocking**: Logs errors but doesn't fail scene creation
+
+**When Indexed**: Automatically after scene creation in worker
+
+### 4.4 Batch Reindexing
+
+**Script**: `services/worker/src/scripts/reindex_opensearch.py`
+
+**Usage**:
+```bash
+docker-compose exec worker python -m src.scripts.reindex_opensearch
+```
+
+**Flow**:
+```python
+# Fetch all scenes with video owner_id (for tenant isolation)
+scenes = db.client.table("video_scenes") \
+    .select("*, videos!inner(owner_id)") \
+    .execute()
+
+# Bulk upsert to OpenSearch
+opensearch_client.bulk_upsert_scenes(scenes)
+```
+
+**Performance**: ~284.8 docs/sec (1,770 scenes in 6.2 seconds)
+
+**Use Cases**:
+- Initial index population
+- Recovery after index deletion
+- Reindex after mapping changes
+
+### 4.5 BM25 Search Configuration
+
+**File**: `services/api/src/adapters/opensearch_client.py:201-297`
+
+**Query Structure**:
+```python
+search_body = {
+    "size": size,  # Default: 200 candidates
+    "query": {
+        "bool": {
+            "filter": [
+                {"term": {"owner_id": owner_id}},  # Tenant isolation
+                {"term": {"video_id": video_id}}  # Optional video filter
+            ],
+            "should": [
+                {
+                    "multi_match": {
+                        "query": query,
+                        "fields": [
+                            # Tags - highest boost (4x)
+                            "tags_text^4",
+                            "tags_text.ko^4",
+                            "tags_text.en^4",
+
+                            # Transcript - high boost (3x)
+                            "transcript_segment^3",
+                            "transcript_segment.ko^3",
+                            "transcript_segment.en^3",
+
+                            # Visual description - medium boost (2x)
+                            "visual_description^2",
+                            "visual_description.ko^2",
+                            "visual_description.en^2",
+
+                            # Visual summary - medium boost (2x)
+                            "visual_summary^2",
+                            "visual_summary.ko^2",
+                            "visual_summary.en^2",
+
+                            # Combined text - base boost (1x)
+                            "combined_text^1",
+                            "combined_text.ko^1",
+                            "combined_text.en^1",
+                        ],
+                        "type": "best_fields",
+                        "operator": "or",
+                        "minimum_should_match": "2<75%",  # At least 75% terms for 3+ term queries
+                    }
+                }
+            ],
+            "minimum_should_match": 1,
+        }
+    },
+    "_source": ["scene_id"],  # Only return IDs for efficiency
+}
+```
+
+**Field Boost Rationale**:
+
+| Field | Boost | Rationale |
+|-------|-------|-----------|
+| tags | 4x | Normalized, high-signal keywords from visual analysis |
+| transcript | 3x | Primary content signal from ASR |
+| visual_description | 2x | Supplementary context from vision model |
+| visual_summary | 2x | Alias for visual_description |
+| combined_text | 1x | Fallback for legacy compatibility |
+
+**Language Support**:
+- Searches across all 3 analyzer variants per field (standard, ko, en)
+- Korean queries benefit from nori tokenization
+- English queries benefit from stemming
+- Standard analyzer handles all languages
+
+**Minimum Should Match**:
+- Single-term query: Match at least 1 term
+- 2-term query: Match at least 1 term
+- 3+ term query: Match at least 75% of terms
+
+**Example**: Query "person typing laptop" → match at least 2 out of 3 terms
+
+---
+
+## 5. Search Pipeline
+
+### 5.1 Search Endpoint
+
+**API Route**: `POST /search`
+
+**Location**: `services/api/src/routes/search.py:321-666`
+
+**Request Parameters**:
+```python
+{
+  "query": str,  # Search query text (required)
+  "video_id": Optional[UUID],  # Filter by video
+  "limit": int = 10,  # Results to return
+  "threshold": float = 0.5,  # Dense similarity threshold (legacy)
+
+  # Optional fusion overrides
+  "fusion_method": Optional["minmax_mean" | "rrf"],
+  "weight_dense": Optional[float],  # 0.0-1.0 (legacy mode)
+  "weight_lexical": Optional[float],  # 0.0-1.0 (legacy mode)
+}
+```
+
+**Response**:
+```python
+{
+  "query": str,
+  "results": [VideoSceneResponse],  # List of scenes with scores
+  "total": int,
+  "latency_ms": int,
+  "fusion_method": str,  # "multi_dense_minmax_mean" | "multi_dense_rrf" | etc.
+  "fusion_weights": dict,  # Active weights used for fusion
+}
+```
+
+### 5.2 Search Modes
+
+**Mode Selection Logic** (search.py:412-426):
+
+```python
+# Determine search mode priority
+use_multi_dense = (
+    settings.multi_dense_enabled
+    and not embedding_failed
+)
+
+use_hybrid = (
+    settings.hybrid_search_enabled
+    and opensearch_client.is_available()
+    and not embedding_failed
+    and not use_multi_dense  # Multi-dense takes precedence
+)
+
+use_lexical_only = (
+    embedding_failed
+    and settings.hybrid_search_enabled
+    and opensearch_client.is_available()
+)
+
+# Fallback: dense-only if all else fails
+```
+
+**Mode Hierarchy** (highest to lowest priority):
+
+1. **Multi-Dense** (v3-multi per-channel search)
+   - Requires: `multi_dense_enabled=True` + query embedding success
+   - Searches: transcript, visual, summary channels + lexical (4 signals)
+   - Fusion: Multi-channel minmax_mean or RRF
+
+2. **Hybrid** (legacy 2-signal search)
+   - Requires: `hybrid_search_enabled=True` + OpenSearch available + query embedding success
+   - Searches: single embedding + lexical (2 signals)
+   - Fusion: 2-signal minmax_mean or RRF
+
+3. **Lexical-Only** (fallback when embeddings fail)
+   - Requires: OpenSearch available
+   - Searches: BM25 only (1 signal)
+   - No fusion (direct BM25 results)
+
+4. **Dense-Only** (fallback when OpenSearch unavailable)
+   - Searches: single embedding only (1 signal)
+   - No fusion (direct cosine similarity results)
+
+**Configuration** (API config.py:39-82):
+
+```python
+# Global toggles
+hybrid_search_enabled: bool = True  # Enable hybrid search
+multi_dense_enabled: bool = False  # Enable v3-multi search (takes precedence)
+
+# Fusion method (applies to both hybrid and multi-dense)
+fusion_method: str = "minmax_mean"  # or "rrf"
+
+# Legacy 2-signal weights
+fusion_weight_dense: float = 0.7
+fusion_weight_lexical: float = 0.3
+
+# Multi-channel 4-signal weights
+weight_transcript: float = 0.45
+weight_visual: float = 0.25
+weight_summary: float = 0.10
+weight_lexical_multi: float = 0.20
+
+# Candidate K values (pre-fusion retrieval limits)
+candidate_k_dense: int = 200
+candidate_k_lexical: int = 200
+candidate_k_transcript: int = 200
+candidate_k_visual: int = 200
+candidate_k_summary: int = 200
+
+# Similarity thresholds
+threshold_transcript: float = 0.2
+threshold_visual: float = 0.15  # Lower for sparse visual content
+threshold_summary: float = 0.2
+```
+
+### 5.3 Multi-Dense Search (v3-multi)
+
+**Status**: Implemented but not yet enabled (`multi_dense_enabled=False`)
+
+**Flow** (search.py:434-503):
+
+#### Step 1: Parallel Retrieval
+
+```python
+channel_candidates, multi_dense_timings = _run_multi_dense_search(
+    query_embedding,
+    user_id,
+    request.video_id,
+    request.query,  # For BM25
+)
+
+# Returns:
+# channel_candidates = {
+#     "transcript": [Candidate(scene_id, rank, score), ...],
+#     "visual": [Candidate(scene_id, rank, score), ...],
+#     "summary": [Candidate(scene_id, rank, score), ...],
+#     "lexical": [Candidate(scene_id, rank, score), ...],
+# }
+# multi_dense_timings = {
+#     "transcript": 45,  # ms
+#     "visual": 52,
+#     "summary": 0,  # disabled
+#     "lexical": 38,
+# }
+```
+
+#### Step 2: Execute 4 Channels Concurrently
+
+**Function**: `_run_multi_dense_search()`
+
+**Location**: `services/api/src/routes/search.py:116-231`
+
+```python
+def _run_multi_dense_search(
+    query_embedding: list[float],
+    user_id: UUID,
+    video_id: Optional[UUID],
+    query: str,
+) -> tuple[dict[str, list[Candidate]], dict[str, int]]:
+
+    channel_candidates = {}
+    timing_ms = {}
+
+    # Define retrieval tasks
+    def run_transcript():
+        start = time.perf_counter()
+        results = db.search_scenes_transcript_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_transcript,  # 200
+            threshold=settings.threshold_transcript,  # 0.2
+        )
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        candidates = [
+            Candidate(scene_id=row["id"], rank=i+1, score=row["similarity"])
+            for i, row in enumerate(results)
+        ]
+
+        return ("transcript", candidates, elapsed_ms)
+
+    def run_visual():
+        start = time.perf_counter()
+        results = db.search_scenes_visual_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_visual,  # 200
+            threshold=settings.threshold_visual,  # 0.15
+        )
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        candidates = [
+            Candidate(scene_id=row["id"], rank=i+1, score=row["similarity"])
+            for i, row in enumerate(results)
+        ]
+
+        return ("visual", candidates, elapsed_ms)
+
+    def run_summary():
+        # Currently disabled
+        if not settings.embedding_summary_enabled:
+            return ("summary", [], 0)
+
+        start = time.perf_counter()
+        results = db.search_scenes_summary_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_summary,  # 200
+            threshold=settings.threshold_summary,  # 0.2
+        )
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        candidates = [
+            Candidate(scene_id=row["id"], rank=i+1, score=row["similarity"])
+            for i, row in enumerate(results)
+        ]
+
+        return ("summary", candidates, elapsed_ms)
+
+    def run_lexical():
+        start = time.perf_counter()
+        results = opensearch_client.bm25_search(
+            query=query,
+            owner_id=str(user_id),
+            video_id=str(video_id) if video_id else None,
+            size=settings.candidate_k_lexical,  # 200
+        )
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        candidates = [
+            Candidate(scene_id=row["scene_id"], rank=i+1, score=row["_score"])
+            for i, row in enumerate(results)
+        ]
+
+        return ("lexical", candidates, elapsed_ms)
+
+    # Build task map
+    retrieval_tasks = {
+        "transcript": run_transcript,
+        "visual": run_visual,
+        "summary": run_summary,
+        "lexical": run_lexical,
+    }
+
+    # Run all tasks in parallel with timeouts
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(task_fn): ch_name
+            for ch_name, task_fn in retrieval_tasks.items()
+        }
+
+        for future in as_completed(futures):
+            channel_name = futures[future]
+            try:
+                ch_name, candidates, elapsed = future.result(
+                    timeout=settings.multi_dense_timeout_s  # 1.5s per task
+                )
+                channel_candidates[ch_name] = candidates
+                timing_ms[ch_name] = elapsed
+
+                logger.info(f"{ch_name}: {len(candidates)} candidates in {elapsed}ms")
+
+            except TimeoutError:
+                logger.warning(f"{channel_name} timed out after {settings.multi_dense_timeout_s}s")
+                channel_candidates[channel_name] = []  # Graceful degradation
+                timing_ms[channel_name] = 0
+
+            except Exception as e:
+                logger.error(f"{channel_name} failed: {e}")
+                channel_candidates[channel_name] = []  # Graceful degradation
+                timing_ms[channel_name] = 0
+
+    return channel_candidates, timing_ms
+```
+
+**Key Features**:
+- **Parallelism**: All 4 channels run concurrently (ThreadPoolExecutor)
+- **Timeouts**: Each task has 1.5s timeout (configurable)
+- **Graceful degradation**: Empty results on timeout/error (doesn't fail entire search)
+- **Performance tracking**: Per-channel latency metrics
+
+#### Step 3: Database RPC Functions
+
+**Migration**: `infra/migrations/015_add_multi_embedding_channels.sql:129-240`
+
+**Transcript Channel**:
+```sql
+CREATE OR REPLACE FUNCTION search_scenes_by_transcript_embedding(
+    query_embedding vector(1536),
+    match_threshold float DEFAULT 0.5,
+    match_count int DEFAULT 200,
+    filter_video_id uuid DEFAULT NULL,
+    filter_user_id uuid DEFAULT NULL
+)
+RETURNS TABLE (id uuid, video_id uuid, similarity float)
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        vs.id,
+        vs.video_id,
+        (1 - (vs.embedding_transcript <=> query_embedding))::float AS similarity
+    FROM video_scenes vs
+    INNER JOIN videos v ON vs.video_id = v.id
+    WHERE
+        vs.embedding_transcript IS NOT NULL
+        AND (1 - (vs.embedding_transcript <=> query_embedding)) > match_threshold
+        AND (filter_video_id IS NULL OR vs.video_id = filter_video_id)
+        AND (filter_user_id IS NULL OR v.owner_id = filter_user_id)
+    ORDER BY vs.embedding_transcript <=> query_embedding ASC
+    LIMIT match_count;
+END;
+$$;
+```
+
+**Visual & Summary Channels**: Similar structure with `embedding_visual` and `embedding_summary`
+
+**Index Used**: HNSW vector index for O(log N) approximate nearest neighbor search
+
+**Operator**: `<=>` (cosine distance), converted to similarity via `1 - distance`
+
+#### Step 4: Fusion
+
+**Function**: `multi_channel_minmax_fuse()` or `multi_channel_rrf_fuse()`
+
+**Location**: `services/api/src/domain/search/fusion.py`
+
+```python
+# Determine fusion method
+fusion_method = request.fusion_method or settings.fusion_method
+
+# Get active weights (redistributed if channels missing)
+is_valid, error, fusion_weights = settings.validate_multi_dense_weights()
+if not is_valid:
+    raise HTTPException(400, error)
+
+# Filter to active channels only
+fusion_channels = {
+    ch: candidates
+    for ch, candidates in channel_candidates.items()
+    if ch in fusion_weights and candidates  # Skip empty channels
+}
+
+if fusion_method == "rrf":
+    fused_results = multi_channel_rrf_fuse(
+        channel_candidates=fusion_channels,
+        k=settings.rrf_k,  # 60
+        top_k=request.limit,
+        include_debug=settings.search_debug,
+    )
+    actual_score_type = ScoreType.MULTI_DENSE_RRF
+
+else:  # minmax_mean (default)
+    fused_results = multi_channel_minmax_fuse(
+        channel_candidates=fusion_channels,
+        channel_weights=fusion_weights,
+        eps=settings.fusion_minmax_eps,  # 1e-9
+        top_k=request.limit,
+        include_debug=settings.search_debug,
+    )
+    actual_score_type = ScoreType.MULTI_DENSE_MINMAX_MEAN
+```
+
+### 5.4 Fusion Algorithms
+
+**File**: `services/api/src/domain/search/fusion.py`
+
+#### Min-Max Weighted Mean Fusion
+
+**Function**: `multi_channel_minmax_fuse()`
+
+**Location**: Lines 513-716
+
+**Algorithm**:
+```python
+def multi_channel_minmax_fuse(
+    channel_candidates: dict[str, list[Candidate]],
+    channel_weights: dict[str, float],
+    eps: float = 1e-9,
+    top_k: int = 10,
+    include_debug: bool = False,
+):
+    # Step 1: Validate weights sum to 1.0
+    assert abs(sum(channel_weights.values()) - 1.0) < 0.01, "Weights must sum to 1.0"
+
+    # Step 2: Min-max normalize each channel independently
+    channel_norm_by_id = {}
+
+    for ch_name, candidates in channel_candidates.items():
+        if not candidates:
+            continue
+
+        # Extract scores
+        scores = [c.score for c in candidates]
+
+        # Find min/max
+        min_score = min(scores)
+        max_score = max(scores)
+
+        # Normalize: (score - min) / (max - min + eps)
+        norm_scores = [
+            (score - min_score) / (max_score - min_score + eps)
+            for score in scores
+        ]
+
+        # Store normalized scores by scene_id
+        channel_norm_by_id[ch_name] = {
+            c.scene_id: norm_scores[i]
+            for i, c in enumerate(candidates)
+        }
+
+    # Step 3: Weighted mean for each scene
+    all_scene_ids = set()
+    for candidates in channel_candidates.values():
+        all_scene_ids.update(c.scene_id for c in candidates)
+
+    fused_results = []
+
+    for scene_id in all_scene_ids:
+        # Calculate weighted mean across channels
+        final_score = sum(
+            channel_weights[ch] * channel_norm_by_id[ch].get(scene_id, 0.0)
+            for ch in channel_norm_by_id.keys()
+        )
+
+        # Build debug metadata (if enabled)
+        if include_debug:
+            channel_scores = {
+                ch: {
+                    "rank": next(i+1 for i, c in enumerate(channel_candidates[ch]) if c.scene_id == scene_id),
+                    "score_raw": next(c.score for c in channel_candidates[ch] if c.scene_id == scene_id),
+                    "score_norm": channel_norm_by_id[ch].get(scene_id, 0.0),
+                }
+                for ch in channel_norm_by_id.keys()
+                if scene_id in channel_norm_by_id[ch]
+            }
+        else:
+            channel_scores = None
+
+        fused_results.append(FusedCandidate(
+            scene_id=scene_id,
+            score=final_score,
+            score_type=ScoreType.MULTI_DENSE_MINMAX_MEAN,
+            channel_scores=channel_scores,
+        ))
+
+    # Step 4: Sort by score descending
+    fused_results.sort(key=lambda c: -c.score)
+
+    return fused_results[:top_k]
+```
+
+**Example**:
+```
+Input:
+  Transcript: [("a", 0.85), ("b", 0.75)]
+  Visual:     [("b", 0.80), ("c", 0.70)]
+  Lexical:    [("a", 25.0), ("c", 20.0)]
+
+Weights: {transcript: 0.45, visual: 0.25, lexical: 0.30}
+
+Step 1: Min-max normalize each channel
+  Transcript: min=0.75, max=0.85
+    "a": (0.85-0.75)/(0.85-0.75) = 1.0
+    "b": (0.75-0.75)/(0.85-0.75) = 0.0
+
+  Visual: min=0.70, max=0.80
+    "b": (0.80-0.70)/(0.80-0.70) = 1.0
+    "c": (0.70-0.70)/(0.80-0.70) = 0.0
+
+  Lexical: min=20.0, max=25.0
+    "a": (25.0-20.0)/(25.0-20.0) = 1.0
+    "c": (20.0-20.0)/(25.0-20.0) = 0.0
+
+Step 2: Weighted mean per scene
+  Scene "a": 0.45*1.0 + 0.25*0.0 + 0.30*1.0 = 0.75
+  Scene "b": 0.45*0.0 + 0.25*1.0 + 0.30*0.0 = 0.25
+  Scene "c": 0.45*0.0 + 0.25*0.0 + 0.30*0.0 = 0.00
+
+Step 3: Sort descending
+  Ranking: a (0.75) > b (0.25) > c (0.00)
+```
+
+**Properties**:
+- **Scale-invariant**: Normalizes different score ranges (cosine similarity 0-1 vs BM25 0-inf)
+- **Weight-sensitive**: Higher weights directly increase contribution
+- **Interpretable**: Normalized scores in [0, 1] range
+
+#### Reciprocal Rank Fusion (RRF)
+
+**Function**: `multi_channel_rrf_fuse()`
+
+**Location**: Lines 719-816
+
+**Algorithm**:
+```python
+def multi_channel_rrf_fuse(
+    channel_candidates: dict[str, list[Candidate]],
+    rrf_k: int = 60,
+    top_k: int = 10,
+    include_debug: bool = False,
+):
+    # RRF score = sum(1 / (k + rank_i) for i in all_channels)
+
+    # Build lookup: {scene_id: {channel: (rank, score)}}
+    channel_by_id = {}
+    for ch_name, candidates in channel_candidates.items():
+        channel_by_id[ch_name] = {
+            c.scene_id: c for c in candidates
+        }
+
+    # Get all unique scene IDs
+    all_scene_ids = set()
+    for candidates in channel_candidates.values():
+        all_scene_ids.update(c.scene_id for c in candidates)
+
+    fused_results = []
+
+    for scene_id in all_scene_ids:
+        rrf_score = 0.0
+
+        # Sum RRF contributions from each channel
+        for ch_name, candidates_dict in channel_by_id.items():
+            if scene_id in candidates_dict:
+                candidate = candidates_dict[scene_id]
+                rrf_score += 1.0 / (rrf_k + candidate.rank)
+
+        # Build debug metadata (if enabled)
+        if include_debug:
+            channel_scores = {
+                ch: {
+                    "rank": channel_by_id[ch][scene_id].rank,
+                    "score_raw": channel_by_id[ch][scene_id].score,
+                    "rrf_contribution": 1.0 / (rrf_k + channel_by_id[ch][scene_id].rank),
+                }
+                for ch in channel_by_id.keys()
+                if scene_id in channel_by_id[ch]
+            }
+        else:
+            channel_scores = None
+
+        fused_results.append(FusedCandidate(
+            scene_id=scene_id,
+            score=rrf_score,
+            score_type=ScoreType.MULTI_DENSE_RRF,
+            channel_scores=channel_scores,
+        ))
+
+    # Sort by score descending
+    fused_results.sort(key=lambda c: -c.score)
+
+    return fused_results[:top_k]
+```
+
+**Formula**: `RRF_score(scene) = Σ 1/(k + rank_i)` for all channels where scene appears
+
+**Example**:
+```
+Input:
+  Transcript: [("a", rank=1), ("b", rank=2)]
+  Visual:     [("b", rank=1), ("c", rank=2)]
+  Lexical:    [("a", rank=1), ("c", rank=2)]
+
+k = 60
+
+Scene "a":
+  Transcript: 1/(60+1) = 0.0164
+  Visual: (not present) = 0
+  Lexical: 1/(60+1) = 0.0164
+  Total: 0.0328
+
+Scene "b":
+  Transcript: 1/(60+2) = 0.0161
+  Visual: 1/(60+1) = 0.0164
+  Lexical: (not present) = 0
+  Total: 0.0325
+
+Scene "c":
+  Transcript: (not present) = 0
+  Visual: 1/(60+2) = 0.0161
+  Lexical: 1/(60+2) = 0.0161
+  Total: 0.0323
+
+Ranking: a (0.0328) > b (0.0325) > c (0.0323)
+```
+
+**Properties**:
+- **Rank-based**: Uses ranks instead of raw scores (robust to outliers)
+- **Scale-invariant**: Doesn't depend on score distributions
+- **Neutral**: Equal treatment of all channels (no explicit weights)
+
+**When to Use**:
+
+| Fusion Method | Best For |
+|---------------|----------|
+| Min-Max Mean | Fine-grained weight control, stable score ranges |
+| RRF | Robust to score outliers, rank-based neutrality |
+
+### 5.5 Result Hydration
+
+**Function**: `_hydrate_scenes()`
+
+**Location**: `services/api/src/routes/search.py:234-318`
+
+```python
+def _hydrate_scenes(
+    fused_results: list[FusedCandidate],
+    include_debug: bool = False,
+) -> list[VideoSceneResponse]:
+    # Get scene IDs in fused order
+    scene_ids = [UUID(r.scene_id) for r in fused_results]
+
+    # Batch fetch scenes from database (preserves order)
+    scenes = db.get_scenes_by_ids(scene_ids, preserve_order=True)
+
+    # Batch fetch video filenames
+    video_ids = list(set(str(scene.video_id) for scene in scenes))
+    filename_map = db.get_video_filenames_by_ids(video_ids)
+
+    # Build lookup for fused metadata
+    fused_by_id = {r.scene_id: r for r in fused_results}
+
+    # Build responses
+    responses = []
+    for scene in scenes:
+        fused = fused_by_id.get(str(scene.id))
+
+        response_data = {
+            # Scene identity
+            "id": scene.id,
+            "video_id": scene.video_id,
+            "video_filename": filename_map.get(str(scene.video_id)),
+            "index": scene.index,
+
+            # Time boundaries
+            "start_s": scene.start_s,
+            "end_s": scene.end_s,
+
+            # Content fields
+            "transcript_segment": scene.transcript_segment,
+            "visual_summary": scene.visual_summary,
+            "visual_description": scene.visual_description,
+            "combined_text": scene.combined_text,
+            "tags": scene.tags,
+
+            # Visual metadata
+            "visual_entities": scene.visual_entities,
+            "visual_actions": scene.visual_actions,
+
+            # Media
+            "thumbnail_url": scene.thumbnail_url,
+
+            # Score metadata
+            "score": fused.score,
+            "score_type": fused.score_type.value,  # "multi_dense_minmax_mean" | "multi_dense_rrf"
+            "similarity": fused.score,  # Backward compatibility alias
+        }
+
+        # Add debug fields if enabled
+        if include_debug and fused.channel_scores:
+            response_data["channel_scores"] = fused.channel_scores
+            # {
+            #   "transcript": {
+            #     "rank": 5,
+            #     "score_raw": 0.85,
+            #     "score_norm": 0.92
+            #   },
+            #   "visual": {
+            #     "rank": 12,
+            #     "score_raw": 0.72,
+            #     "score_norm": 0.68
+            #   },
+            #   "lexical": {
+            #     "rank": 3,
+            #     "score_raw": 23.4,
+            #     "score_norm": 0.95
+            #   }
+            # }
+
+        responses.append(VideoSceneResponse(**response_data))
+
+    return responses
+```
+
+**Key Features**:
+- **Batch fetching**: Single query for all scenes (efficient)
+- **Order preservation**: Results match fusion order
+- **Video filenames**: Batch fetch for display
+- **Debug mode**: Per-channel score breakdown when `search_debug=True`
+
+### 5.6 Search Response
+
+**Schema**: `services/api/src/domain/schemas.py`
+
+```python
+{
+  "query": "person typing on laptop",
+  "results": [
+    {
+      // Scene identity
+      "id": "uuid",
+      "video_id": "uuid",
+      "video_filename": "my_video.mp4",
+      "index": 0,
+
+      // Time boundaries
+      "start_s": 0.0,
+      "end_s": 5.2,
+
+      // Content fields
+      "transcript_segment": "So today I'm going to show you how to...",
+      "visual_summary": "A person sitting at a desk typing on a laptop",
+      "visual_description": "A person sitting at a modern desk with a laptop, typing. Coffee mug on the right side.",
+      "combined_text": "Audio: So today I'm going to show you how to... | Visual: A person sitting at a desk typing on a laptop",
+      "tags": ["person", "desk", "laptop", "coffee_mug", "typing"],
+
+      // Visual metadata
+      "visual_entities": ["person", "desk", "laptop", "coffee_mug"],
+      "visual_actions": ["sitting", "typing"],
+
+      // Media
+      "thumbnail_url": "https://.../thumbnails/scene_0.jpg",
+
+      // Score metadata
+      "score": 0.85,
+      "score_type": "multi_dense_minmax_mean",
+      "similarity": 0.85,  // Backward compatibility
+
+      // Debug info (if search_debug=True)
+      "channel_scores": {
+        "transcript": {
+          "rank": 5,
+          "score_raw": 0.85,
+          "score_norm": 0.92
+        },
+        "visual": {
+          "rank": 12,
+          "score_raw": 0.72,
+          "score_norm": 0.68
+        },
+        "lexical": {
+          "rank": 3,
+          "score_raw": 23.4,
+          "score_norm": 0.95
+        }
+      }
+    }
+  ],
+  "total": 10,
+  "latency_ms": 234,
+  "fusion_method": "multi_dense_minmax_mean",
+  "fusion_weights": {
+    "transcript": 0.45,
+    "visual": 0.25,
+    "summary": 0.10,
+    "lexical": 0.20
+  }
+}
+```
+
+---
+
+## 6. Database Schema
+
+### 6.1 Videos Table
+
+**Migration**: `infra/migrations/001_initial_schema.sql:36-51`
+
+```sql
+CREATE TABLE videos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    storage_path TEXT NOT NULL,
+    status video_status DEFAULT 'PENDING' NOT NULL,
+
+    -- Metadata (migration 001)
+    filename TEXT,
+    duration_s FLOAT,
+    frame_rate FLOAT,
+    width INTEGER,
+    height INTEGER,
+    video_created_at TIMESTAMPTZ,
+    thumbnail_url TEXT,
+    error_message TEXT,
+
+    -- Transcription cache (migration 006)
+    full_transcript TEXT,
+    transcript_language TEXT,  -- ISO-639-1 code: ko, en, ja, ru
+
+    -- Rich semantics (migration 009)
+    video_summary TEXT,
+    has_rich_semantics BOOLEAN DEFAULT FALSE,
+
+    -- EXIF metadata (migration 013)
+    exif_metadata JSONB,
+    location_latitude FLOAT,
+    location_longitude FLOAT,
+    location_name TEXT,
+    camera_make TEXT,
+    camera_model TEXT,
+
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_videos_owner_id ON videos(owner_id);
+CREATE INDEX idx_videos_status ON videos(status);
+CREATE INDEX idx_videos_has_rich_semantics ON videos(has_rich_semantics);
+```
+
+**Status Enum**:
+```sql
+CREATE TYPE video_status AS ENUM (
+    'PENDING',     -- Uploaded, awaiting processing
+    'PROCESSING',  -- Currently being processed
+    'READY',       -- Processing complete, searchable
+    'FAILED'       -- Processing failed
+);
+```
+
+### 6.2 Video Scenes Table
+
+**Migration**: `infra/migrations/001_initial_schema.sql:64-79` + extensions
+
+```sql
+CREATE TABLE video_scenes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    index INTEGER NOT NULL,
+    start_s FLOAT NOT NULL,
+    end_s FLOAT NOT NULL,
+
+    -- Content (migration 001)
+    transcript_segment TEXT,
+    visual_summary TEXT,
+    combined_text TEXT,
+    thumbnail_url TEXT,
+
+    -- Rich semantics (migration 009)
+    visual_description TEXT,
+    visual_entities text[],
+    visual_actions text[],
+    tags text[],
+
+    -- Sidecar v2 metadata (migration 011)
+    sidecar_version TEXT,
+    search_text TEXT,
+    embedding_metadata JSONB,
+    needs_reprocess BOOLEAN DEFAULT FALSE,
+    processing_stats JSONB,
+
+    -- Legacy single embedding (migration 002)
+    embedding vector(1536),
+
+    -- v3-multi per-channel embeddings (migration 015)
+    embedding_transcript vector(1536),
+    embedding_visual vector(1536),
+    embedding_summary vector(1536),
+    embedding_version TEXT,
+
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    UNIQUE(video_id, index)
+);
+
+CREATE INDEX idx_video_scenes_video_id ON video_scenes(video_id);
+CREATE INDEX idx_video_scenes_tags ON video_scenes USING GIN(tags);
+
+-- Legacy HNSW vector index (migration 002)
+CREATE INDEX idx_video_scenes_embedding
+    ON video_scenes USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+-- v3-multi HNSW indexes (migration 015)
+CREATE INDEX idx_video_scenes_embedding_transcript
+    ON video_scenes USING hnsw (embedding_transcript vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_video_scenes_embedding_visual
+    ON video_scenes USING hnsw (embedding_visual vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_video_scenes_embedding_summary
+    ON video_scenes USING hnsw (embedding_summary vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+-- Partial indexes for NULL filtering (performance optimization)
+CREATE INDEX idx_video_scenes_embedding_transcript_not_null
+    ON video_scenes (id) WHERE embedding_transcript IS NOT NULL;
+
+CREATE INDEX idx_video_scenes_embedding_visual_not_null
+    ON video_scenes (id) WHERE embedding_visual IS NOT NULL;
+
+CREATE INDEX idx_video_scenes_embedding_summary_not_null
+    ON video_scenes (id) WHERE embedding_summary IS NOT NULL;
+```
+
+**HNSW Parameters**:
+- **m**: Max connections per layer (higher = better recall, more memory)
+- **ef_construction**: Candidates during index build (higher = better quality, slower build)
+
+**Partial Indexes**: Skip NULL embeddings for faster NOT NULL filtering
+
+### 6.3 User Profiles Table
+
+**Migration**: `infra/migrations/001_initial_schema.sql:7-15` + extensions
+
+```sql
+CREATE TABLE user_profiles (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name TEXT NOT NULL,
+    industry TEXT,
+    job_title TEXT,
+
+    -- Preferences (migration 005)
+    preferred_language TEXT DEFAULT 'ko',  -- ko | en
+
+    -- Scene detector preferences (migration 012)
+    scene_detector_preferences JSONB,
+    -- {
+    --   "adaptive": {"threshold": 3.0},
+    --   "content": {"threshold": 27.0},
+    --   "threshold": {"threshold": 12.0}
+    -- }
+
+    marketing_consent BOOLEAN DEFAULT FALSE NOT NULL,
+    marketing_consent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+```
+
+### 6.4 Search Queries Table
+
+**Migration**: `infra/migrations/001_initial_schema.sql:82-96`
+
+```sql
+CREATE TABLE search_queries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    video_id UUID REFERENCES videos(id) ON DELETE SET NULL,
+    query_text TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'scene_search',
+    results_count INTEGER,
+    latency_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_search_queries_user_id ON search_queries(user_id);
+CREATE INDEX idx_search_queries_created_at ON search_queries(created_at DESC);
+CREATE INDEX idx_search_queries_video_id ON search_queries(video_id);
+```
+
+**Purpose**: Analytics, usage tracking, search quality monitoring
+
+### 6.5 Row-Level Security
+
+**Videos** (migration 001:116-128):
+```sql
+ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see/modify their own videos
+CREATE POLICY "Users can view own videos"
+    ON videos FOR SELECT
+    USING (auth.uid() = owner_id);
+
+CREATE POLICY "Users can insert own videos"
+    ON videos FOR INSERT
+    WITH CHECK (auth.uid() = owner_id);
+
+CREATE POLICY "Users can update own videos"
+    ON videos FOR UPDATE
+    USING (auth.uid() = owner_id);
+```
+
+**Video Scenes** (migration 001:131-146):
+```sql
+ALTER TABLE video_scenes ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see scenes from their own videos
+CREATE POLICY "Users can view scenes from own videos"
+    ON video_scenes FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM videos
+            WHERE videos.id = video_scenes.video_id
+            AND videos.owner_id = auth.uid()
+        )
+    );
+
+-- Service role can manage all scenes (for worker)
+CREATE POLICY "Service role can manage scenes"
+    ON video_scenes FOR ALL
+    USING (auth.jwt()->>'role' = 'service_role');
+```
+
+**Benefits**:
+- **Multi-tenancy**: Automatic data isolation
+- **Security**: Enforced at database level (not application)
+- **Worker access**: Service role bypasses RLS for processing
+
+---
+
+## 7. Data Flow Diagrams
+
+### 7.1 Video Upload Flow
+
+```
+┌─────────┐
+│ Client  │
+└────┬────┘
+     │ 1. POST /videos/upload-url
+     │    {filename: "my_video.mp4", file_extension: "mp4"}
+     ▼
+┌──────────────┐
+│  API Server  │
+└──────┬───────┘
+       │ 2. Sanitize filename
+       │ 3. Generate storage_path: {user_id}/{video_id}.mp4
+       │ 4. Create video record (status=PENDING)
+       ▼
+┌──────────────┐
+│   Postgres   │
+└──────┬───────┘
+       │ 5. Return {video_id, storage_path}
+       ▼
+┌─────────┐
+│ Client  │
+└────┬────┘
+     │ 6. Upload video to Supabase Storage (client-side)
+     │    PUT /storage/v1/object/videos/{storage_path}
+     ▼
+┌────────────────────┐
+│ Supabase Storage   │
+└────────┬───────────┘
+         │ 7. POST /videos/{video_id}/uploaded
+         ▼
+    ┌──────────────┐
+    │  API Server  │
+    └──────┬───────┘
+           │ 8. Enqueue Dramatiq task: process_video.send(video_id)
+           ▼
+    ┌──────────────┐
+    │ Redis Queue  │
+    └──────┬───────┘
+           │ 9. Worker consumes task
+           ▼
+    ┌──────────────┐
+    │    Worker    │
+    └──────────────┘
+```
+
+### 7.2 Video Processing Flow
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                   Worker: process_video(video_id)                │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  1. Download video from Supabase Storage       │
+    └───────────────────────┬────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  2. Extract Metadata (FFmpeg probe)            │
+    │     - duration, fps, resolution                │
+    │     - EXIF: GPS, camera make/model             │
+    └───────────────────────┬────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  3. Scene Detection (PySceneDetect)            │
+    │     - Try all detectors (Adaptive, Content)    │
+    │     - Pick detector with most scenes           │
+    │     Result: [(0, 0.0s, 5.2s), (1, 5.2s, 10.1s)]│
+    └───────────────────────┬────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  4. Audio Extraction (FFmpeg)                  │
+    │     video.mp4 → audio.mp3                      │
+    └───────────────────────┬────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  5. Transcription (Whisper-1)                  │
+    │     - Quality filtering (music, speech ratio)  │
+    │     - Cache to DB (checkpoint)                 │
+    └───────────────────────┬────────────────────────┘
+                            │
+    ┌───────────────────────▼────────────────────────┐
+    │  6. Parallel Scene Processing                  │
+    │     (ThreadPoolExecutor, max_workers=3)        │
+    └───────────────────────┬────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+   ┌────────┐         ┌────────┐         ┌────────┐
+   │Scene 0 │         │Scene 1 │         │Scene 2 │
+   └───┬────┘         └───┬────┘         └───┬────┘
+       │                  │                  │
+       │  For each scene: │                  │
+       │  a. Extract keyframes (FFmpeg)      │
+       │  b. Rank frames (quality score)     │
+       │  c. Visual analysis (GPT-4o-mini)   │
+       │     → {description, entities, actions}
+       │  d. Build sidecar metadata          │
+       │     → search_text, tags, embeddings │
+       │  e. Generate embeddings             │
+       │     - Legacy: single embedding      │
+       │     - v3-multi: per-channel         │
+       │  f. Upload thumbnail                │
+       │  g. Save scene to Postgres          │
+       │  h. Index to OpenSearch (non-blocking)
+       │                  │                  │
+       └──────────────────┼──────────────────┘
+                          │
+    ┌─────────────────────▼──────────────────────────┐
+    │  7. Generate Video Summary (GPT-4o-mini)       │
+    │     Aggregate scene descriptions → summary     │
+    └─────────────────────┬──────────────────────────┘
+                          │
+    ┌─────────────────────▼──────────────────────────┐
+    │  8. Update video status=READY                  │
+    └────────────────────────────────────────────────┘
+```
+
+### 7.3 Multi-Dense Search Flow
+
+```
+┌─────────┐
+│ Client  │
+└────┬────┘
+     │ POST /search
+     │ {query: "person typing on laptop", limit: 10}
+     ▼
+┌──────────────┐
+│  API Server  │
+└──────┬───────┘
+       │ 1. Generate query embedding
+       │    OpenAI text-embedding-3-small → [0.12, -0.34, ...]
+       ▼
+       │ 2. Parallel Retrieval (ThreadPoolExecutor, 4 workers)
+       │
+       ├─────────────┬──────────────┬──────────────┬──────────────┐
+       │             │              │              │              │
+       ▼             ▼              ▼              ▼              │
+  ┌──────────┐ ┌──────────┐  ┌──────────┐  ┌──────────────┐    │
+  │Transcript│ │  Visual  │  │ Summary  │  │   Lexical    │    │
+  │ Channel  │ │ Channel  │  │ Channel  │  │   (BM25)     │    │
+  └────┬─────┘ └────┬─────┘  └────┬─────┘  └──────┬───────┘    │
+       │            │              │                │             │
+       │ pgvector   │ pgvector     │ pgvector       │ OpenSearch │
+       │ RPC:       │ RPC:         │ RPC:           │ REST:      │
+       │ search_    │ search_      │ search_        │ bm25_      │
+       │ scenes_by_ │ scenes_by_   │ scenes_by_     │ search()   │
+       │ transcript_│ visual_      │ summary_       │            │
+       │ embedding()│ embedding()  │ embedding()    │            │
+       │            │              │                │             │
+       │ 200 cands  │ 200 cands    │ 200 cands      │ 200 cands  │
+       │ thresh=0.2 │ thresh=0.15  │ thresh=0.2     │ (no thresh)│
+       │            │              │                │             │
+       │ HNSW idx:  │ HNSW idx:    │ HNSW idx:      │ Multi-field│
+       │ embedding_ │ embedding_   │ embedding_     │ BM25:      │
+       │ transcript │ visual       │ summary        │ - tags^4   │
+       │            │              │                │ - trans^3  │
+       │            │              │                │ - visual^2 │
+       │            │              │                │            │
+       │ Timeout:   │ Timeout:     │ Timeout:       │ Timeout:   │
+       │ 1.5s       │ 1.5s         │ 1.5s           │ 1.5s       │
+       │            │              │                │             │
+       │ Result:    │ Result:      │ Result:        │ Result:    │
+       │ [("a",1,0.85),│ [("b",1,0.80),│ [("c",1,0.75),│ [("a",1,25.0),│
+       │  ("b",2,0.75),│  ("c",2,0.70)]│  ("a",2,0.65)]│  ("c",2,20.0)]│
+       │  ...]       │              │                │            │
+       │            │              │                │             │
+       └────────────┴──────────────┴────────────────┴─────────────┘
+                                   │
+       ┌───────────────────────────▼──────────────────────────────┐
+       │ 3. Fusion (Min-Max Mean or RRF)                          │
+       │                                                           │
+       │ Min-Max Mean (default):                                  │
+       │   a. Normalize each channel to [0, 1]                    │
+       │      transcript: {"a": 1.0, "b": 0.0}                    │
+       │      visual:     {"b": 1.0, "c": 0.0}                    │
+       │      summary:    {"c": 1.0, "a": 0.0}                    │
+       │      lexical:    {"a": 1.0, "c": 0.0}                    │
+       │                                                           │
+       │   b. Weighted mean per scene                             │
+       │      Weights: {transcript: 0.45, visual: 0.25,           │
+       │                summary: 0.10, lexical: 0.20}             │
+       │                                                           │
+       │      Scene "a": 0.45*1.0 + 0.25*0.0 + 0.10*0.0 + 0.20*1.0│
+       │                = 0.65                                    │
+       │      Scene "b": 0.45*0.0 + 0.25*1.0 + 0.10*0.0 + 0.20*0.0│
+       │                = 0.25                                    │
+       │      Scene "c": 0.45*0.0 + 0.25*0.0 + 0.10*1.0 + 0.20*1.0│
+       │                = 0.30                                    │
+       │                                                           │
+       │   c. Sort by score descending                            │
+       │      Ranking: a (0.65) > c (0.30) > b (0.25)             │
+       └───────────────────────────┬──────────────────────────────┘
+                                   │
+       ┌───────────────────────────▼──────────────────────────────┐
+       │ 4. Hydrate Results                                       │
+       │    - Batch fetch scene records (preserve order)          │
+       │    - Batch fetch video filenames                         │
+       │    - Attach score metadata                               │
+       │    - Optional: Include per-channel debug info            │
+       └───────────────────────────┬──────────────────────────────┘
+                                   │
+       ┌───────────────────────────▼──────────────────────────────┐
+       │ 5. Return JSON Response                                  │
+       │    {                                                     │
+       │      "results": [...],                                   │
+       │      "total": 10,                                        │
+       │      "latency_ms": 234,                                  │
+       │      "fusion_method": "multi_dense_minmax_mean",         │
+       │      "fusion_weights": {...}                             │
+       │    }                                                     │
+       └───────────────────────────┬──────────────────────────────┘
+                                   │
+                                   ▼
+                            ┌─────────┐
+                            │ Client  │
+                            └─────────┘
+```
+
+### 7.4 OpenSearch Indexing Flow
+
+```
+┌──────────────────────────────────────────┐
+│  Worker: create_scene()                  │
+│  - Scene saved to Postgres with:         │
+│    * transcript_segment                  │
+│    * visual_description                  │
+│    * visual_summary                      │
+│    * combined_text                       │
+│    * tags                                │
+└───────────────────┬──────────────────────┘
+                    │
+┌───────────────────▼──────────────────────┐
+│  _index_scene_to_opensearch()            │
+│  (non-blocking, logs errors)             │
+│                                          │
+│  Build OpenSearch document:              │
+│  {                                       │
+│    "scene_id": "uuid",                   │
+│    "video_id": "uuid",                   │
+│    "owner_id": "uuid",                   │
+│    "transcript_segment": "...",          │
+│    "visual_description": "...",          │
+│    "visual_summary": "...",              │
+│    "combined_text": "...",               │
+│    "tags": ["person", "laptop"],         │
+│    "tags_text": "person laptop",         │
+│    ...                                   │
+│  }                                       │
+└───────────────────┬──────────────────────┘
+                    │
+┌───────────────────▼──────────────────────┐
+│  OpenSearch                              │
+│                                          │
+│  Index with multi-field analysis:        │
+│  - Standard analyzer (base)              │
+│  - ko_nori (Korean tokenization)         │
+│  - en_english (English stemming)         │
+│                                          │
+│  Store in index: scene_docs              │
+│  Document ID: scene_id (idempotent)      │
+└───────────────────┬──────────────────────┘
+                    │
+                    ▼
+              ┌─────────┐
+              │ Indexed │
+              └─────────┘
+
+Note: If OpenSearch fails, logs warning but doesn't fail scene creation.
+      Scene remains searchable via dense vectors only.
+```
+
+---
+
+## 8. Configuration Reference
+
+### 8.1 Embedding Models
+
+| Component | Model | Dimensions | Max Tokens | Cost |
+|-----------|-------|------------|------------|------|
+| Text Embedding | text-embedding-3-small | 1536 | 8191 | $0.02/1M tokens |
+| Visual Analysis | gpt-4o-mini | N/A | 600 | $0.15/1M input, $0.60/1M output |
+| Transcription | whisper-1 | N/A | N/A | $0.006/min |
+| Video Summary | gpt-4o-mini | N/A | 800 | $0.15/1M input, $0.60/1M output |
+
+### 8.2 Search Configuration
+
+**Location**: `services/api/src/config.py:39-82`
+
+```python
+# Global toggles
+hybrid_search_enabled: bool = True  # Enable hybrid search
+multi_dense_enabled: bool = False  # Enable v3-multi search (not yet enabled)
+
+# Fusion method (applies to both hybrid and multi-dense)
+fusion_method: str = "minmax_mean"  # or "rrf"
+
+# Legacy 2-signal weights (hybrid mode)
+fusion_weight_dense: float = 0.7
+fusion_weight_lexical: float = 0.3
+
+# Multi-channel 4-signal weights (v3-multi mode)
+# Must sum to 1.0
+weight_transcript: float = 0.45  # Highest signal
+weight_visual: float = 0.25
+weight_summary: float = 0.10  # Currently disabled
+weight_lexical_multi: float = 0.20
+
+# Candidate K values (pre-fusion retrieval limits)
+candidate_k_dense: int = 200
+candidate_k_lexical: int = 200
+candidate_k_transcript: int = 200
+candidate_k_visual: int = 200
+candidate_k_summary: int = 200
+
+# Similarity thresholds (0.0-1.0)
+threshold_transcript: float = 0.2
+threshold_visual: float = 0.15  # Lower for sparse visual content
+threshold_summary: float = 0.2
+
+# RRF parameter
+rrf_k: int = 60
+
+# Timeouts
+multi_dense_timeout_s: float = 1.5  # Per-channel timeout
+
+# Debug mode
+search_debug: bool = False  # Include per-channel score breakdown
+```
+
+### 8.3 Processing Limits
+
+**Location**: `services/worker/src/config.py`
+
+```python
+# Scene processing
+max_keyframes_per_scene: int = 3
+max_scene_workers: int = 3  # Parallel scene processing
+max_api_concurrency: int = 3  # API rate limit (semaphore)
+
+# Visual analysis cost optimization
+visual_semantics_min_duration_s: float = 1.5  # Skip short scenes
+visual_semantics_transcript_threshold: int = 50  # Rich transcript chars
+visual_semantics_max_frame_retries: int = 2
+
+# Frame quality thresholds
+frame_brightness_threshold: float = 15.0  # Reject black frames
+frame_blur_threshold: float = 50.0  # Reject blurry frames
+
+# Transcription quality filtering
+transcript_min_chars: int = 40
+transcript_min_speech_char_ratio: float = 0.3  # 30% speech chars
+transcript_reject_no_speech_prob: float = 0.8  # Whisper confidence
+
+# Embedding limits
+embedding_transcript_max_length: int = 4800  # chars
+embedding_visual_max_length: int = 3200
+embedding_summary_max_length: int = 2000
+
+# Retry configuration
+embedding_retry_max_attempts: int = 3
+embedding_retry_delay_s: float = 1.0  # Exponential backoff
+
+# Temp directory
+temp_dir: str = "/tmp/heimdex"
+```
+
+### 8.4 OpenSearch Configuration
+
+**Location**: `services/api/src/config.py:33-36`
+
+```python
+opensearch_url: str = "http://opensearch:9200"
+opensearch_index_scenes: str = "scene_docs"
+opensearch_timeout_s: float = 1.0
+```
+
+### 8.5 Database Configuration
+
+**Location**: `services/api/src/config.py:10-17`
+
+```python
+supabase_url: str
+supabase_anon_key: str
+supabase_service_role_key: str
+supabase_jwt_secret: str
+database_url: str  # Postgres connection string
+```
+
+---
+
+## 9. Recent Updates
+
+### 9.1 Migration 015: v3-multi Per-Channel Embeddings
+
+**Status**: Modified (uncommitted)
+
+**File**: `infra/migrations/015_add_multi_embedding_channels.sql`
+
+**Key Changes**:
+1. Added 3 new embedding columns (transcript, visual, summary)
+2. Created separate HNSW indexes for each channel
+3. Added partial indexes for NULL filtering (performance)
+4. Created 3 new RPC functions for per-channel search
+5. Extended embedding_metadata structure for multi-channel tracking
+
+**Backward Compatibility**:
+- Maintains existing `embedding` column
+- Old API code continues to work
+- New columns are additive (no data loss)
+
+### 9.2 Recent Config Changes
+
+**Worker Config** (modified):
+- `multi_embedding_enabled: True` (enables v3-multi generation)
+- `embedding_version: "v3-multi"`
+- Per-channel max lengths defined
+- Visual analysis upgraded to gpt-4o-mini (better accuracy)
+- Max tokens increased to 600 (supports detailed descriptions)
+
+**API Config** (modified):
+- `multi_dense_enabled: False` (not yet enabled for search)
+- Multi-channel fusion weights configured
+- Per-channel candidate K and thresholds defined
+
+### 9.3 OpenSearch Korean Support
+
+**Files Modified**:
+- `services/api/src/adapters/opensearch_client.py`
+- `services/worker/src/adapters/opensearch_client.py`
+
+**Changes**:
+- Added `ko_nori` analyzer using nori_tokenizer
+- All text fields now have `.ko` and `.en` subfields
+- BM25 searches across all 3 analyzer variants
+
+### 9.4 Search Fusion Updates
+
+**File**: `services/api/src/domain/search/fusion.py`
+
+**Recent Commits** (from git status):
+- "update search scoring with min max fusion"
+
+**New Features**:
+- Multi-channel fusion functions (`multi_channel_minmax_fuse`, `multi_channel_rrf_fuse`)
+- Per-channel debug metadata
+- ScoreType enum for clarity
+
+### 9.5 Transcription Quality Filtering
+
+**File**: `services/worker/src/adapters/openai_client.py:16-271`
+
+**New Features**:
+- `TranscriptionResult` dataclass with quality assessment
+- Music notation detection (♪, [music], etc.)
+- Speech character ratio calculation
+- Whisper segment no_speech_prob analysis
+- Configurable thresholds for filtering
+
+**Rejection Reasons**:
+- `music_only`: Dominated by music markers
+- `too_short`: < 40 chars with low speech ratio
+- `low_speech_ratio`: < 30% speech characters
+- `high_no_speech_prob`: Whisper confidence too low
+
+### 9.6 Scene Detector Improvements
+
+**File**: `services/worker/src/domain/scene_detector.py`
+
+**New Features**:
+- Best-of-all strategy (runs 4 detectors, picks best)
+- User-specific detector preferences (stored in user_profiles)
+- Configurable thresholds per detector type
+- Graceful fallback to whole-video scene
+
+**Detectors**:
+- AdaptiveDetector (best for varying content)
+- ContentDetector (traditional content-based)
+- ThresholdDetector (brightness/fades)
+- HashDetector (perceptual hash-based)
+
+### 9.7 Backfill Script
+
+**File**: `services/worker/src/scripts/backfill_scene_embeddings_v3.py` (untracked)
+
+**Purpose**: Regenerate v3-multi embeddings for existing scenes
+
+**Features**:
+- Checkpointing for resume capability
+- Rate limiting (0.1s delay between API calls)
+- Batch processing (100 scenes per batch)
+- Only regenerates missing/outdated embeddings
+
+**Bug Fix** (from devlog/2512161255.txt):
+- Fixed URL parameter accumulation bug
+- Query now rebuilt fresh each iteration
+- Prevents malformed URLs with hundreds of `&limit=100` params
+
+---
+
+## 10. Key File Locations
+
+### 10.1 API Service
+
+**Routes**: `services/api/src/routes/`
+- `videos.py` - Upload, status, reprocess endpoints
+- `search.py` - Hybrid/multi-dense search endpoint
+
+**Adapters**: `services/api/src/adapters/`
+- `database.py` - Postgres/Supabase queries
+- `opensearch_client.py` - BM25 lexical search
+- `openai_client.py` - Embedding generation
+- `queue.py` - Dramatiq task enqueuing
+
+**Domain**: `services/api/src/domain/`
+- `search/fusion.py` - Fusion algorithms (minmax_mean, RRF)
+- `schemas.py` - Pydantic request/response models
+- `models.py` - Database models
+
+**Config**: `services/api/src/config.py`
+
+### 10.2 Worker Service
+
+**Main**: `services/worker/src/`
+- `tasks.py` - Dramatiq broker setup
+- `domain/video_processor.py` - Main processing pipeline
+- `domain/sidecar_builder.py` - Scene metadata + embeddings
+- `domain/scene_detector.py` - Scene detection algorithms
+- `domain/frame_quality.py` - Frame quality scoring
+
+**Adapters**: `services/worker/src/adapters/`
+- `database.py` - Scene creation, OpenSearch indexing
+- `opensearch_client.py` - Document indexing
+- `openai_client.py` - Transcription, visual analysis
+- `ffmpeg.py` - Video/audio processing
+- `supabase.py` - Storage operations
+
+**Scripts**: `services/worker/src/scripts/`
+- `backfill_scene_embeddings_v3.py` - v3-multi backfill
+- `reindex_opensearch.py` - Reindex all scenes
+
+**Config**: `services/worker/src/config.py`
+
+### 10.3 Shared Libraries
+
+**Tasks**: `libs/tasks/`
+- `video_processing.py` - Shared process_video actor
+- `scene_export.py` - Scene export tasks
+
+### 10.4 Database
+
+**Migrations**: `infra/migrations/`
+- `001_initial_schema.sql` - Core tables (videos, scenes, profiles)
+- `002_enable_pgvector.sql` - Vector extension + HNSW indexes
+- `006_add_transcript_cache.sql` - Transcript caching
+- `009_add_rich_semantics.sql` - Visual entities/actions/tags
+- `011_add_sidecar_v2_metadata.sql` - Sidecar versioning
+- `013_add_video_exif_metadata.sql` - GPS, camera data
+- `015_add_multi_embedding_channels.sql` - v3-multi embeddings
+
+### 10.5 Documentation
+
+**Docs**: `docs/`
+- `search-pipeline.md` - Search architecture documentation
+
+---
+
+## Summary
+
+This comprehensive documentation covers the entire video ingest and search pipeline:
+
+1. **Upload**: Client-initiated upload with sanitized filenames and storage paths
+2. **Processing**: Multi-stage pipeline with scene detection, transcription, visual analysis
+3. **Embeddings**: v3-multi per-channel architecture (transcript, visual, summary)
+4. **Indexing**: Real-time OpenSearch indexing with Korean/English language support
+5. **Search**: Multi-dense hybrid search with fusion algorithms (minmax_mean, RRF)
+6. **Database**: Postgres with pgvector HNSW indexes and row-level security
+7. **Cost Optimization**: Intelligent frame selection, transcription filtering, short scene skipping
+
+**Key Features**:
+- Per-channel embeddings for fine-grained search control
+- Hybrid fusion (dense semantic + lexical BM25)
+- Korean language support (Nori tokenizer)
+- Quality-aware processing (frame ranking, transcription filtering)
+- Scalable architecture (parallel processing, graceful degradation)
+- Retry resilience (checkpointing, exponential backoff)
+
+**Current Status**:
+- v3-multi embedding generation: **Enabled** (worker config)
+- v3-multi search: **Not yet enabled** (API config: `multi_dense_enabled=False`)
+- OpenSearch indexing: **Enabled** (1,770 scenes indexed)
+- Hybrid search: **Enabled** (default mode)
+
+**Next Steps**:
+- Enable multi-dense search (`multi_dense_enabled=True`)
+- Complete v3-multi backfill for all existing scenes
+- Monitor search quality metrics
+- Tune fusion weights based on user feedback

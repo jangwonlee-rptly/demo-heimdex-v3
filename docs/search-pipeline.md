@@ -2154,4 +2154,444 @@ All search-related code paths are actively used:
 
 ---
 
+---
+
+## Multi-Embedding Dense Retrieval (Option B)
+
+**Status:** Production-Ready (Behind Feature Flag)
+**Version:** v3-multi
+**Since:** 2025-12-16
+
+### Overview
+
+The Multi-Embedding Dense Retrieval system extends hybrid search with **per-channel embeddings**. Instead of a single embedding per scene, we generate separate embeddings for different content types:
+
+1. **Transcript Channel** (`embedding_transcript`): Embedding of ASR transcript only
+2. **Visual Channel** (`embedding_visual`): Embedding of visual description + tags
+3. **Summary Channel** (`embedding_summary`): Embedding of scene summary (optional, currently disabled)
+
+At query time, we search each channel independently and fuse results using min-max normalization + weighted arithmetic mean.
+
+### Motivation
+
+**Problem with Single-Embedding Approach:**
+- Combining transcript + visual text into one embedding can dilute signal
+- Visual queries ("red car") compete with transcript queries ("person talking") in same vector space
+- No control over transcript vs. visual weighting at query time
+
+**Solution with Multi-Embedding:**
+- Independent embeddings allow specialized matching
+- Query is embedded once, but matched against multiple specialized channels
+- Fusion weights can be tuned per channel (e.g., transcript=0.45, visual=0.25, lexical=0.20)
+
+### Database Schema Changes
+
+**New Columns in `video_scenes` table:**
+
+```sql
+-- Per-channel embeddings (all nullable for backward compatibility)
+embedding_transcript  vector(1536)  -- ASR transcript embedding
+embedding_visual      vector(1536)  -- Visual description + tags embedding
+embedding_summary     vector(1536)  -- Summary embedding (optional)
+
+-- Metadata
+embedding_version     text          -- Schema version ("v3-multi")
+embedding_metadata    jsonb         -- Multi-channel metadata
+```
+
+**HNSW Indexes:**
+
+```sql
+CREATE INDEX idx_video_scenes_embedding_transcript ON video_scenes
+USING hnsw (embedding_transcript vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_video_scenes_embedding_visual ON video_scenes
+USING hnsw (embedding_visual vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_video_scenes_embedding_summary ON video_scenes
+USING hnsw (embedding_summary vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
+
+**RPC Functions:**
+
+Three new stored procedures for per-channel search:
+- `search_scenes_by_transcript_embedding(query_embedding, threshold, match_count, filter_video_id, filter_user_id)`
+- `search_scenes_by_visual_embedding(...)`
+- `search_scenes_by_summary_embedding(...)`
+
+All enforce tenant scoping via `INNER JOIN videos` + `filter_user_id`.
+
+### Indexing Pipeline Changes
+
+**Worker Service** (`services/worker/src/domain/sidecar_builder.py`):
+
+**Per-Channel Text Construction:**
+
+```python
+# Channel 1: Transcript only
+transcript_text = scene.transcript_segment.strip()
+if len(transcript_text) > 4800:  # Safety limit
+    transcript_text = smart_truncate(transcript_text, 4800)
+
+# Channel 2: Visual description + tags
+visual_parts = []
+if scene.visual_description:
+    visual_parts.append(scene.visual_description.strip())
+if scene.tags:
+    visual_parts.append(" ".join(scene.tags))
+visual_text = " ".join(visual_parts)
+if len(visual_text) > 3200:  # Safety limit
+    visual_text = smart_truncate(visual_text, 3200)
+
+# Channel 3: Summary (optional, disabled)
+summary_text = scene.summary.strip() if scene.summary else None
+```
+
+**Embedding Generation:**
+
+Each channel text is embedded independently:
+
+```python
+emb_transcript = openai_client.create_embedding(transcript_text) if transcript_text else None
+emb_visual = openai_client.create_embedding(visual_text) if visual_text else None
+emb_summary = openai_client.create_embedding(summary_text) if summary_text else None
+```
+
+**Safety Rules:**
+- Empty channel text → NULL embedding (no synthetic fallback)
+- Exponential backoff retry on transient failures (3 retries, 1s delay)
+- Embeddings stored with metadata (model, dimensions, input hash)
+
+**Backward Compatibility:**
+- Legacy `embedding` field still populated (using `search_text` from v2)
+- Legacy `embedding_metadata` field coexists with `multi_embedding_metadata`
+- Scenes can have both v2 and v3 embeddings simultaneously
+
+### Query Pipeline Changes
+
+**API Service** (`services/api/src/routes/search.py`):
+
+**Multi-Dense Mode Activation:**
+
+```python
+use_multi_dense = (
+    settings.multi_dense_enabled  # Feature flag
+    and not embedding_failed       # Query embedding succeeded
+)
+```
+
+**Parallel Retrieval:**
+
+When multi-dense enabled:
+
+```python
+with ThreadPoolExecutor(max_workers=4) as executor:
+    futures = {
+        executor.submit(run_transcript_search): "transcript",
+        executor.submit(run_visual_search): "visual",
+        executor.submit(run_summary_search): "summary",
+        executor.submit(run_lexical_search): "lexical",
+    }
+
+    for future in as_completed(futures):
+        try:
+            channel_name, candidates = future.result(timeout=1.5s)
+            channel_candidates[channel_name] = candidates
+        except TimeoutError:
+            logger.warning(f"{channel_name} timed out, skipping")
+            channel_candidates[channel_name] = []  # Graceful degradation
+```
+
+**Fusion Method:**
+
+After parallel retrieval, fuse using multi-channel min-max normalization:
+
+```python
+fused_results = multi_channel_minmax_fuse(
+    channel_candidates={
+        "dense_transcript": [...],
+        "dense_visual": [...],
+        "dense_summary": [...],
+        "lexical": [...],
+    },
+    channel_weights={
+        "dense_transcript": 0.45,
+        "dense_visual": 0.25,
+        "dense_summary": 0.10,
+        "lexical": 0.20,
+    },
+    top_k=10,
+    include_debug=settings.search_debug,
+)
+```
+
+**Algorithm:**
+
+1. **Per-Channel Normalization:** Each channel's scores normalized independently to [0, 1]
+2. **Weight Redistribution:** If channel empty, redistribute weight to active channels
+3. **Weighted Mean:** `final_score = Σ(weight[ch] * norm_score[ch])`
+4. **Sort & Return:** Top K by final score
+
+### Configuration
+
+**New Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MULTI_DENSE_ENABLED` | `false` | Master switch for multi-embedding search |
+| `MULTI_DENSE_TIMEOUT_S` | `1.5` | Per-channel retrieval timeout (seconds) |
+| `CANDIDATE_K_TRANSCRIPT` | `200` | Transcript channel candidate count |
+| `CANDIDATE_K_VISUAL` | `200` | Visual channel candidate count |
+| `CANDIDATE_K_SUMMARY` | `200` | Summary channel candidate count |
+| `THRESHOLD_TRANSCRIPT` | `0.2` | Transcript similarity threshold |
+| `THRESHOLD_VISUAL` | `0.15` | Visual similarity threshold (lower, visual text is sparse) |
+| `THRESHOLD_SUMMARY` | `0.2` | Summary similarity threshold |
+| `WEIGHT_TRANSCRIPT` | `0.45` | Transcript fusion weight |
+| `WEIGHT_VISUAL` | `0.25` | Visual fusion weight |
+| `WEIGHT_SUMMARY` | `0.10` | Summary fusion weight |
+| `WEIGHT_LEXICAL_MULTI` | `0.20` | Lexical fusion weight (multi-dense mode) |
+
+**Weight Validation:**
+
+Weights must sum to 1.0 (±1e-6 tolerance). System validates on startup and redistributes if channels are zero-weighted.
+
+### Response Schema
+
+**New Score Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `score` | float | Final ranking score (unified field) |
+| `score_type` | string | `multi_dense_minmax_mean` or `multi_dense_rrf` |
+| `channel_scores` | dict | Per-channel debug info (when `SEARCH_DEBUG=true`) |
+
+**Debug Payload Example:**
+
+```json
+{
+  "id": "...",
+  "score": 0.7834,
+  "score_type": "multi_dense_minmax_mean",
+  "channel_scores": {
+    "dense_transcript": {
+      "rank": 1,
+      "score_raw": 0.92,
+      "score_norm": 1.0,
+      "weight": 0.45,
+      "contribution": 0.45,
+      "present": true
+    },
+    "dense_visual": {
+      "rank": 5,
+      "score_raw": 0.68,
+      "score_norm": 0.73,
+      "weight": 0.25,
+      "contribution": 0.18,
+      "present": true
+    },
+    "lexical": {
+      "rank": 2,
+      "score_raw": 23.4,
+      "score_norm": 0.85,
+      "weight": 0.20,
+      "contribution": 0.17,
+      "present": true
+    }
+  }
+}
+```
+
+### Backfill Script
+
+**Script:** `services/worker/src/scripts/backfill_scene_embeddings_v3.py`
+
+**Usage:**
+
+```bash
+# Backfill all scenes
+python -m src.scripts.backfill_scene_embeddings_v3 \
+  --batch-size 100 \
+  --rate-limit-delay 0.1
+
+# Backfill specific video
+python -m src.scripts.backfill_scene_embeddings_v3 \
+  --video-id 550e8400-e29b-41d4-a716-446655440000
+
+# Dry run (no changes)
+python -m src.scripts.backfill_scene_embeddings_v3 --dry-run
+
+# Force regenerate (ignore existing embeddings)
+python -m src.scripts.backfill_scene_embeddings_v3 --force-regenerate
+```
+
+**Features:**
+- Checkpointing for resume capability (`.backfill_v3_checkpoint.json`)
+- Rate limiting to avoid API overload
+- Batch processing with progress tracking
+- Only regenerates missing/outdated embeddings (unless `--force-regenerate`)
+- Validates input data before API calls
+
+### Rollout Plan
+
+**Phase 1: Safe Deployment (Behind Flag)**
+
+1. Deploy with `MULTI_DENSE_ENABLED=false`
+2. Run backfill script on production database
+3. Monitor backfill progress and embedding quality
+4. Verify no performance degradation from new indexes
+
+**Phase 2: Internal Testing**
+
+1. Enable multi-dense for internal test users only
+2. Compare search quality vs. legacy 2-signal hybrid
+3. Monitor latency (target: <500ms p95)
+4. Tune channel weights based on feedback
+
+**Phase 3: Gradual Rollout**
+
+1. Enable for 10% of users (feature flag)
+2. Monitor metrics: latency, error rate, user engagement
+3. A/B test: multi-dense vs. hybrid
+4. Gradually increase to 50%, then 100%
+
+**Phase 4: Deprecate Legacy**
+
+1. Once multi-dense proven stable (3+ months)
+2. Migrate all users to multi-dense
+3. Remove legacy single-embedding code paths
+
+### Testing
+
+**Unit Tests:** `services/api/tests/unit/test_fusion.py`
+
+```python
+class TestMultiChannelMinMaxFusion:
+    def test_basic_multi_channel_fusion(self):
+        """4 channels (3 dense + 1 lexical) fuse correctly."""
+
+    def test_weight_redistribution_when_channel_missing(self):
+        """Empty channels don't break fusion."""
+
+    def test_weight_validation_must_sum_to_one(self):
+        """Invalid weights rejected."""
+
+    def test_debug_mode_includes_channel_scores(self):
+        """Debug payload structure validated."""
+```
+
+**Integration Tests:**
+
+- Timeout behavior: Channel timeout → graceful degradation
+- Tenancy enforcement: `owner_id` filtering on all channels
+- Smoke tests: Scenes with different channel combinations
+
+### Performance Considerations
+
+**Latency Impact:**
+
+```
+Multi-Dense Mode:
+  1. Query embedding: 30-80ms (same as before)
+  2. Parallel retrieval (4 channels):
+     - Transcript: 50-150ms
+     - Visual: 50-150ms
+     - Summary: 50-150ms (if enabled)
+     - Lexical: 40-100ms
+     All run concurrently → max(all) = 150ms
+  3. Fusion: 10-20ms (slightly higher than 2-channel)
+  4. Hydration: 20-60ms (same as before)
+
+  Total: ~200-300ms (comparable to legacy hybrid)
+```
+
+**Timeout Safety:**
+- Each channel has 1.5s timeout
+- Slow channel doesn't block other channels
+- Worst case: All channels timeout → falls back to lexical-only
+
+**Index Size Impact:**
+
+```
+Per 1M scenes:
+  - Legacy: 1 HNSW index (1536 dims) = ~6GB
+  - Multi-dense: 3 HNSW indexes = ~18GB (+12GB)
+
+  Trade-off: 3x storage for better search quality
+```
+
+### Observability
+
+**Log Messages:**
+
+```
+INFO: Search completed: mode=multi_dense, fusion=multi_dense_minmax_mean,
+      results=10, latency=245ms
+      (embed=32ms, channels=[transcript=89ms, visual=76ms, summary=0ms, lexical=68ms],
+      fusion=14ms, hydrate=36ms)
+
+WARNING: Multi-dense: visual channel timed out after 1.5s
+```
+
+**Metrics to Monitor:**
+
+- Per-channel retrieval latency (p50, p95, p99)
+- Per-channel timeout rate
+- Per-channel empty result rate
+- Fusion weight distribution (actual weights used after redistribution)
+- Search quality: click-through rate, user satisfaction
+
+### Tuning Guidance
+
+**Default Weights Rationale:**
+
+| Channel | Weight | Rationale |
+|---------|--------|-----------|
+| Transcript | 0.45 | ASR has highest signal-to-noise, users search for spoken content |
+| Visual | 0.25 | Important for visual queries, but description quality varies |
+| Summary | 0.10 | Provides overview context, less precise than transcript |
+| Lexical | 0.20 | Keyword matching still valuable for exact phrases |
+
+**When to Increase Transcript Weight:**
+- Content is podcast/interview heavy (mostly speech)
+- Visual descriptions are low quality
+- Users search for spoken phrases
+
+**When to Increase Visual Weight:**
+- Content is visually rich (nature, products, demonstrations)
+- Transcripts are sparse or low quality
+- Users search for visual attributes ("red car", "sunset")
+
+**When to Use RRF Instead:**
+- Raw scores from one channel are unreliable
+- Want equal implicit weighting across channels
+- Scores vary wildly across different query types
+
+### Migration from Legacy Hybrid
+
+**Backward Compatibility:**
+
+- Legacy `embedding` field preserved
+- Legacy 2-signal hybrid remains available when `MULTI_DENSE_ENABLED=false`
+- No breaking changes to API contract
+- Frontend receives same response schema (additional fields optional)
+
+**Data Migration:**
+
+1. Run backfill script to populate new embedding columns
+2. No need to drop or migrate legacy embeddings
+3. Scenes can have both v2 and v3 embeddings simultaneously
+4. New scenes automatically get both (during transition period)
+
+**Rollback Plan:**
+
+1. Set `MULTI_DENSE_ENABLED=false` (instant rollback)
+2. System falls back to legacy hybrid search
+3. No data loss (legacy embeddings still present)
+4. No code changes needed
+
+---
+
 **End of Document**

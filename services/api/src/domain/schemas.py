@@ -255,6 +255,14 @@ class VideoSceneResponse(BaseModel):
         description="Rank in lexical retrieval results (1-indexed). Debug only."
     )
 
+    # Multi-channel debug fields (only present when SEARCH_DEBUG=true and multi_dense_enabled=true)
+    channel_scores: Optional[dict] = Field(
+        None,
+        description="Per-channel score breakdown for multi-dense retrieval. "
+                    "Each channel contains: {raw_score, norm_score, weight, contribution, rank, present}. "
+                    "Debug only."
+    )
+
     created_at: Optional[datetime] = None  # Not returned by search RPC
 
     model_config = {"from_attributes": True}

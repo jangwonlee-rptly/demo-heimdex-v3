@@ -46,15 +46,51 @@ class EmbeddingMetadata:
     dimensions: int
     input_text_hash: str  # SHA-256 hash of input text for cache lookup
     input_text_length: int
+    created_at: Optional[str] = None  # ISO 8601 timestamp
+    language: Optional[str] = None  # Language of input text
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
-        return {
+        result = {
             "model": self.model,
             "dimensions": self.dimensions,
             "input_text_hash": self.input_text_hash,
             "input_text_length": self.input_text_length,
         }
+        if self.created_at:
+            result["created_at"] = self.created_at
+        if self.language:
+            result["language"] = self.language
+        return result
+
+
+@dataclass
+class MultiEmbeddingMetadata:
+    """
+    Per-channel embedding metadata for v3-multi schema.
+
+    Tracks metadata for each embedding channel independently:
+    - transcript: embedding of transcript_segment only
+    - visual: embedding of visual_description + tags
+    - summary: embedding of scene/video summary (optional)
+    """
+    transcript: Optional[EmbeddingMetadata] = None
+    visual: Optional[EmbeddingMetadata] = None
+    summary: Optional[EmbeddingMetadata] = None
+    legacy: Optional[EmbeddingMetadata] = None  # Original single embedding for backward compat
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for serialization."""
+        result = {"channels": {}}
+        if self.transcript:
+            result["channels"]["transcript"] = self.transcript.to_dict()
+        if self.visual:
+            result["channels"]["visual"] = self.visual.to_dict()
+        if self.summary:
+            result["channels"]["summary"] = self.summary.to_dict()
+        if self.legacy:
+            result["legacy"] = self.legacy.to_dict()
+        return result
 
 
 class SceneSidecar:
@@ -92,6 +128,12 @@ class SceneSidecar:
         embedding_metadata: Optional[EmbeddingMetadata] = None,
         needs_reprocess: bool = False,
         processing_stats: Optional[dict] = None,
+        # New v3-multi fields for per-channel embeddings
+        embedding_transcript: Optional[list[float]] = None,
+        embedding_visual: Optional[list[float]] = None,
+        embedding_summary: Optional[list[float]] = None,
+        embedding_version: Optional[str] = None,
+        multi_embedding_metadata: Optional[MultiEmbeddingMetadata] = None,
     ):
         """Initialize SceneSidecar.
 
@@ -133,6 +175,13 @@ class SceneSidecar:
         self.embedding_metadata = embedding_metadata
         self.needs_reprocess = needs_reprocess
         self.processing_stats = processing_stats or {}
+
+        # v3-multi fields for per-channel embeddings
+        self.embedding_transcript = embedding_transcript
+        self.embedding_visual = embedding_visual
+        self.embedding_summary = embedding_summary
+        self.embedding_version = embedding_version
+        self.multi_embedding_metadata = multi_embedding_metadata
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -411,6 +460,186 @@ class SidecarBuilder:
         return embedding, metadata
 
     @staticmethod
+    def _create_embedding_with_retry(
+        text: str,
+        channel_name: str,
+        scene_index: int,
+        language: str,
+        max_retries: Optional[int] = None,
+    ) -> tuple[Optional[list[float]], Optional[EmbeddingMetadata]]:
+        """
+        Create embedding with retry logic and safety checks.
+
+        Safety rules:
+        1. If text is empty/whitespace → return (None, None)
+        2. Retry on transient failures with exponential backoff
+        3. Return None on permanent failures (log error)
+
+        Args:
+            text: Text to embed
+            channel_name: Channel name for logging (transcript, visual, summary)
+            scene_index: Scene index for logging
+            language: Language code
+            max_retries: Max retry attempts (defaults to config value)
+
+        Returns:
+            Tuple of (embedding vector or None, metadata or None)
+        """
+        from datetime import datetime
+        import time
+
+        # Safety: empty text → NULL embedding (do NOT synthesize fake content)
+        if not text or not text.strip():
+            logger.debug(
+                f"Scene {scene_index} {channel_name} channel: empty text, skipping embedding"
+            )
+            return None, None
+
+        # Truncate to max length for this channel (already should be done, but double-check)
+        text = text.strip()
+
+        if max_retries is None:
+            max_retries = settings.embedding_max_retries
+
+        # Compute hash for cache lookup
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+        # Retry loop with exponential backoff
+        for attempt in range(max_retries):
+            try:
+                # Generate embedding
+                embedding = openai_client.create_embedding(text)
+
+                # Create metadata
+                metadata = EmbeddingMetadata(
+                    model=settings.embedding_model,
+                    dimensions=settings.embedding_dimensions,
+                    input_text_hash=text_hash,
+                    input_text_length=len(text),
+                    created_at=datetime.utcnow().isoformat() + "Z",
+                    language=language,
+                )
+
+                logger.debug(
+                    f"Scene {scene_index} {channel_name} embedding: "
+                    f"length={len(text)}, hash={text_hash[:8]}..."
+                )
+
+                return embedding, metadata
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = settings.embedding_retry_delay_s * (2 ** attempt)
+                    logger.warning(
+                        f"Scene {scene_index} {channel_name} embedding failed "
+                        f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"Scene {scene_index} {channel_name} embedding failed "
+                        f"after {max_retries} attempts: {e}. Returning NULL."
+                    )
+                    return None, None
+
+        return None, None
+
+    @staticmethod
+    def _create_multi_channel_embeddings(
+        transcript_segment: str,
+        visual_description: str,
+        tags: list[str],
+        summary: Optional[str],
+        scene_index: int,
+        language: str,
+    ) -> tuple[
+        Optional[list[float]],
+        Optional[list[float]],
+        Optional[list[float]],
+        MultiEmbeddingMetadata,
+    ]:
+        """
+        Generate per-channel embeddings for v3-multi schema.
+
+        Channel definitions:
+        1. Transcript channel: transcript_segment only (clean ASR signal)
+        2. Visual channel: visual_description + tags (space-joined)
+        3. Summary channel: scene/video summary (optional, currently disabled)
+
+        Safety:
+        - Empty channels → NULL embedding (no fake content)
+        - Per-channel max length enforcement
+        - Independent retry per channel
+
+        Args:
+            transcript_segment: Transcript text
+            visual_description: Visual description text
+            tags: List of tags
+            summary: Optional summary text
+            scene_index: Scene index for logging
+            language: Language code
+
+        Returns:
+            Tuple of (emb_transcript, emb_visual, emb_summary, multi_metadata)
+        """
+        multi_metadata = MultiEmbeddingMetadata()
+
+        # Channel 1: Transcript
+        transcript_text = (transcript_segment or "").strip()
+        if len(transcript_text) > settings.embedding_transcript_max_length:
+            transcript_text = SidecarBuilder._smart_truncate(
+                transcript_text, settings.embedding_transcript_max_length
+            )
+
+        emb_transcript, meta_transcript = SidecarBuilder._create_embedding_with_retry(
+            transcript_text, "transcript", scene_index, language
+        )
+        if meta_transcript:
+            multi_metadata.transcript = meta_transcript
+
+        # Channel 2: Visual (visual_description + tags)
+        visual_parts = []
+        if visual_description and visual_description.strip():
+            visual_parts.append(visual_description.strip())
+
+        if settings.embedding_visual_include_tags and tags:
+            # Deduplicate tags and join
+            unique_tags = list(dict.fromkeys(tags))  # Preserve order, remove dupes
+            tags_text = " ".join(unique_tags)
+            if tags_text:
+                visual_parts.append(tags_text)
+
+        visual_text = " ".join(visual_parts)
+        if len(visual_text) > settings.embedding_visual_max_length:
+            visual_text = SidecarBuilder._smart_truncate(
+                visual_text, settings.embedding_visual_max_length
+            )
+
+        emb_visual, meta_visual = SidecarBuilder._create_embedding_with_retry(
+            visual_text, "visual", scene_index, language
+        )
+        if meta_visual:
+            multi_metadata.visual = meta_visual
+
+        # Channel 3: Summary (optional, currently disabled by default)
+        emb_summary = None
+        if settings.embedding_summary_enabled and summary and summary.strip():
+            summary_text = summary.strip()
+            if len(summary_text) > settings.embedding_summary_max_length:
+                summary_text = SidecarBuilder._smart_truncate(
+                    summary_text, settings.embedding_summary_max_length
+                )
+
+            emb_summary, meta_summary = SidecarBuilder._create_embedding_with_retry(
+                summary_text, "summary", scene_index, language
+            )
+            if meta_summary:
+                multi_metadata.summary = meta_summary
+
+        return emb_transcript, emb_visual, emb_summary, multi_metadata
+
+    @staticmethod
     def build_sidecar(
         scene: Scene,
         video_path: Path,
@@ -683,10 +912,46 @@ class SidecarBuilder:
         if len(combined_text.strip()) < 10:
             combined_text = search_text
 
-        # Generate embedding using the search-optimized text
+        # Generate embedding using the search-optimized text (legacy single embedding)
         embedding, embedding_metadata = SidecarBuilder._create_scene_embedding(
             search_text, scene.index
         )
+
+        # Generate multi-channel embeddings if enabled (v3-multi)
+        embedding_transcript = None
+        embedding_visual = None
+        embedding_summary = None
+        multi_embedding_metadata = None
+        embedding_version_value = None
+
+        if settings.multi_embedding_enabled:
+            logger.info(f"Scene {scene.index}: Generating multi-channel embeddings")
+            (
+                embedding_transcript,
+                embedding_visual,
+                embedding_summary,
+                multi_embedding_metadata,
+            ) = SidecarBuilder._create_multi_channel_embeddings(
+                transcript_segment=transcript_segment,
+                visual_description=visual_description or "",
+                tags=tags,
+                summary=None,  # Summary field not yet implemented
+                scene_index=scene.index,
+                language=language,
+            )
+
+            # Store legacy embedding metadata in multi_embedding_metadata
+            if multi_embedding_metadata and embedding_metadata:
+                multi_embedding_metadata.legacy = embedding_metadata
+
+            embedding_version_value = settings.embedding_version
+
+            logger.info(
+                f"Scene {scene.index} multi-embeddings: "
+                f"transcript={'✓' if embedding_transcript else '✗'}, "
+                f"visual={'✓' if embedding_visual else '✗'}, "
+                f"summary={'✓' if embedding_summary else '✗'}"
+            )
 
         # Log processing stats for cost analysis
         logger.info(
@@ -717,6 +982,12 @@ class SidecarBuilder:
             embedding_metadata=embedding_metadata,
             needs_reprocess=False,
             processing_stats=stats.to_dict(),
+            # v3-multi fields
+            embedding_transcript=embedding_transcript,
+            embedding_visual=embedding_visual,
+            embedding_summary=embedding_summary,
+            embedding_version=embedding_version_value,
+            multi_embedding_metadata=multi_embedding_metadata,
         )
 
     @staticmethod

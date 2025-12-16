@@ -144,11 +144,12 @@ export default function SearchPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Search Results */}
-          <div className="card max-h-[calc(100vh-280px)] overflow-y-auto no-scrollbar">
-            <h2 className="text-lg font-semibold text-surface-100 mb-4 sticky top-0 bg-surface-800/95 backdrop-blur-sm py-2 -mt-2">
+          <div className="card flex flex-col max-h-[calc(100vh-280px)]">
+            <h2 className="text-lg font-semibold text-surface-100 mb-4 flex-shrink-0">
               Results
             </h2>
 
+            <div className="flex-1 overflow-y-auto no-scrollbar">
             {!results && (
               <div className="empty-state py-12">
                 <div className="empty-state-icon">
@@ -260,6 +261,7 @@ export default function SearchPage() {
                 ))}
               </div>
             )}
+            </div>
           </div>
 
           {/* Video Player */}

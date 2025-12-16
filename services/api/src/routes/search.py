@@ -14,6 +14,8 @@ from ..domain.search.fusion import (
     fuse,
     dense_only_fusion,
     lexical_only_fusion,
+    multi_channel_minmax_fuse,
+    multi_channel_rrf_fuse,
     Candidate,
     FusedCandidate,
     ScoreType,
@@ -111,6 +113,124 @@ def _run_lexical_search(
     return candidates, elapsed_ms
 
 
+def _run_multi_dense_search(
+    query_embedding: list[float],
+    user_id: UUID,
+    video_id: Optional[UUID],
+    query: str,
+) -> tuple[dict[str, list[Candidate]], dict[str, int]]:
+    """Run multi-channel dense + lexical search in parallel with timeouts.
+
+    Uses ThreadPoolExecutor to run all retrieval tasks concurrently.
+    Each task has an individual timeout (settings.multi_dense_timeout_s).
+    If a channel times out or fails, it's treated as empty (graceful degradation).
+
+    Args:
+        query_embedding: The query embedding vector.
+        user_id: User ID for tenant scoping.
+        video_id: Optional video ID filter.
+        query: Original query text for BM25.
+
+    Returns:
+        tuple: (channel_candidates dict, timing_ms dict)
+               channel_candidates: {"transcript": [...], "visual": [...], "summary": [...], "lexical": [...]}
+               timing_ms: {"transcript": 123, "visual": 456, ...}
+    """
+    channel_candidates: dict[str, list[Candidate]] = {}
+    timing_ms: dict[str, int] = {}
+
+    # Define retrieval tasks
+    def run_transcript():
+        start = time.time()
+        results = db.search_scenes_transcript_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_transcript,
+            threshold=settings.threshold_transcript,
+        )
+        elapsed = int((time.time() - start) * 1000)
+        candidates = [Candidate(scene_id=sid, rank=rank, score=score) for sid, rank, score in results]
+        return ("transcript", candidates, elapsed)
+
+    def run_visual():
+        start = time.time()
+        results = db.search_scenes_visual_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_visual,
+            threshold=settings.threshold_visual,
+        )
+        elapsed = int((time.time() - start) * 1000)
+        candidates = [Candidate(scene_id=sid, rank=rank, score=score) for sid, rank, score in results]
+        return ("visual", candidates, elapsed)
+
+    def run_summary():
+        start = time.time()
+        results = db.search_scenes_summary_embedding(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            video_id=video_id,
+            match_count=settings.candidate_k_summary,
+            threshold=settings.threshold_summary,
+        )
+        elapsed = int((time.time() - start) * 1000)
+        candidates = [Candidate(scene_id=sid, rank=rank, score=score) for sid, rank, score in results]
+        return ("summary", candidates, elapsed)
+
+    def run_lexical():
+        start = time.time()
+        results = opensearch_client.bm25_search(
+            query=query,
+            owner_id=str(user_id),
+            video_id=str(video_id) if video_id else None,
+            size=settings.candidate_k_lexical,
+        )
+        elapsed = int((time.time() - start) * 1000)
+        candidates = [Candidate(scene_id=r["scene_id"], rank=r["rank"], score=r["score"]) for r in results]
+        return ("lexical", candidates, elapsed)
+
+    # Determine active channels based on weights (skip zero-weight channels)
+    is_valid, error_msg, active_weights = settings.validate_multi_dense_weights()
+    if not is_valid:
+        logger.error(f"Invalid multi-dense weights: {error_msg}")
+        # Fall back to all channels (shouldn't happen in production)
+        active_weights = {"transcript": 0.45, "visual": 0.25, "summary": 0.10, "lexical": 0.20}
+
+    # Map channel names to retrieval functions
+    retrieval_tasks = {}
+    if "transcript" in active_weights:
+        retrieval_tasks["transcript"] = run_transcript
+    if "visual" in active_weights:
+        retrieval_tasks["visual"] = run_visual
+    if "summary" in active_weights:
+        retrieval_tasks["summary"] = run_summary
+    if "lexical" in active_weights:
+        retrieval_tasks["lexical"] = run_lexical
+
+    # Run all retrieval tasks in parallel with timeouts
+    with ThreadPoolExecutor(max_workers=len(retrieval_tasks)) as executor:
+        futures = {executor.submit(task_fn): ch_name for ch_name, task_fn in retrieval_tasks.items()}
+
+        for future in as_completed(futures):
+            channel_name = futures[future]
+            try:
+                ch_name, candidates, elapsed = future.result(timeout=settings.multi_dense_timeout_s)
+                channel_candidates[ch_name] = candidates
+                timing_ms[ch_name] = elapsed
+            except TimeoutError:
+                logger.warning(f"Multi-dense: {channel_name} channel timed out after {settings.multi_dense_timeout_s}s")
+                channel_candidates[channel_name] = []
+                timing_ms[channel_name] = int(settings.multi_dense_timeout_s * 1000)
+            except Exception as e:
+                logger.error(f"Multi-dense: {channel_name} channel failed: {e}")
+                channel_candidates[channel_name] = []
+                timing_ms[channel_name] = 0
+
+    return channel_candidates, timing_ms
+
+
 def _hydrate_scenes(
     fused_results: list[FusedCandidate],
     include_debug: bool = False,
@@ -175,14 +295,22 @@ def _hydrate_scenes(
 
         # Add debug fields if enabled
         if include_debug:
-            response_data.update({
-                "dense_score_raw": fused.dense_score_raw,
-                "lexical_score_raw": fused.lexical_score_raw,
-                "dense_score_norm": fused.dense_score_norm,
-                "lexical_score_norm": fused.lexical_score_norm,
-                "dense_rank": fused.dense_rank,
-                "lexical_rank": fused.lexical_rank,
-            })
+            # Check if this is multi-dense result (has channel_scores)
+            if fused.channel_scores:
+                # Multi-dense mode: include channel_scores
+                response_data.update({
+                    "channel_scores": fused.channel_scores,
+                })
+            else:
+                # Legacy 2-signal mode: include dense/lexical debug fields
+                response_data.update({
+                    "dense_score_raw": fused.dense_score_raw,
+                    "lexical_score_raw": fused.lexical_score_raw,
+                    "dense_score_norm": fused.dense_score_norm,
+                    "lexical_score_norm": fused.lexical_score_norm,
+                    "dense_rank": fused.dense_rank,
+                    "lexical_rank": fused.lexical_rank,
+                })
 
         responses.append(VideoSceneResponse(**response_data))
 
@@ -281,10 +409,15 @@ async def search_scenes(
         embedding_failed = True
 
     # Determine search strategy
+    use_multi_dense = (
+        settings.multi_dense_enabled
+        and not embedding_failed
+    )
     use_hybrid = (
         settings.hybrid_search_enabled
         and opensearch_client.is_available()
         and not embedding_failed
+        and not use_multi_dense  # Multi-dense takes precedence
     )
     use_lexical_only = (
         embedding_failed
@@ -296,8 +429,80 @@ async def search_scenes(
     lexical_candidates: list[Candidate] = []
     fused_results: list[FusedCandidate] = []
     actual_score_type: ScoreType = ScoreType.MINMAX_MEAN  # Will be updated based on path taken
+    multi_dense_timings: dict[str, int] = {}
 
-    if use_hybrid:
+    if use_multi_dense:
+        # Multi-dense mode: run N dense channels + lexical in parallel
+        logger.debug("Running multi-dense search (transcript + visual + summary + lexical)")
+
+        # Validate weights
+        is_valid, error_msg, active_weights = settings.validate_multi_dense_weights()
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Invalid multi-dense configuration: {error_msg}",
+            )
+
+        # Run parallel multi-channel retrieval
+        channel_candidates, multi_dense_timings = _run_multi_dense_search(
+            query_embedding,
+            user_id,
+            request.video_id,
+            request.query,
+        )
+
+        # Check if we got any results at all
+        total_results = sum(len(candidates) for candidates in channel_candidates.values())
+        if total_results == 0:
+            logger.warning("Multi-dense search returned no results from any channel")
+        else:
+            # Fuse using configured method
+            fusion_start = time.time()
+
+            # Use channel-specific naming for dense channels
+            # Map internal channel names to fusion function keys
+            fusion_channels = {}
+            if "transcript" in channel_candidates:
+                fusion_channels["dense_transcript"] = channel_candidates["transcript"]
+            if "visual" in channel_candidates:
+                fusion_channels["dense_visual"] = channel_candidates["visual"]
+            if "summary" in channel_candidates:
+                fusion_channels["dense_summary"] = channel_candidates["summary"]
+            if "lexical" in channel_candidates:
+                fusion_channels["lexical"] = channel_candidates["lexical"]
+
+            # Prepare weights dict with matching keys
+            fusion_weights = {}
+            if "dense_transcript" in fusion_channels:
+                fusion_weights["dense_transcript"] = active_weights.get("transcript", 0.45)
+            if "dense_visual" in fusion_channels:
+                fusion_weights["dense_visual"] = active_weights.get("visual", 0.25)
+            if "dense_summary" in fusion_channels:
+                fusion_weights["dense_summary"] = active_weights.get("summary", 0.10)
+            if "lexical" in fusion_channels:
+                fusion_weights["lexical"] = active_weights.get("lexical", 0.20)
+
+            if fusion_method == "rrf":
+                fused_results = multi_channel_rrf_fuse(
+                    channel_candidates=fusion_channels,
+                    k=settings.rrf_k,
+                    top_k=request.limit,
+                    include_debug=settings.search_debug,
+                )
+                actual_score_type = ScoreType.MULTI_DENSE_RRF
+            else:  # minmax_mean (default)
+                fused_results = multi_channel_minmax_fuse(
+                    channel_candidates=fusion_channels,
+                    channel_weights=fusion_weights,
+                    eps=settings.fusion_minmax_eps,
+                    top_k=request.limit,
+                    include_debug=settings.search_debug,
+                )
+                actual_score_type = ScoreType.MULTI_DENSE_MINMAX_MEAN
+
+            fusion_ms = int((time.time() - fusion_start) * 1000)
+
+    elif use_hybrid:
         # Run both retrievals concurrently
         logger.debug("Running hybrid search (dense + lexical)")
 
@@ -411,19 +616,39 @@ async def search_scenes(
         logger.error(f"Failed to log search query: {e}")
 
     # Log timing breakdown
-    search_mode = "hybrid" if use_hybrid else ("lexical" if use_lexical_only else "dense")
-    logger.info(
-        f"Search completed: mode={search_mode}, fusion={actual_score_type.value}, "
-        f"results={len(scene_responses)}, latency={latency_ms}ms "
-        f"(embed={embedding_ms}ms, dense={dense_ms}ms, lexical={lexical_ms}ms, "
-        f"fusion={fusion_ms}ms, hydrate={hydrate_ms}ms), "
-        f"dense_candidates={len(dense_candidates)}, lexical_candidates={len(lexical_candidates)}"
-    )
+    if use_multi_dense:
+        search_mode = "multi_dense"
+        # Log per-channel timing and candidate counts
+        channel_info = ", ".join(
+            f"{ch}={multi_dense_timings.get(ch, 0)}ms"
+            for ch in ["transcript", "visual", "summary", "lexical"]
+            if ch in multi_dense_timings
+        )
+        logger.info(
+            f"Search completed: mode={search_mode}, fusion={actual_score_type.value}, "
+            f"results={len(scene_responses)}, latency={latency_ms}ms "
+            f"(embed={embedding_ms}ms, channels=[{channel_info}], "
+            f"fusion={fusion_ms}ms, hydrate={hydrate_ms}ms)"
+        )
+    else:
+        search_mode = "hybrid" if use_hybrid else ("lexical" if use_lexical_only else "dense")
+        logger.info(
+            f"Search completed: mode={search_mode}, fusion={actual_score_type.value}, "
+            f"results={len(scene_responses)}, latency={latency_ms}ms "
+            f"(embed={embedding_ms}ms, dense={dense_ms}ms, lexical={lexical_ms}ms, "
+            f"fusion={fusion_ms}ms, hydrate={hydrate_ms}ms), "
+            f"dense_candidates={len(dense_candidates)}, lexical_candidates={len(lexical_candidates)}"
+        )
 
     # Build fusion metadata for response
     fusion_weights = None
     if actual_score_type == ScoreType.MINMAX_MEAN:
         fusion_weights = {"dense": weight_dense, "lexical": weight_lexical}
+    elif actual_score_type == ScoreType.MULTI_DENSE_MINMAX_MEAN:
+        # Include multi-channel weights
+        is_valid, _, active_weights = settings.validate_multi_dense_weights()
+        if is_valid:
+            fusion_weights = active_weights
 
     # Build response
     response = SearchResponse(

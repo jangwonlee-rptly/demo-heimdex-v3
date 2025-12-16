@@ -1,0 +1,116 @@
+## 2025-12-16 13:01 - Fixed Search Results UI Overlap Issue
+
+### Problem
+
+The search results screen had the same UI issue as the previous transcript segments container - the "Results" title was being covered/overlapped by the scrolling content below it.
+
+**Symptoms:**
+- When scrolling through search results, content would overlap with the "Results" header
+- Similar to the transcript segments issue fixed earlier
+- The sticky positioning with negative margin (`sticky top-0`, `-mt-2`) was causing layout problems
+
+### Root Cause
+
+The search results container (line 147-150 in `services/frontend/src/app/search/page.tsx`) was using:
+```tsx
+<div className="card max-h-[calc(100vh-280px)] overflow-y-auto no-scrollbar">
+  <h2 className="text-lg font-semibold text-surface-100 mb-4 sticky top-0 bg-surface-800/95 backdrop-blur-sm py-2 -mt-2">
+    Results
+  </h2>
+  {/* content */}
+</div>
+```
+
+Issues with this approach:
+1. The entire card had `overflow-y-auto`, making everything scrollable including the title
+2. Sticky positioning with `top-0` and negative margin `-mt-2` created overlap
+3. Title and content were not in separate layout containers
+4. Content would scroll under/over the title when scrolling
+
+### Solution
+
+Refactored to use a flexbox layout pattern that separates the title from scrollable content:
+
+```tsx
+<div className="card flex flex-col max-h-[calc(100vh-280px)]">
+  <h2 className="text-lg font-semibold text-surface-100 mb-4 flex-shrink-0">
+    Results
+  </h2>
+
+  <div className="flex-1 overflow-y-auto no-scrollbar">
+    {/* all results content */}
+  </div>
+</div>
+```
+
+**Key changes:**
+1. **Card container**: Added `flex flex-col` to create vertical flex layout
+2. **Title**:
+   - Removed sticky positioning (`sticky top-0 bg-surface-800/95 backdrop-blur-sm py-2 -mt-2`)
+   - Added `flex-shrink-0` to prevent title from shrinking
+   - Title now occupies fixed space at top
+3. **Content wrapper**:
+   - Wrapped all content in new `<div className="flex-1 overflow-y-auto no-scrollbar">`
+   - `flex-1` makes it take all remaining vertical space
+   - Only this inner div scrolls, not the title
+
+### Files Modified
+
+**services/frontend/src/app/search/page.tsx**
+- Line 147: Changed card div to `flex flex-col` container
+- Line 148: Simplified title styling, removed sticky positioning
+- Line 152: Added inner wrapper div for scrollable content
+- Line 264: Closed inner wrapper div before closing card
+
+### Technical Details
+
+**Before:**
+- Single scrollable container with sticky title inside
+- Title used backdrop blur and semi-transparent background to appear on top
+- Negative margin caused content to overlap with title
+- Fragile layout that broke on scroll
+
+**After:**
+- Flexbox column layout with two distinct regions
+- Title: `flex-shrink-0` (fixed height, doesn't scroll)
+- Content: `flex-1 overflow-y-auto` (takes remaining space, scrolls independently)
+- Clean separation of concerns
+- No overlapping, no sticky positioning needed
+
+### Benefits
+
+1. **Cleaner layout**: Title and content occupy separate, well-defined spaces
+2. **No overlap**: Content never scrolls under/over the title
+3. **Simpler CSS**: No need for sticky positioning, backdrop blur, or negative margins
+4. **Consistent pattern**: Same fix pattern used for transcript segments container
+5. **Better maintainability**: Clearer intent with flexbox layout
+
+### Verification
+
+The fix ensures:
+- "Results" title remains visible and fixed at the top
+- Only the search results content scrolls
+- No visual overlap when scrolling
+- Layout works correctly with empty state, no results, and populated results
+
+### Pattern for Future Reference
+
+When fixing title overlap issues in scrollable containers:
+```tsx
+{/* Container with flex column */}
+<div className="card flex flex-col max-h-[...]">
+  {/* Non-scrollable title */}
+  <h2 className="... flex-shrink-0">Title</h2>
+
+  {/* Scrollable content */}
+  <div className="flex-1 overflow-y-auto no-scrollbar">
+    {/* content */}
+  </div>
+</div>
+```
+
+This pattern:
+- Separates title (fixed) from content (scrollable)
+- Uses flexbox for clean layout control
+- Avoids sticky positioning complexity
+- Prevents overlap issues

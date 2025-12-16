@@ -94,6 +94,12 @@ class VideoProcessor:
                 embedding_metadata=sidecar.embedding_metadata.to_dict() if sidecar.embedding_metadata else None,
                 needs_reprocess=sidecar.needs_reprocess,
                 processing_stats=sidecar.processing_stats,
+                # v3-multi embedding fields
+                embedding_transcript=sidecar.embedding_transcript,
+                embedding_visual=sidecar.embedding_visual,
+                embedding_summary=sidecar.embedding_summary,
+                embedding_version=sidecar.embedding_version,
+                multi_embedding_metadata=sidecar.multi_embedding_metadata.to_dict() if sidecar.multi_embedding_metadata else None,
             )
 
             logger.info(f"Scene {scene.index} saved with id={scene_id}")
