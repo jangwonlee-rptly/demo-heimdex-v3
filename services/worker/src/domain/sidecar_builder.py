@@ -1088,15 +1088,25 @@ class SidecarBuilder:
             return ""
 
         # Sort segments by start time (defensive - they should already be sorted)
-        sorted_segments = sorted(segments, key=lambda s: s.get("start", 0.0))
+        # Handle both dict and object formats (for backward compatibility)
+        sorted_segments = sorted(
+            segments,
+            key=lambda s: s.get("start", 0.0) if isinstance(s, dict) else getattr(s, "start", 0.0)
+        )
 
         def get_text_for_window(start: float, end: float) -> str:
             """Helper to extract text for a time window."""
             matching_segs = []
             for seg in sorted_segments:
-                seg_start = seg.get("start", 0.0)
-                seg_end = seg.get("end", 0.0)
-                seg_text = seg.get("text", "")
+                # Handle both dict and object formats
+                if isinstance(seg, dict):
+                    seg_start = seg.get("start", 0.0)
+                    seg_end = seg.get("end", 0.0)
+                    seg_text = seg.get("text", "")
+                else:
+                    seg_start = getattr(seg, "start", 0.0)
+                    seg_end = getattr(seg, "end", 0.0)
+                    seg_text = getattr(seg, "text", "")
 
                 # Include segment if it overlaps with the window
                 # Use strict inequalities to exclude segments that just touch at boundaries
