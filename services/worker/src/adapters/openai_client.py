@@ -15,6 +15,27 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class WhisperSegment:
+    """A single segment from Whisper's verbose_json response.
+
+    Represents a time-aligned chunk of transcribed text with metadata.
+
+    Attributes:
+        start: Start time in seconds
+        end: End time in seconds
+        text: Transcribed text for this segment
+        no_speech_prob: Probability that this segment contains no speech (0.0-1.0)
+        avg_logprob: Average log probability of tokens (quality indicator)
+    """
+
+    start: float
+    end: float
+    text: str
+    no_speech_prob: Optional[float] = None
+    avg_logprob: Optional[float] = None
+
+
+@dataclass
 class TranscriptionResult:
     """Result of audio transcription with quality assessment.
 
@@ -28,11 +49,13 @@ class TranscriptionResult:
             - "low_speech_ratio": Too few speech characters vs total
             - "high_no_speech_prob": Whisper segments indicate no speech
             - "banned_phrases": Content dominated by banned phrases
+        segments: List of time-aligned segments with timestamps (from verbose_json)
     """
 
     text: str
     has_speech: bool
     reason: str
+    segments: list[WhisperSegment] = None
 
 
 def is_speech_character(char: str) -> bool:
@@ -181,8 +204,37 @@ class OpenAIClient:
             f"Transcription complete: {len(full_text)} chars, {len(segments)} segments"
         )
 
+        # Convert raw segments to WhisperSegment dataclass instances
+        whisper_segments = []
+        if segments:
+            for seg in segments:
+                # Handle both Pydantic objects and dicts
+                if hasattr(seg, "start"):
+                    whisper_segments.append(
+                        WhisperSegment(
+                            start=seg.start,
+                            end=seg.end,
+                            text=seg.text,
+                            no_speech_prob=getattr(seg, "no_speech_prob", None),
+                            avg_logprob=getattr(seg, "avg_logprob", None),
+                        )
+                    )
+                else:
+                    whisper_segments.append(
+                        WhisperSegment(
+                            start=seg.get("start", 0.0),
+                            end=seg.get("end", 0.0),
+                            text=seg.get("text", ""),
+                            no_speech_prob=seg.get("no_speech_prob"),
+                            avg_logprob=seg.get("avg_logprob"),
+                        )
+                    )
+
         # Apply quality heuristics
         result = self._assess_transcription_quality(full_text, segments)
+
+        # Add segments to result
+        result.segments = whisper_segments
 
         if not result.has_speech:
             logger.info(

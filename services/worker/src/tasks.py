@@ -17,8 +17,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Redis broker
-redis_broker = RedisBroker(url=settings.redis_url)
+# Initialize Redis broker with connection resilience
+redis_broker = RedisBroker(
+    url=settings.redis_url,
+    # Connection pool settings for resilience
+    connection_pool_kwargs={
+        "max_connections": 10,
+        "socket_keepalive": True,
+        "socket_keepalive_options": {
+            1: 1,  # TCP_KEEPIDLE: Start keepalives after 1 second
+            2: 1,  # TCP_KEEPINTVL: Interval between keepalives
+            3: 3,  # TCP_KEEPCNT: Number of keepalives before death
+        },
+        "socket_connect_timeout": 5,
+        "socket_timeout": 5,
+        "retry_on_timeout": True,
+        "health_check_interval": 30,  # Check connection health every 30s
+    }
+)
 dramatiq.set_broker(redis_broker)
 
 # Import the canonical actors from shared tasks module

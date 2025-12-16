@@ -1,0 +1,190 @@
+[2025-12-16 14:36] Implemented Timestamp-Aligned Transcript Slicing for Improved Scene-to-Transcript Mapping
+File: devlog/2512161436.txt
+
+== What we worked on ==
+- Replaced proportional character-based transcript slicing with timestamp-aligned extraction using Whisper segments
+- Implemented end-to-end solution from database schema to unit tests
+- Ensured backward compatibility with existing cached transcripts
+- All tests running and passing in Docker environment
+
+== Changes made ==
+
+1. Database Schema (infra/migrations/016_add_transcript_segments.sql)
+   - Added transcript_segments JSONB column to videos table
+   - Created GIN index for efficient JSONB queries
+   - Added partial index for videos with segments
+
+2. Data Models (services/worker/src/adapters/openai_client.py)
+   - Created WhisperSegment dataclass with start, end, text, no_speech_prob, avg_logprob fields
+   - Updated TranscriptionResult to include segments list
+   - Modified transcribe_audio_with_quality() to capture and convert Whisper segments from verbose_json response
+
+3. Database Adapter (services/worker/src/adapters/database.py)
+   - Enhanced save_transcript() to accept and persist segments as JSONB
+   - Updated get_cached_transcript() to return tuple of (transcript, segments)
+   - Added segment serialization logic to convert dataclass instances to dicts
+
+4. Transcript Extraction (services/worker/src/domain/sidecar_builder.py)
+   - Implemented _extract_transcript_segment_from_segments() with:
+     * Strict overlap detection: seg_end > start AND seg_start < end
+     * Time-based context expansion (±context_pad_s) when text < min_chars
+     * Boundary clamping to [0, video_duration_s]
+     * Chronological ordering and whitespace normalization
+   - Deprecated _extract_transcript_segment() as fallback for old videos
+   - Updated build_sidecar() to use segments when available, fallback to proportional when not
+
+5. Pipeline Integration (services/worker/src/domain/video_processor.py)
+   - Modified process_video() to retrieve segments from cache
+   - Updated transcription flow to save segments alongside text
+   - Modified _process_single_scene() to accept and pass segments to sidecar builder
+   - Added logging for segment-based vs fallback extraction paths
+
+6. Test Infrastructure (services/worker/Dockerfile.test)
+   - Created Dockerfile.test with pytest dependencies
+   - Integrated with docker-compose.test.yml for worker-test service
+
+7. Unit Tests (services/worker/tests/test_transcript_segmentation.py)
+   - 15 comprehensive test cases covering:
+     * Exact and partial overlap scenarios
+     * No overlap (empty result)
+     * Context expansion when text is too short
+     * Boundary clamping at 0 and video_duration_s
+     * Empty segments list handling
+     * Out-of-order segments (sorted internally)
+     * Whitespace normalization
+     * Korean/CJK and mixed-language text support
+
+8. Documentation (services/worker/TRANSCRIPT_TIMESTAMP_ALIGNMENT.md)
+   - Comprehensive guide explaining problem, solution, implementation
+   - Code examples and algorithm details
+   - Migration path for existing videos
+   - Testing instructions and future improvements
+
+== Problems encountered ==
+
+- Problem 1: Test failures due to default min_chars parameter
+  - Initial tests failed because default min_chars=200 caused unexpected context expansion
+  - Tests were checking for exact segment extraction but getting expanded results
+  - Example: test_exact_overlap expected "this is a test" but got "Hello world this is a test of the system"
+
+- Problem 2: Overlap detection too inclusive
+  - Initial implementation used seg_end >= start AND seg_start <= end
+  - This included segments that just touched at boundaries without actual overlap
+  - Example: Scene [2.0, 4.0] incorrectly included segment [0.0, 2.0] because 2.0 >= 2.0
+  - Segments that only touch at endpoints shouldn't be included
+
+- Problem 3: Running tests locally instead of in Docker
+  - First attempt tried to run pytest locally with npm/pip commands
+  - User correctly pointed out: "everything is executed in docker"
+  - Need to respect the project's Docker-based development workflow
+
+== How we tried to solve it ==
+
+- Attempt 1: Fix test expectations to match expanded results
+  - Result: Wrong approach - the logic should match the test expectations, not vice versa
+
+- Attempt 2: Update tests to explicitly set min_chars=0 for precise tests
+  - Added min_chars=0 to all tests that check exact extraction (not context expansion)
+  - Result: Reduced failures from 4 to 2, but still had boundary issues
+
+- Attempt 3: Fix overlap detection with strict inequalities
+  - Changed from seg_end >= start AND seg_start <= end
+  - To: seg_end > start AND seg_start < end
+  - This excludes segments that only touch at boundaries
+  - Result: All 15 tests passing ✅
+
+== How we solved it / Current status ==
+
+- SOLVED: Implemented timestamp-aligned transcript slicing with proper overlap detection
+
+- Root cause analysis:
+  1. Proportional character-based slicing assumes uniform speech rate
+  2. Breaks when speech is not evenly distributed (silence, music, variable pacing)
+  3. Scenes receive incorrect transcript text → degrades embedding quality → hurts search accuracy
+
+- Solution components:
+  1. WhisperSegment dataclass captures start/end times from Whisper's verbose_json response
+  2. Database stores segments as JSONB for persistence and caching
+  3. Timestamp-aligned extraction uses actual time windows instead of character proportions
+  4. Context expansion is time-based (±3s by default) rather than character-based
+  5. Fallback to proportional slicing for older videos ensures backward compatibility
+
+- Overlap detection algorithm:
+  ```
+  For scene window [start, end) and segment [seg_start, seg_end):
+  Include if: seg_end > start AND seg_start < end
+
+  Examples:
+  - Scene [2.0, 4.0], Segment [2.0, 4.0] → included ✓
+  - Scene [2.0, 4.0], Segment [0.0, 2.0] → excluded ✗ (just touches)
+  - Scene [2.0, 4.0], Segment [4.0, 6.0] → excluded ✗ (just touches)
+  - Scene [2.0, 4.0], Segment [1.5, 2.5] → included ✓ (overlaps)
+  ```
+
+- Test results in Docker:
+  ```
+  15 passed, 32 warnings in 1.10s
+  100% pass rate ✅
+  ```
+
+- Benefits:
+  1. Accuracy: Scenes get the transcript that was actually spoken during that time window
+  2. Search Quality: Transcript embeddings better represent actual scene content
+  3. Language Support: Works identically for Korean, English, Japanese, CJK, etc.
+  4. Robustness: Handles variable speech rate, silence, music, and pauses correctly
+  5. Idempotency: Cached segments prevent redundant Whisper API calls on retry
+  6. Backward Compatible: Existing videos with only full_transcript still work (fallback)
+
+- Production readiness:
+  * No breaking changes to existing APIs
+  * Preserves full_transcript field (consumers unaffected)
+  * Comprehensive error handling and logging
+  * Safe fallback for videos without segments
+  * All tests passing in Docker environment
+
+== Next steps / TODOs ==
+
+- Apply database migration 016_add_transcript_segments.sql to production database
+- Deploy updated worker service to begin using timestamp-aligned extraction for new videos
+- Monitor logs for "Using timestamp-aligned transcript extraction" vs "Falling back to proportional"
+- Optional: Trigger reprocessing of high-value videos to upgrade them to timestamp-aligned segments
+- Consider upgrading to Whisper v3 when stable (may improve segment boundary accuracy)
+- Monitor transcript embedding quality improvements in search metrics
+
+== Key learnings ==
+
+1. **Docker-first development**: Always run tests in Docker to match production environment
+   - User reminder: "everything is executed in docker" was crucial
+   - Created Dockerfile.test and integrated with docker-compose.test.yml
+   - Prevents "works on my machine" issues
+
+2. **Interval overlap math**: Boundary conditions matter
+   - Inclusive (>=, <=) vs strict (<, >) inequalities have different semantics
+   - Segments that only touch at endpoints shouldn't be considered overlapping
+   - Use strict inequalities for open intervals: seg_end > start AND seg_start < end
+
+3. **Test-driven development**: Tests revealed the actual requirements
+   - Initial implementation was too inclusive with overlaps
+   - Tests showed exactly what "overlap" should mean
+   - Fixed implementation to match test expectations
+
+4. **Backward compatibility design**: Always provide fallback paths
+   - Old videos with only full_transcript → proportional slicing (deprecated but works)
+   - New videos with segments → timestamp-aligned extraction (preferred)
+   - No data migration required, gradual upgrade path
+
+5. **Context expansion trade-offs**: Default parameters matter
+   - min_chars=200 by default ensures meaningful transcript segments
+   - Tests should explicitly control this parameter to test edge cases
+   - Production uses smart defaults, tests use explicit values
+
+== File references ==
+
+- Migration: infra/migrations/016_add_transcript_segments.sql
+- Data model: services/worker/src/adapters/openai_client.py:17-58
+- Database adapter: services/worker/src/adapters/database.py:193-279
+- Extraction logic: services/worker/src/domain/sidecar_builder.py:993-1094
+- Pipeline integration: services/worker/src/domain/video_processor.py:28-347
+- Tests: services/worker/tests/test_transcript_segmentation.py
+- Docker test config: services/worker/Dockerfile.test
+- Documentation: services/worker/TRANSCRIPT_TIMESTAMP_ALIGNMENT.md

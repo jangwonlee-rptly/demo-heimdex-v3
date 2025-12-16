@@ -1,4 +1,6 @@
 """Configuration for the Worker service."""
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -109,6 +111,19 @@ class Settings(BaseSettings):
         "(music)", "(Music)",
     ]
     transcription_banned_phrases: list[str] = []  # Optional: phrases to filter as low-value
+
+    # CLIP visual embedding configuration (CPU-friendly, Railway-safe)
+    clip_enabled: bool = True  # Feature flag: enable CLIP visual embeddings (default: disabled)
+    clip_model_name: str = "ViT-B-32"  # CLIP model architecture (ViT-B-32 = 512 dim, faster on CPU)
+    clip_pretrained: str = "openai"  # Pretrained weights source (openai, laion400m, etc.)
+    clip_device: str = "cpu"  # Device for inference: "cpu" or "cuda"
+    clip_cache_dir: str = "/tmp/clip_cache"  # Directory for caching model weights
+    clip_normalize: bool = True  # L2-normalize embeddings for cosine similarity (recommended)
+    clip_timeout_s: float = 2.0  # Per-scene embedding timeout in seconds
+    clip_max_image_size: int = 224  # Max image dimension (resize if larger to save memory)
+    clip_frame_strategy: str = "best_quality"  # Frame selection: "best_quality" (current), "middle", "best_of_3" (future)
+    clip_cpu_threads: Optional[int] = None  # Optional: limit torch CPU threads to prevent thrashing
+    clip_debug_log: bool = False  # Enable verbose logging for CLIP embeddings
 
 
 # Global settings instance

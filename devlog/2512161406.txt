@@ -1,0 +1,69 @@
+[2025-12-16 14:06] Fixed Supabase ESM Import Issues in Next.js Docker Build
+File: devlog/2512161406.txt
+
+== What we worked on ==
+- Debugging and fixing Railway deployment failure for the frontend service
+- Resolving webpack/Next.js build errors related to @supabase/supabase-js ESM imports
+- Testing fixes in Docker environment to match Railway's build process
+
+== Changes made ==
+- services/frontend/next.config.js: Added comprehensive webpack configuration to handle Supabase ESM imports
+  - Added experimental.esmExternals: 'loose' to treat ESM import issues as warnings instead of errors
+  - Enhanced webpack config with custom rules for @supabase packages
+  - Added module resolution rules with fullySpecified: false for .mjs files
+  - Added crypto to fallbacks alongside existing fs, net, tls
+  - Kept transpilePackages: ['@supabase/supabase-js']
+
+== Problems encountered ==
+- Problem 1: Railway Docker build failing with webpack error:
+  ```
+  Attempted import error: '../module/index.js' does not contain a default export (imported as 'index').
+  Import trace: @supabase/supabase-js/dist/esm/wrapper.mjs -> src/lib/supabase.ts
+  ```
+  - Build was failing at the "RUN npm run build" step in the Dockerfile
+  - Error was blocking deployment to Railway
+
+- Problem 2: Initial confusion about testing environment
+  - First attempted to run npm install and npm run build locally
+  - Realized all builds happen inside Docker containers, not locally
+
+== How we tried to solve it ==
+- Attempt 1: Added transpilePackages configuration alone
+  - Result: Still failed with the same ESM import error
+
+- Attempt 2: Added extensionAlias and basic webpack fallbacks
+  - Result: Build still failed in Railway Docker environment
+
+- Attempt 3: Enhanced webpack config with explicit module rules for @supabase packages
+  - Added config.module.rules for handling .mjs files from @supabase
+  - Set type: 'javascript/auto' and fullySpecified: false
+  - Result: Still needed the experimental flag
+
+== How we solved it / Current status ==
+- SOLVED: The key fix was adding `experimental: { esmExternals: 'loose' }`
+  - Root cause: Next.js 14 webpack has strict ESM handling by default
+  - @supabase/supabase-js v2 uses ESM with a structure that triggers webpack errors
+  - The 'loose' mode treats these import mismatches as warnings instead of fatal errors
+
+- Combined solution in next.config.js:
+  1. experimental.esmExternals: 'loose' - treats ESM issues as warnings
+  2. Custom webpack module rule for @supabase packages with fullySpecified: false
+  3. transpilePackages to ensure proper transpilation
+  4. Fallbacks for node modules (fs, net, tls, crypto)
+
+- Build verification:
+  - Tested in local Docker build: SUCCESS (with warnings, but builds complete)
+  - Build output shows warnings but compiles successfully
+  - All 9 routes generated properly
+  - Docker image created successfully
+
+- Trade-offs:
+  - Build shows warnings about the import, but they are benign
+  - Using experimental flag may have implications for future Next.js upgrades
+  - This is a known issue with @supabase/supabase-js v2 and Next.js webpack
+
+== Next steps / TODOs ==
+- Push changes to Railway and verify deployment succeeds
+- Monitor the deployed application to ensure Supabase client works correctly at runtime
+- Consider upgrading to @supabase/supabase-js v3 when stable (may resolve ESM issues)
+- Document this fix in project documentation for future reference

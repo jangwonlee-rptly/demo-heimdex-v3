@@ -26,6 +26,7 @@ from uuid import UUID
 from .scene_detector import Scene
 from .frame_quality import frame_quality_checker
 from ..adapters.openai_client import openai_client
+from ..adapters.clip_embedder import ClipEmbedder
 from ..adapters.ffmpeg import ffmpeg
 from ..adapters.supabase import storage
 from ..config import settings
@@ -134,6 +135,9 @@ class SceneSidecar:
         embedding_summary: Optional[list[float]] = None,
         embedding_version: Optional[str] = None,
         multi_embedding_metadata: Optional[MultiEmbeddingMetadata] = None,
+        # CLIP visual embedding fields
+        embedding_visual_clip: Optional[list[float]] = None,
+        visual_clip_metadata: Optional[dict] = None,
     ):
         """Initialize SceneSidecar.
 
@@ -182,6 +186,10 @@ class SceneSidecar:
         self.embedding_summary = embedding_summary
         self.embedding_version = embedding_version
         self.multi_embedding_metadata = multi_embedding_metadata
+
+        # CLIP visual embedding fields
+        self.embedding_visual_clip = embedding_visual_clip
+        self.visual_clip_metadata = visual_clip_metadata
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -650,6 +658,7 @@ class SidecarBuilder:
         language: str = "ko",
         video_duration_s: Optional[float] = None,
         video_filename: Optional[str] = None,
+        transcript_segments: Optional[list] = None,
     ) -> SceneSidecar:
         """
         Build a complete sidecar for a scene with optimized visual semantics.
@@ -660,6 +669,7 @@ class SidecarBuilder:
         3. Strict JSON schema prompts for token efficiency
         4. Configurable visual semantics processing
         5. Cost-optimized visual analysis skipping
+        6. Timestamp-aligned transcript extraction when segments available
 
         Args:
             scene: Scene object with time boundaries
@@ -671,6 +681,7 @@ class SidecarBuilder:
             language: Language for summaries and embeddings ('ko' or 'en')
             video_duration_s: Optional video duration for transcript extraction
             video_filename: Optional video filename for metadata inclusion
+            transcript_segments: Optional list of Whisper segments with timestamps
 
         Returns:
             SceneSidecar object
@@ -685,10 +696,24 @@ class SidecarBuilder:
         if video_duration_s is None:
             video_duration_s = scene.end_s
 
-        # Extract transcript segment (simple time-based slicing)
-        transcript_segment = SidecarBuilder._extract_transcript_segment(
-            full_transcript, scene, video_duration_s
-        )
+        # Extract transcript segment using timestamp-aligned method if available
+        if transcript_segments:
+            logger.debug(
+                f"Using timestamp-aligned transcript extraction for scene {scene.index}"
+            )
+            transcript_segment = SidecarBuilder._extract_transcript_segment_from_segments(
+                segments=transcript_segments,
+                scene_start_s=scene.start_s,
+                scene_end_s=scene.end_s,
+                video_duration_s=video_duration_s,
+            )
+        else:
+            logger.debug(
+                f"Falling back to proportional transcript extraction for scene {scene.index}"
+            )
+            transcript_segment = SidecarBuilder._extract_transcript_segment(
+                full_transcript, scene, video_duration_s
+            )
         stats.transcript_length = len(transcript_segment) if transcript_segment else 0
 
         # Check if transcript is meaningful
@@ -704,6 +729,10 @@ class SidecarBuilder:
         tags = []
         thumbnail_url = None
         best_frame_path = None
+
+        # Initialize CLIP visual embedding fields
+        embedding_visual_clip = None
+        visual_clip_metadata = None
 
         # Determine if we should skip visual analysis (cost optimization)
         should_skip_visuals, skip_reason = SidecarBuilder._should_skip_visual_analysis(
@@ -738,6 +767,42 @@ class SidecarBuilder:
                         settings.visual_semantics_max_frame_retries
                     )
                     best_frame_path = ranked_frames[0][0]  # Keep best for thumbnail
+
+                    # Generate CLIP visual embedding from best frame (if enabled)
+                    if settings.clip_enabled and best_frame_path:
+                        logger.info(
+                            f"Scene {scene.index}: Generating CLIP embedding from best frame"
+                        )
+                        try:
+                            clip_embedder = ClipEmbedder()
+                            best_frame_quality = {
+                                "quality_score": ranked_frames[0][1],
+                            }
+                            embedding_visual_clip, clip_metadata_obj = clip_embedder.create_visual_embedding(
+                                image_path=Path(best_frame_path),
+                                quality_info=best_frame_quality,
+                                timeout_s=settings.clip_timeout_s,
+                            )
+                            if clip_metadata_obj:
+                                visual_clip_metadata = clip_metadata_obj.to_dict()
+
+                            if embedding_visual_clip:
+                                logger.info(
+                                    f"Scene {scene.index}: CLIP embedding created "
+                                    f"(dim={len(embedding_visual_clip)}, "
+                                    f"time={visual_clip_metadata.get('inference_time_ms', 0):.1f}ms)"
+                                )
+                            else:
+                                error = visual_clip_metadata.get("error") if visual_clip_metadata else "unknown"
+                                logger.warning(
+                                    f"Scene {scene.index}: CLIP embedding failed: {error}"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"Scene {scene.index}: Unexpected CLIP error: {e}",
+                                exc_info=True
+                            )
+                            # Continue processing - CLIP failure should not break pipeline
 
                     visual_result = None
                     for attempt in range(max_attempts):
@@ -988,7 +1053,71 @@ class SidecarBuilder:
             embedding_summary=embedding_summary,
             embedding_version=embedding_version_value,
             multi_embedding_metadata=multi_embedding_metadata,
+            # CLIP visual embedding fields
+            embedding_visual_clip=embedding_visual_clip,
+            visual_clip_metadata=visual_clip_metadata,
         )
+
+    @staticmethod
+    def _extract_transcript_segment_from_segments(
+        segments: list,
+        scene_start_s: float,
+        scene_end_s: float,
+        video_duration_s: float,
+        context_pad_s: float = 3.0,
+        min_chars: int = 200,
+    ) -> str:
+        """
+        Extract transcript segment using Whisper's timestamp-aligned segments.
+
+        This is the preferred method as it uses actual word-level timestamps
+        from Whisper rather than assuming uniform speech rate.
+
+        Args:
+            segments: List of segment dicts with 'start', 'end', 'text' keys
+            scene_start_s: Scene start time in seconds
+            scene_end_s: Scene end time in seconds
+            video_duration_s: Total video duration in seconds
+            context_pad_s: Seconds to expand window if segment is too short
+            min_chars: Minimum character count before expanding context
+
+        Returns:
+            Transcript segment for the scene (timestamp-aligned)
+        """
+        if not segments:
+            return ""
+
+        # Sort segments by start time (defensive - they should already be sorted)
+        sorted_segments = sorted(segments, key=lambda s: s.get("start", 0.0))
+
+        def get_text_for_window(start: float, end: float) -> str:
+            """Helper to extract text for a time window."""
+            matching_segs = []
+            for seg in sorted_segments:
+                seg_start = seg.get("start", 0.0)
+                seg_end = seg.get("end", 0.0)
+                seg_text = seg.get("text", "")
+
+                # Include segment if it overlaps with the window
+                # Use strict inequalities to exclude segments that just touch at boundaries
+                if seg_end > start and seg_start < end:
+                    matching_segs.append(seg_text)
+
+            # Join and normalize whitespace
+            text = " ".join(matching_segs)
+            text = " ".join(text.split())  # Normalize whitespace
+            return text.strip()
+
+        # Initial extraction for scene time window
+        text = get_text_for_window(scene_start_s, scene_end_s)
+
+        # If too short, expand the window with context padding
+        if len(text) < min_chars:
+            expanded_start = max(0.0, scene_start_s - context_pad_s)
+            expanded_end = min(video_duration_s, scene_end_s + context_pad_s)
+            text = get_text_for_window(expanded_start, expanded_end)
+
+        return text
 
     @staticmethod
     def _extract_transcript_segment(
@@ -997,9 +1126,10 @@ class SidecarBuilder:
         total_duration_s: float,
     ) -> str:
         """
-        Extract transcript segment for a scene.
+        Extract transcript segment for a scene using proportional character slicing.
 
-        This is a simple time-based slicing. Ideally we'd use word-level timestamps.
+        DEPRECATED: This is a fallback method for videos without timestamp segments.
+        Use _extract_transcript_segment_from_segments() when segments are available.
 
         Args:
             full_transcript: Full video transcript

@@ -14,12 +14,14 @@ class SupabaseStorage:
 
     def __init__(self):
         """Initialize the Supabase storage client."""
+        # Ensure storage URL has trailing slash to prevent warnings
+        storage_url = settings.supabase_url.rstrip("/") + "/"
         self.client: Client = create_client(
-            settings.supabase_url,
+            storage_url,
             settings.supabase_service_role_key,
         )
         self.bucket_name = "videos"
-        self.storage_url = settings.supabase_url  # Base URL for constructing public URLs
+        self.storage_url = storage_url  # Base URL for constructing public URLs
 
     def download_file(self, storage_path: str, local_path: Path) -> None:
         """

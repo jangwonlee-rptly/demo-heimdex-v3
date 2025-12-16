@@ -1,4 +1,5 @@
 """Database adapter for worker service."""
+import json
 import logging
 from datetime import datetime
 from typing import Optional
@@ -189,37 +190,93 @@ class Database:
         if update_data:
             self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
 
-    def save_transcript(self, video_id: UUID, transcript: str) -> None:
+    def save_transcript(
+        self, video_id: UUID, transcript: str, segments: Optional[list] = None
+    ) -> None:
         """
-        Save transcript to database as checkpoint.
+        Save transcript and segments to database as checkpoint.
 
         This allows us to skip expensive Whisper transcription on retry.
 
         Args:
             video_id: Video ID
             transcript: Full video transcript
+            segments: Optional list of WhisperSegment objects with timestamps
 
         Returns:
             None: This function does not return a value.
         """
-        logger.info(f"Saving transcript checkpoint for video {video_id} ({len(transcript)} chars)")
-        self.client.table("videos").update({"full_transcript": transcript}).eq("id", str(video_id)).execute()
+        update_data = {"full_transcript": transcript}
 
-    def get_cached_transcript(self, video_id: UUID) -> Optional[str]:
+        # Serialize segments to JSONB if provided
+        if segments:
+            # Convert WhisperSegment dataclass instances to dicts
+            segments_json = []
+            for seg in segments:
+                if hasattr(seg, "__dict__"):
+                    # Dataclass instance - convert to dict
+                    seg_dict = {
+                        "start": seg.start,
+                        "end": seg.end,
+                        "text": seg.text,
+                    }
+                    if seg.no_speech_prob is not None:
+                        seg_dict["no_speech_prob"] = seg.no_speech_prob
+                    if seg.avg_logprob is not None:
+                        seg_dict["avg_logprob"] = seg.avg_logprob
+                    segments_json.append(seg_dict)
+                else:
+                    # Already a dict
+                    segments_json.append(seg)
+
+            update_data["transcript_segments"] = segments_json
+            logger.info(
+                f"Saving transcript checkpoint for video {video_id} "
+                f"({len(transcript)} chars, {len(segments)} segments)"
+            )
+        else:
+            logger.info(
+                f"Saving transcript checkpoint for video {video_id} ({len(transcript)} chars)"
+            )
+
+        self.client.table("videos").update(update_data).eq(
+            "id", str(video_id)
+        ).execute()
+
+    def get_cached_transcript(
+        self, video_id: UUID
+    ) -> tuple[Optional[str], Optional[list]]:
         """
-        Get cached transcript if it exists.
+        Get cached transcript and segments if they exist.
 
         Args:
             video_id: Video ID
 
         Returns:
-            Cached transcript or None if not found
+            Tuple of (transcript, segments) where:
+            - transcript: Full video transcript text or None
+            - segments: List of segment dicts with timestamps or None
         """
         video = self.get_video(video_id)
-        if video and "full_transcript" in video and video["full_transcript"]:
-            logger.info(f"Found cached transcript for video {video_id} ({len(video['full_transcript'])} chars)")
-            return video["full_transcript"]
-        return None
+        if not video:
+            return (None, None)
+
+        transcript = video.get("full_transcript")
+        segments = video.get("transcript_segments")
+
+        if transcript:
+            if segments:
+                logger.info(
+                    f"Found cached transcript for video {video_id} "
+                    f"({len(transcript)} chars, {len(segments)} segments)"
+                )
+            else:
+                logger.info(
+                    f"Found cached transcript for video {video_id} ({len(transcript)} chars, no segments)"
+                )
+            return (transcript, segments)
+
+        return (None, None)
 
     def create_scene(
         self,
@@ -249,6 +306,9 @@ class Database:
         embedding_summary: Optional[list[float]] = None,
         embedding_version: Optional[str] = None,
         multi_embedding_metadata: Optional[dict] = None,
+        # CLIP visual embedding fields
+        embedding_visual_clip: Optional[list[float]] = None,
+        visual_clip_metadata: Optional[dict] = None,
     ) -> UUID:
         """Create a video scene record.
 
@@ -318,6 +378,12 @@ class Database:
             data["embedding_version"] = embedding_version
         if multi_embedding_metadata is not None:
             data["embedding_metadata"] = multi_embedding_metadata  # Override with multi-metadata
+
+        # Add CLIP visual embedding fields if present
+        if embedding_visual_clip is not None:
+            data["embedding_visual_clip"] = to_pgvector(embedding_visual_clip)
+        if visual_clip_metadata is not None:
+            data["visual_clip_metadata"] = visual_clip_metadata
 
         response = self.client.table("video_scenes").insert(data).execute()
         scene_id = UUID(response.data[0]["id"])

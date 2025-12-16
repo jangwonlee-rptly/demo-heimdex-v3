@@ -18,7 +18,7 @@ WORKDIR /app
 # Copy dependency files
 COPY services/worker/pyproject.toml ./
 
-# Install dependencies only (not the package itself)
+# Install dependencies including dev dependencies (pytest)
 RUN uv pip install --system \
     dramatiq[redis]>=1.15.0 \
     redis>=5.0.0 \
@@ -33,19 +33,24 @@ RUN uv pip install --system \
     pydantic-settings>=2.1.0 \
     opensearch-py>=2.4.0 \
     torch>=2.0.0 \
-    open-clip-torch>=2.20.0
+    open-clip-torch>=2.20.0 \
+    pytest>=7.4.0 \
+    pytest-asyncio>=0.21.0
 
-# Copy shared libraries (required for Dramatiq actors)
+# Copy shared libraries
 COPY libs/ ./libs/
 
 # Copy application code
 COPY services/worker/src/ ./src/
 
-# Create temp directories
-RUN mkdir -p /tmp/heimdex /tmp/clip_cache
+# Copy tests
+COPY services/worker/tests/ ./tests/
 
-# Set Python path (includes both /app for src/ and libs/)
+# Create temp directory
+RUN mkdir -p /tmp/heimdex
+
+# Set Python path
 ENV PYTHONPATH=/app
 
-# Run Dramatiq worker
-CMD ["dramatiq", "src.tasks", "-p", "1", "-t", "1"]
+# Run pytest
+CMD ["pytest", "-v"]

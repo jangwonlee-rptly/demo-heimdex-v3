@@ -36,6 +36,7 @@ class VideoProcessor:
         total_scenes: int,
         video_duration_s: float,
         video_filename: Optional[str] = None,
+        transcript_segments: Optional[list] = None,
     ) -> tuple[bool, str, int]:
         """
         Process a single scene (used for parallel execution).
@@ -51,6 +52,7 @@ class VideoProcessor:
             total_scenes: Total number of scenes (for logging)
             video_duration_s: Video duration in seconds
             video_filename: Optional video filename for metadata inclusion
+            transcript_segments: Optional list of Whisper segments with timestamps
 
         Returns:
             tuple[bool, str, int]: Tuple of (success, scene_id or error_message, scene_index)
@@ -71,6 +73,7 @@ class VideoProcessor:
                     language=language,
                     video_duration_s=video_duration_s,
                     video_filename=video_filename,
+                    transcript_segments=transcript_segments,
                 )
 
             # Save to database (outside semaphore to reduce lock time)
@@ -100,6 +103,9 @@ class VideoProcessor:
                 embedding_summary=sidecar.embedding_summary,
                 embedding_version=sidecar.embedding_version,
                 multi_embedding_metadata=sidecar.multi_embedding_metadata.to_dict() if sidecar.multi_embedding_metadata else None,
+                # CLIP visual embedding fields
+                embedding_visual_clip=sidecar.embedding_visual_clip,
+                visual_clip_metadata=sidecar.visual_clip_metadata,
             )
 
             logger.info(f"Scene {scene.index} saved with id={scene_id}")
@@ -252,13 +258,23 @@ class VideoProcessor:
 
             # Step 5: Extract audio and transcribe (with caching for idempotency)
             logger.info("Checking for cached transcript")
-            full_transcript = db.get_cached_transcript(video_id)
+            full_transcript, transcript_segments = db.get_cached_transcript(video_id)
 
             if full_transcript:
-                logger.info(f"Using cached transcript ({len(full_transcript)} characters)")
+                if transcript_segments:
+                    logger.info(
+                        f"Using cached transcript ({len(full_transcript)} characters, "
+                        f"{len(transcript_segments)} segments)"
+                    )
+                else:
+                    logger.info(
+                        f"Using cached transcript ({len(full_transcript)} characters, "
+                        "no segments - will use fallback extraction)"
+                    )
             else:
                 logger.info("No cached transcript found, checking for audio stream")
                 full_transcript = ""
+                transcript_segments = None
 
                 if ffmpeg.has_audio_stream(video_path):
                     logger.info("Extracting and transcribing audio (this may take a while...)")
@@ -274,19 +290,22 @@ class VideoProcessor:
 
                     if transcription_result.has_speech:
                         full_transcript = transcription_result.text
+                        transcript_segments = transcription_result.segments
                         logger.info(
-                            f"Transcription accepted: {len(full_transcript)} characters"
+                            f"Transcription accepted: {len(full_transcript)} characters, "
+                            f"{len(transcript_segments) if transcript_segments else 0} segments"
                         )
                     else:
                         full_transcript = ""
+                        transcript_segments = None
                         logger.info(
                             f"Video {video_id}: no meaningful speech detected "
                             f"(reason={transcription_result.reason}), skipping transcript"
                         )
 
-                    # Save transcript as checkpoint for future retries
-                    # (empty string if no speech detected)
-                    db.save_transcript(video_id, full_transcript)
+                    # Save transcript and segments as checkpoint for future retries
+                    # (empty string/None if no speech detected)
+                    db.save_transcript(video_id, full_transcript, transcript_segments)
                 else:
                     logger.warning("No audio stream found, skipping transcription")
 
@@ -328,6 +347,7 @@ class VideoProcessor:
                             len(scenes),
                             metadata.duration_s,
                             filename,
+                            transcript_segments,
                         ): scene
                         for scene in scenes_to_process
                     }

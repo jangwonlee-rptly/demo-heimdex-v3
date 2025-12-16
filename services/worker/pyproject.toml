@@ -16,6 +16,9 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "opensearch-py>=2.4.0",
+    # CLIP visual embeddings (CPU-friendly)
+    "torch>=2.0.0",
+    "open-clip-torch>=2.20.0",
 ]
 
 [build-system]
