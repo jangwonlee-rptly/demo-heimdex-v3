@@ -97,6 +97,7 @@ class Video:
         video_created_at: Optional[datetime] = None,
         thumbnail_url: Optional[str] = None,
         full_transcript: Optional[str] = None,
+        transcript_segments: Optional[list] = None,
         video_summary: Optional[str] = None,
         has_rich_semantics: Optional[bool] = None,
         transcript_language: Optional[str] = None,
@@ -126,6 +127,7 @@ class Video:
             video_created_at: Creation timestamp from video metadata (optional).
             thumbnail_url: URL to the video thumbnail (optional).
             full_transcript: Full transcript of the video (optional).
+            transcript_segments: Whisper segments with timestamps (optional).
             video_summary: AI-generated video summary (v2, optional).
             has_rich_semantics: Flag indicating rich semantics processing (v2, optional).
             transcript_language: ISO-639-1 language code for forced transcription (optional).
@@ -151,6 +153,7 @@ class Video:
         self.video_created_at = video_created_at
         self.thumbnail_url = thumbnail_url
         self.full_transcript = full_transcript
+        self.transcript_segments = transcript_segments
         self.video_summary = video_summary
         self.has_rich_semantics = has_rich_semantics
         self.transcript_language = transcript_language
