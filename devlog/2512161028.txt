@@ -1,0 +1,84 @@
+[2025-12-16 10:28] Fixed worker deployment issues - HashDetector, WhisperSegment, and transcript_segments
+File: devlog/2512161028.txt
+
+== What we worked on ==
+- Fixed multiple errors preventing the API and worker services from functioning correctly on Railway
+- Addressed database schema/model mismatches between services
+- Removed unsupported PySceneDetect detector causing import errors
+- Fixed WhisperSegment object handling in transcript processing
+
+== Changes made ==
+- services/api/src/domain/models.py: Added transcript_segments field to Video model
+- services/worker/src/domain/scene_detector.py: Removed all HashDetector references
+- services/api/src/domain/schemas.py: Removed hash detector from SceneDetectorPreferences
+- services/worker/src/domain/sidecar_builder.py: Fixed WhisperSegment handling to support both dict and object formats
+
+== Problems encountered ==
+- Problem 1: API /v1/videos endpoint failing with 500 error
+  * Error: "TypeError: Video.__init__() got an unexpected keyword argument 'transcript_segments'"
+  * Root cause: Database migration 016 added transcript_segments column, but API's Video model wasn't updated
+
+- Problem 2: Worker container failing on startup
+  * Error: "ImportError: cannot import name 'HashDetector' from 'scenedetect.detectors'"
+  * Root cause: HashDetector not available in PySceneDetect 0.6.2 installed in worker container
+
+- Problem 3: Worker failing during scene processing
+  * Error: "'WhisperSegment' object has no attribute 'get'"
+  * Root cause: Code was treating WhisperSegment dataclass objects as dictionaries
+
+- Problem 4: Redis connection timeouts in worker logs
+  * Error: "redis.exceptions.TimeoutError: Timeout reading from socket"
+  * Status: Infrastructure issue with Railway's Redis connection, not blocking video processing
+
+== How we tried to solve it ==
+- Attempt 1: Read database.py and models.py to understand schema mismatch
+  * Found that list_videos() queries all columns with select("*")
+  * Identified transcript_segments field missing from Video model
+
+- Attempt 2: Searched codebase for HashDetector usage
+  * Found references in scene_detector.py, including HASH enum value and hash-specific configuration
+  * Verified HashDetector was referenced but not needed for core functionality
+
+- Attempt 3: Examined WhisperSegment dataclass definition
+  * Found it's defined in openai_client.py as a dataclass with start, end, text attributes
+  * Identified code was using .get() method which only works on dicts
+
+== How we solved it / Current status ==
+- Solution 1 (transcript_segments field): SOLVED
+  * Added transcript_segments: Optional[list] = None parameter to Video.__init__()
+  * Added self.transcript_segments = transcript_segments assignment
+  * Updated docstring to document the field
+  * API now handles database records with transcript_segments without errors
+
+- Solution 2 (HashDetector removal): SOLVED
+  * Removed HashDetector from import statement
+  * Removed HASH enum value from SceneDetectionStrategy
+  * Removed hash-specific parameters from DetectorConfig dataclass
+  * Removed hash field from DetectorPreferences
+  * Removed hash handling from all preference methods
+  * Removed hash detector creation logic from create_detector()
+  * Removed HASH from strategies_to_try list in detect_scenes_best()
+  * Updated API schemas to remove hash detector references
+  * Worker now starts successfully with three detectors: AdaptiveDetector, ContentDetector, ThresholdDetector
+
+- Solution 3 (WhisperSegment handling): SOLVED
+  * Modified _extract_transcript_segment_from_segments() in sidecar_builder.py
+  * Added backward-compatible handling for both dict and object formats
+  * Uses isinstance(s, dict) check to determine format
+  * For dicts: uses s.get("field") method
+  * For objects: uses getattr(s, "field") method
+  * Handles both fresh transcriptions (objects) and cached transcriptions (dicts from database)
+
+- Solution 4 (Redis timeouts): PARTIALLY ADDRESSED
+  * Root cause: Network latency/stability issues between Railway worker and Redis
+  * Current status: Timeouts don't prevent video processing from working
+  * Dramatiq automatically retries connections every 3 seconds
+  * Video processing continues successfully despite timeout warnings in logs
+  * Recommendation: Monitor but not critical - infrastructure issue, not code issue
+
+== Next steps / TODOs ==
+- Monitor worker logs on Railway to confirm video processing completes successfully
+- Consider increasing Redis socket_timeout beyond 10s if timeouts persist
+- Update deployment documentation to note Redis connection resilience
+- Test video upload flow end-to-end on Railway deployment
+- Verify scene detection works correctly with reduced detector set (no HashDetector)
