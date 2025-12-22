@@ -1,0 +1,15 @@
+# RunPod CLIP Worker Dependencies
+
+# RunPod SDK
+runpod==1.6.2
+
+# CLIP and ML dependencies
+open-clip-torch==2.24.0
+torch==2.1.2
+torchvision==0.16.2
+
+# Image processing
+pillow==10.2.0
+
+# HTTP client for image downloads
+requests==2.31.0

@@ -1,0 +1,12 @@
+{
+  "input": {
+    "image_url": "https://example.com/test-image.jpg",
+    "request_id": "test-request-123",
+    "normalize": true,
+    "model": "ViT-B-32",
+    "auth": {
+      "ts": 1730000000,
+      "sig": "example_signature_here"
+    }
+  }
+}

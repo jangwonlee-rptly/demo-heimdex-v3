@@ -125,6 +125,18 @@ class Settings(BaseSettings):
     clip_cpu_threads: Optional[int] = None  # Optional: limit torch CPU threads to prevent thrashing
     clip_debug_log: bool = False  # Enable verbose logging for CLIP embeddings
 
+    # CLIP inference backend configuration (RunPod vs local)
+    clip_inference_backend: str = "runpod"  # Backend: "runpod" (GPU serverless), "local" (CPU in-process), "off" (disabled)
+    clip_model_version: str = "openai-vit-b-32-v1"  # Model version identifier for idempotency/cache tracking
+
+    # RunPod serverless configuration (for clip_inference_backend="runpod")
+    runpod_api_key: str = ""  # RunPod API key (required for RunPod backend)
+    runpod_clip_endpoint_id: str = ""  # RunPod CLIP endpoint ID (required for RunPod backend)
+    runpod_timeout_s: float = 60.0  # RunPod request timeout in seconds (includes cold start)
+
+    # HMAC security for RunPod endpoint
+    embedding_hmac_secret: str = ""  # Shared secret for HMAC authentication (required for RunPod backend)
+
 
 # Global settings instance
 settings = Settings()

@@ -103,6 +103,45 @@ class SupabaseStorage:
             # Return a fallback URL pattern (Supabase standard format)
             return f"{self.client.storage_url}/object/public/{self.bucket_name}/{storage_path}"
 
+    def create_signed_url(
+        self,
+        storage_path: str,
+        expires_in: int = 300,  # 5 minutes default
+    ) -> str:
+        """
+        Create a signed (temporary) URL for a file in storage.
+
+        Args:
+            storage_path: Path to the file in storage
+            expires_in: URL expiration time in seconds (default: 300 = 5 minutes)
+
+        Returns:
+            str: Signed URL that expires after the specified time
+
+        Raises:
+            Exception: If signed URL creation fails
+        """
+        try:
+            logger.debug(f"Creating signed URL for {storage_path} (expires in {expires_in}s)")
+            result = self.client.storage.from_(self.bucket_name).create_signed_url(
+                storage_path,
+                expires_in,
+            )
+            # Supabase returns a dict with 'signedURL' key
+            if isinstance(result, dict) and "signedURL" in result:
+                signed_url = result["signedURL"]
+            elif isinstance(result, dict) and "signedUrl" in result:
+                signed_url = result["signedUrl"]
+            else:
+                # Fallback: result might be the URL directly
+                signed_url = str(result)
+
+            logger.debug(f"Signed URL created: {signed_url[:80]}...")
+            return signed_url
+        except Exception as e:
+            logger.error(f"Failed to create signed URL for {storage_path}: {e}")
+            raise
+
 
 # Global storage instance
 storage = SupabaseStorage()

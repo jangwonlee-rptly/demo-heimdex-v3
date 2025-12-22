@@ -1,0 +1,35 @@
+[2025-12-22 01:09] Next.js Security Vulnerability Upgrade
+File: devlog/2512220109.txt
+
+== What we worked on ==
+- Emergency security upgrade of Next.js to address HIGH severity CVEs detected by Railway deployment system.
+- Railway blocked deployment due to vulnerabilities in next@14.2.0.
+
+== Changes made ==
+- services/frontend/package.json: Upgraded next from ^14.2.0 to ^14.2.35 (line 13).
+- services/frontend/package-lock.json: Updated automatically by npm to reflect new Next.js version and dependencies.
+
+== Problems encountered ==
+- Railway deployment failure with security vulnerability detection:
+  - Package: next@14.2.0
+  - Severity: HIGH
+  - CVE-2025-55184: https://github.com/vercel/next.js/security/advisories/GHSA-mwv6-3258-q52c
+  - CVE-2025-67779: https://github.com/vercel/next.js/security/advisories/GHSA-5j59-xgg2-r9c4
+  - Railway required upgrade to next@^14.2.35 minimum.
+
+== How we tried to solve it ==
+- Located the frontend package.json at services/frontend/package.json.
+- Ran npm install next@^14.2.35 in the services/frontend directory.
+
+== How we solved it / Current status ==
+- Successfully upgraded Next.js from 14.2.0 to 14.2.35.
+- npm audit shows 0 vulnerabilities after upgrade.
+- Package installation completed without errors (3 packages changed, 120 total packages audited).
+- Both CVE-2025-55184 and CVE-2025-67779 are now resolved.
+- Changes are ready to commit and deploy to Railway.
+
+== Next steps / TODOs ==
+- Commit the package.json and package-lock.json changes.
+- Push to repository to trigger Railway redeployment.
+- Verify Railway deployment succeeds without security errors.
+- Monitor the deployed application to ensure no breaking changes from the Next.js upgrade.

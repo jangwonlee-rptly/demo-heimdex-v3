@@ -27,6 +27,7 @@ from .scene_detector import Scene
 from .frame_quality import frame_quality_checker
 from ..adapters.openai_client import openai_client
 from ..adapters.clip_embedder import ClipEmbedder
+from ..adapters import clip_inference
 from ..adapters.ffmpeg import ffmpeg
 from ..adapters.supabase import storage
 from ..config import settings
@@ -771,31 +772,50 @@ class SidecarBuilder:
                     # Generate CLIP visual embedding from best frame (if enabled)
                     if settings.clip_enabled and best_frame_path:
                         logger.info(
-                            f"Scene {scene.index}: Generating CLIP embedding from best frame"
+                            f"Scene {scene.index}: Generating CLIP embedding from best frame "
+                            f"(backend={settings.clip_inference_backend})"
                         )
                         try:
-                            clip_embedder = ClipEmbedder()
-                            best_frame_quality = {
-                                "quality_score": ranked_frames[0][1],
-                            }
-                            embedding_visual_clip, clip_metadata_obj = clip_embedder.create_visual_embedding(
-                                image_path=Path(best_frame_path),
-                                quality_info=best_frame_quality,
-                                timeout_s=settings.clip_timeout_s,
-                            )
-                            if clip_metadata_obj:
-                                visual_clip_metadata = clip_metadata_obj.to_dict()
+                            # Route to appropriate backend
+                            if settings.clip_inference_backend == "runpod":
+                                # RunPod GPU backend: upload thumbnail first, then call endpoint
+                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_runpod(
+                                    best_frame_path=best_frame_path,
+                                    thumbnail_storage_path=thumbnail_storage_path,
+                                    scene_index=scene.index,
+                                    frame_quality_score=ranked_frames[0][1],
+                                )
+                            elif settings.clip_inference_backend == "local":
+                                # Local CPU backend: existing ClipEmbedder
+                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_local(
+                                    best_frame_path=best_frame_path,
+                                    scene_index=scene.index,
+                                    frame_quality_score=ranked_frames[0][1],
+                                )
+                            elif settings.clip_inference_backend == "off":
+                                logger.info(f"Scene {scene.index}: CLIP inference disabled (backend=off)")
+                                embedding_visual_clip = None
+                                visual_clip_metadata = None
+                            else:
+                                logger.warning(
+                                    f"Scene {scene.index}: Unknown CLIP backend '{settings.clip_inference_backend}', "
+                                    f"falling back to local"
+                                )
+                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_local(
+                                    best_frame_path=best_frame_path,
+                                    scene_index=scene.index,
+                                    frame_quality_score=ranked_frames[0][1],
+                                )
 
                             if embedding_visual_clip:
                                 logger.info(
                                     f"Scene {scene.index}: CLIP embedding created "
                                     f"(dim={len(embedding_visual_clip)}, "
-                                    f"time={visual_clip_metadata.get('inference_time_ms', 0):.1f}ms)"
+                                    f"time={visual_clip_metadata.get('inference_time_ms', 0) if visual_clip_metadata else 'N/A'}ms)"
                                 )
-                            else:
-                                error = visual_clip_metadata.get("error") if visual_clip_metadata else "unknown"
+                            elif visual_clip_metadata and visual_clip_metadata.get("error"):
                                 logger.warning(
-                                    f"Scene {scene.index}: CLIP embedding failed: {error}"
+                                    f"Scene {scene.index}: CLIP embedding failed: {visual_clip_metadata['error']}"
                                 )
                         except Exception as e:
                             logger.error(
@@ -803,6 +823,10 @@ class SidecarBuilder:
                                 exc_info=True
                             )
                             # Continue processing - CLIP failure should not break pipeline
+                            visual_clip_metadata = {
+                                "error": str(e),
+                                "backend": settings.clip_inference_backend,
+                            }
 
                     visual_result = None
                     for attempt in range(max_attempts):
@@ -1353,6 +1377,164 @@ class SidecarBuilder:
             combined = combined[:max_length] + "..."
 
         return combined
+
+    @staticmethod
+    def _generate_clip_embedding_runpod(
+        best_frame_path: str,
+        thumbnail_storage_path: str,
+        scene_index: int,
+        frame_quality_score: float,
+    ) -> tuple[Optional[list[float]], Optional[dict]]:
+        """
+        Generate CLIP embedding using RunPod GPU backend.
+
+        Args:
+            best_frame_path: Local path to the best quality frame
+            thumbnail_storage_path: Storage path where thumbnail will be uploaded
+            scene_index: Scene index for logging
+            frame_quality_score: Quality score of the frame
+
+        Returns:
+            Tuple of (embedding_list, metadata_dict)
+        """
+        import time
+        from ..adapters import clip_inference
+
+        start_time = time.time()
+
+        try:
+            # Step 1: Upload thumbnail to storage (if not already uploaded)
+            logger.debug(f"Scene {scene_index}: Uploading thumbnail to {thumbnail_storage_path}")
+            public_url = storage.upload_file(
+                Path(best_frame_path),
+                thumbnail_storage_path,
+                content_type="image/jpeg",
+            )
+
+            # Step 2: Generate signed URL for RunPod (short-lived, more secure than public URL)
+            logger.debug(f"Scene {scene_index}: Creating signed URL for RunPod access")
+            signed_url = storage.create_signed_url(
+                thumbnail_storage_path,
+                expires_in=300,  # 5 minutes - enough for RunPod to download
+            )
+
+            # Step 3: Call RunPod CLIP endpoint
+            request_id = f"scene-{scene_index}"
+            logger.debug(f"Scene {scene_index}: Calling RunPod CLIP endpoint")
+
+            result = clip_inference.embed_image_url(
+                image_url=signed_url,
+                request_id=request_id,
+            )
+
+            # Step 4: Extract embedding and metadata
+            embedding = result.get("embedding")
+            if not embedding:
+                error_msg = "No embedding in RunPod response"
+                logger.error(f"Scene {scene_index}: {error_msg}")
+                return None, {"error": error_msg, "backend": "runpod"}
+
+            # Build metadata
+            total_time_ms = (time.time() - start_time) * 1000
+            runpod_timings = result.get("timings", {})
+
+            metadata = {
+                "model_name": result.get("model", "ViT-B-32"),
+                "pretrained": result.get("pretrained", "openai"),
+                "embed_dim": result.get("dim", len(embedding)),
+                "normalized": result.get("normalized", True),
+                "device": "gpu",  # RunPod uses GPU
+                "backend": "runpod",
+                "frame_path": best_frame_path,
+                "frame_quality": {"quality_score": frame_quality_score},
+                "inference_time_ms": runpod_timings.get("inference_ms", 0),
+                "download_time_ms": runpod_timings.get("download_ms", 0),
+                "total_time_ms": round(total_time_ms, 2),
+                "created_at": result.get("created_at", ""),
+                "error": None,
+            }
+
+            logger.info(
+                f"Scene {scene_index}: RunPod CLIP embedding generated "
+                f"(dim={len(embedding)}, inference={metadata['inference_time_ms']:.1f}ms, "
+                f"total={metadata['total_time_ms']:.1f}ms)"
+            )
+
+            return embedding, metadata
+
+        except clip_inference.ClipInferenceAuthError as e:
+            logger.error(f"Scene {scene_index}: RunPod authentication error: {e}")
+            return None, {
+                "error": f"Authentication error: {e}",
+                "backend": "runpod",
+                "inference_time_ms": 0,
+            }
+        except clip_inference.ClipInferenceTimeoutError as e:
+            logger.error(f"Scene {scene_index}: RunPod timeout: {e}")
+            return None, {
+                "error": f"Timeout: {e}",
+                "backend": "runpod",
+                "inference_time_ms": 0,
+            }
+        except clip_inference.ClipInferenceError as e:
+            logger.error(f"Scene {scene_index}: RunPod inference error: {e}")
+            return None, {
+                "error": f"Inference error: {e}",
+                "backend": "runpod",
+                "inference_time_ms": 0,
+            }
+        except Exception as e:
+            logger.error(f"Scene {scene_index}: Unexpected RunPod error: {e}", exc_info=True)
+            return None, {
+                "error": f"Unexpected error: {e}",
+                "backend": "runpod",
+                "inference_time_ms": 0,
+            }
+
+    @staticmethod
+    def _generate_clip_embedding_local(
+        best_frame_path: str,
+        scene_index: int,
+        frame_quality_score: float,
+    ) -> tuple[Optional[list[float]], Optional[dict]]:
+        """
+        Generate CLIP embedding using local CPU backend (existing ClipEmbedder).
+
+        Args:
+            best_frame_path: Local path to the best quality frame
+            scene_index: Scene index for logging
+            frame_quality_score: Quality score of the frame
+
+        Returns:
+            Tuple of (embedding_list, metadata_dict)
+        """
+        try:
+            clip_embedder = ClipEmbedder()
+            best_frame_quality = {
+                "quality_score": frame_quality_score,
+            }
+            embedding_visual_clip, clip_metadata_obj = clip_embedder.create_visual_embedding(
+                image_path=Path(best_frame_path),
+                quality_info=best_frame_quality,
+                timeout_s=settings.clip_timeout_s,
+            )
+
+            if clip_metadata_obj:
+                visual_clip_metadata = clip_metadata_obj.to_dict()
+                # Add backend info
+                visual_clip_metadata["backend"] = "local"
+            else:
+                visual_clip_metadata = None
+
+            return embedding_visual_clip, visual_clip_metadata
+
+        except Exception as e:
+            logger.error(f"Scene {scene_index}: Local CLIP error: {e}", exc_info=True)
+            return None, {
+                "error": str(e),
+                "backend": "local",
+                "inference_time_ms": 0,
+            }
 
 
 # Global sidecar builder instance
