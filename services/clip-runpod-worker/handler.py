@@ -47,6 +47,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Log startup diagnostics
+logger.info("=" * 60)
+logger.info("RunPod CLIP Worker - Startup Diagnostics")
+logger.info("=" * 60)
+logger.info(f"torch version: {torch.__version__}")
+logger.info(f"torch.version.cuda: {torch.version.cuda}")
+logger.info(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+    logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+logger.info("=" * 60)
+
 # Configuration from environment variables
 EMBEDDING_HMAC_SECRET = os.environ.get("EMBEDDING_HMAC_SECRET", "")
 MAX_IMAGE_SIZE_BYTES = int(os.environ.get("MAX_IMAGE_SIZE_BYTES", 10 * 1024 * 1024))  # 10MB
@@ -103,7 +115,7 @@ def load_model_global() -> None:
         )
 
     except Exception as e:
-        logger.error(f"Failed to load CLIP model: {e}")
+        logger.exception(f"Failed to load CLIP model: {e}")
         raise
 
 
@@ -349,10 +361,95 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-# Initialize model at startup
-load_model_global()
+def run_local_smoke_test() -> int:
+    """
+    Run a local smoke test to verify the CLIP worker is functional.
+    This allows testing the Docker image locally without RunPod infrastructure.
 
-# Start RunPod serverless worker
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    logger.info("=" * 60)
+    logger.info("LOCAL SMOKE TEST MODE")
+    logger.info("=" * 60)
+
+    # Check if model loaded
+    if _model is None:
+        logger.error("✗ Model failed to load during startup")
+        return 1
+
+    logger.info(f"✓ Model loaded: {_model_name} ({_pretrained}) on {_device}")
+
+    # Try to get test image URL from environment, or use a public default
+    test_image_url = os.environ.get(
+        "SMOKE_TEST_IMAGE_URL",
+        "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=512"
+    )
+
+    logger.info(f"Test image URL: {test_image_url[:80]}...")
+
+    try:
+        # Download test image
+        logger.info("Downloading test image...")
+        start = time.time()
+        image = download_image(test_image_url)
+        download_time = time.time() - start
+        logger.info(f"✓ Image downloaded in {download_time:.3f}s: {image.size}")
+
+        # Generate embedding
+        logger.info("Generating embedding...")
+        start = time.time()
+        embedding = generate_embedding(image, normalize=True)
+        inference_time = time.time() - start
+
+        # Validate result
+        logger.info(f"✓ Embedding generated in {inference_time:.3f}s")
+        logger.info(f"  Dimension: {len(embedding)}")
+        logger.info(f"  First 5 values: {embedding[:5]}")
+
+        # Check L2 norm (should be ~1.0 if normalized)
+        import math
+        norm = math.sqrt(sum(x * x for x in embedding))
+        logger.info(f"  L2 norm: {norm:.4f}")
+
+        if len(embedding) != 512:
+            logger.error(f"✗ Expected 512 dimensions, got {len(embedding)}")
+            return 1
+
+        if not (0.99 <= norm <= 1.01):
+            logger.warning(f"⚠ L2 norm {norm:.4f} not close to 1.0 (expected for normalized)")
+
+        logger.info("=" * 60)
+        logger.info("✅ SMOKE TEST PASSED")
+        logger.info("=" * 60)
+        return 0
+
+    except Exception as e:
+        logger.exception(f"✗ Smoke test failed: {e}")
+        logger.info("=" * 60)
+        logger.error("❌ SMOKE TEST FAILED")
+        logger.info("=" * 60)
+        return 1
+
+
+# Initialize model at startup
+try:
+    load_model_global()
+except Exception as e:
+    logger.exception(f"FATAL: Model loading failed at startup: {e}")
+    import sys
+    sys.exit(1)
+
+# Start RunPod serverless worker OR run local smoke test
 if __name__ == "__main__":
-    logger.info("Starting RunPod CLIP worker...")
-    runpod.serverless.start({"handler": handler})
+    # Check if we're running in RunPod serverless environment
+    is_runpod_serverless = os.environ.get("RUNPOD_SERVERLESS", "0") == "1"
+
+    if is_runpod_serverless:
+        logger.info("Starting RunPod serverless worker...")
+        runpod.serverless.start({"handler": handler})
+    else:
+        logger.info("RUNPOD_SERVERLESS not set - running local smoke test instead")
+        import sys
+        exit_code = run_local_smoke_test()
+        sys.exit(exit_code)

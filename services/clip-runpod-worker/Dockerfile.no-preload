@@ -32,19 +32,8 @@ RUN python3.10 -m pip install -r /app/requirements.txt
 
 COPY handler.py /app/handler.py
 
-# Pre-download CLIP model (optional - improves cold start time)
-# If this fails, model will be downloaded on first run (adds ~10s to first request)
-RUN python3.10 - <<'PY' || echo "⚠ Model pre-download skipped (will download at runtime)"
-import open_clip
-print("Pre-downloading CLIP model (ViT-B-32/openai)...")
-try:
-    open_clip.create_model_and_transforms("ViT-B-32", pretrained="openai", device="cpu")
-    print("✓ Model cached successfully")
-except Exception as e:
-    print(f"✗ Pre-download failed: {e}")
-    print("Model will be downloaded at runtime instead")
-    raise
-PY
+# Model will be downloaded on first run (~10 seconds added to cold start)
+RUN echo "Model pre-download skipped - will download at runtime"
 
 ENV RUNPOD_SERVERLESS=1
 

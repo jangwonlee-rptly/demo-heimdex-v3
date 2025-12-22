@@ -1,15 +1,15 @@
 # RunPod CLIP Worker Dependencies
+# Note: torch and torchvision are installed separately in Dockerfile with CUDA 11.8 wheels
 
 # RunPod SDK
 runpod==1.6.2
 
-# CLIP and ML dependencies
+# CLIP
 open-clip-torch==2.24.0
-torch==2.1.2
-torchvision==0.16.2
 
-# Image processing
+# NumPy (torch 2.1.x friendly)
+numpy<2.0.0
+
+# Image + HTTP
 pillow==10.2.0
-
-# HTTP client for image downloads
 requests==2.31.0
