@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     opensearch_index_scenes: str = "scene_docs"
     opensearch_timeout_s: float = 1.0
 
+    # Admin configuration
+    admin_user_ids: str = ""  # Comma-separated UUIDs of admin users
+
     # Hybrid search configuration
     hybrid_search_enabled: bool = True
     search_debug: bool = False
@@ -148,6 +151,17 @@ class Settings(BaseSettings):
             list[str]: A list of allowed origin URLs for CORS configuration.
         """
         return [origin.strip() for origin in self.api_cors_origins.split(",")]
+
+    @property
+    def admin_user_ids_list(self) -> list[str]:
+        """Parse admin user IDs into a list.
+
+        Returns:
+            list[str]: A list of admin user UUIDs.
+        """
+        if not self.admin_user_ids:
+            return []
+        return [uid.strip() for uid in self.admin_user_ids.split(",") if uid.strip()]
 
 
 # Global settings instance

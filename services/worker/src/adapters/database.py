@@ -632,6 +632,107 @@ class Database:
         )
         return response.data[0]
 
+    # Phase 2: Video Processing Timing Methods
+    # These methods track the lifecycle of video processing jobs for performance metrics
+
+    def update_video_queued_at(self, video_id: UUID, queued_at: datetime) -> None:
+        """Set the queued timestamp when job is enqueued.
+
+        Args:
+            video_id: The UUID of the video.
+            queued_at: Timestamp when job was enqueued.
+
+        Returns:
+            None: This function does not return a value.
+        """
+        update_data = {
+            "queued_at": queued_at.isoformat(),
+            "processing_stage": "queued",
+        }
+        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+        logger.debug(f"Video {video_id} queued at {queued_at}")
+
+    def update_video_processing_start(
+        self, video_id: UUID, processing_started_at: datetime
+    ) -> None:
+        """Set the processing start timestamp when worker begins processing.
+
+        This should be called at the very beginning of process_video() before any work starts.
+
+        Args:
+            video_id: The UUID of the video.
+            processing_started_at: Timestamp when processing began.
+
+        Returns:
+            None: This function does not return a value.
+        """
+        update_data = {
+            "processing_started_at": processing_started_at.isoformat(),
+            "processing_stage": "processing",
+        }
+        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+        logger.debug(f"Video {video_id} processing started at {processing_started_at}")
+
+    def update_video_processing_finish(
+        self,
+        video_id: UUID,
+        processing_finished_at: datetime,
+        processing_duration_ms: int,
+        stage: str,
+    ) -> None:
+        """Set processing completion timestamp and duration.
+
+        This should be called at the end of process_video() whether success or failure.
+
+        Args:
+            video_id: The UUID of the video.
+            processing_finished_at: Timestamp when processing finished.
+            processing_duration_ms: Total processing time in milliseconds.
+            stage: Final processing stage ('completed' or 'failed').
+
+        Returns:
+            None: This function does not return a value.
+        """
+        update_data = {
+            "processing_finished_at": processing_finished_at.isoformat(),
+            "processing_duration_ms": processing_duration_ms,
+            "processing_stage": stage,
+        }
+        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+        logger.debug(
+            f"Video {video_id} finished at {processing_finished_at}, "
+            f"duration={processing_duration_ms}ms, stage={stage}"
+        )
+
+    def update_video_processing_stage(self, video_id: UUID, stage: str) -> None:
+        """Update the current processing stage (coarse-grained).
+
+        This should be called at major pipeline boundaries to track progress
+        and enable failure attribution.
+
+        Valid stages:
+        - 'queued': Job enqueued
+        - 'downloading': Downloading video from storage
+        - 'metadata': Extracting video metadata
+        - 'scene_detection': Running scene detection
+        - 'transcription': Running Whisper transcription
+        - 'scene_processing': Processing scenes (vision + embeddings)
+        - 'indexing': Indexing to OpenSearch
+        - 'finalizing': Final cleanup and status update
+        - 'completed': Processing succeeded
+        - 'failed': Processing failed
+
+        Args:
+            video_id: The UUID of the video.
+            stage: The current processing stage.
+
+        Returns:
+            None: This function does not return a value.
+        """
+        update_data = {"processing_stage": stage}
+        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+        logger.debug(f"Video {video_id} stage: {stage}")
+
 
 # Global database instance
 db = Database(settings.supabase_url, settings.supabase_service_role_key)

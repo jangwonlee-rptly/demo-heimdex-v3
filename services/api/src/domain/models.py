@@ -109,6 +109,12 @@ class Video:
         location_name: Optional[str] = None,
         camera_make: Optional[str] = None,
         camera_model: Optional[str] = None,
+        # Processing timing fields (Phase 2)
+        queued_at: Optional[datetime] = None,
+        processing_started_at: Optional[datetime] = None,
+        processing_finished_at: Optional[datetime] = None,
+        processing_duration_ms: Optional[int] = None,
+        processing_stage: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
@@ -138,6 +144,11 @@ class Video:
             location_name: Reverse-geocoded location name.
             camera_make: Camera manufacturer.
             camera_model: Camera model.
+            queued_at: When job was enqueued (for queue time calculation, optional).
+            processing_started_at: When worker started processing (for duration calculation, optional).
+            processing_finished_at: When processing completed - more precise than updated_at (optional).
+            processing_duration_ms: Total processing time in milliseconds (optional).
+            processing_stage: Last active processing stage (optional).
             created_at: Timestamp when the video record was created.
             updated_at: Timestamp when the video record was last updated.
         """
@@ -164,6 +175,11 @@ class Video:
         self.location_name = location_name
         self.camera_make = camera_make
         self.camera_model = camera_model
+        self.queued_at = queued_at
+        self.processing_started_at = processing_started_at
+        self.processing_finished_at = processing_finished_at
+        self.processing_duration_ms = processing_duration_ms
+        self.processing_stage = processing_stage
         self.created_at = created_at
         self.updated_at = updated_at
 

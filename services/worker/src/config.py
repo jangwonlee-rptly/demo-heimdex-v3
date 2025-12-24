@@ -126,16 +126,20 @@ class Settings(BaseSettings):
     clip_debug_log: bool = False  # Enable verbose logging for CLIP embeddings
 
     # CLIP inference backend configuration (RunPod vs local)
-    clip_inference_backend: str = "runpod"  # Backend: "runpod" (GPU serverless), "local" (CPU in-process), "off" (disabled)
+    clip_inference_backend: str = "runpod_pod"  # Backend: "runpod_pod" (always-on HTTP), "runpod_serverless" (legacy), "local" (CPU in-process), "off" (disabled)
     clip_model_version: str = "openai-vit-b-32-v1"  # Model version identifier for idempotency/cache tracking
 
-    # RunPod serverless configuration (for clip_inference_backend="runpod")
-    runpod_api_key: str = ""  # RunPod API key (required for RunPod backend)
-    runpod_clip_endpoint_id: str = ""  # RunPod CLIP endpoint ID (required for RunPod backend)
+    # RunPod Pod configuration (for clip_inference_backend="runpod_pod")
+    clip_pod_base_url: str = ""  # RunPod Pod proxy URL (e.g., https://xxxx-8000.proxy.runpod.net)
+    clip_pod_timeout_s: float = 60.0  # HTTP request timeout for Pod
+
+    # RunPod serverless configuration (for clip_inference_backend="runpod_serverless", legacy)
+    runpod_api_key: str = ""  # RunPod API key (required for serverless backend)
+    runpod_clip_endpoint_id: str = ""  # RunPod CLIP endpoint ID (required for serverless backend)
     runpod_timeout_s: float = 60.0  # RunPod request timeout in seconds (includes cold start)
 
-    # HMAC security for RunPod endpoint
-    embedding_hmac_secret: str = ""  # Shared secret for HMAC authentication (required for RunPod backend)
+    # HMAC security for RunPod endpoints (both Pod and Serverless)
+    embedding_hmac_secret: str = ""  # Shared secret for HMAC authentication (required for RunPod backends)
 
 
 # Global settings instance

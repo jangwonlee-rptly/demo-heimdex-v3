@@ -166,6 +166,12 @@ class VideoResponse(BaseModel):
     location_name: Optional[str] = Field(None, description="Reverse-geocoded location name")
     camera_make: Optional[str] = Field(None, description="Camera manufacturer")
     camera_model: Optional[str] = Field(None, description="Camera model")
+    # Processing timing fields (Phase 2)
+    queued_at: Optional[datetime] = Field(None, description="When job was enqueued")
+    processing_started_at: Optional[datetime] = Field(None, description="When worker started processing")
+    processing_finished_at: Optional[datetime] = Field(None, description="When processing completed")
+    processing_duration_ms: Optional[int] = Field(None, description="Total processing time in milliseconds")
+    processing_stage: Optional[str] = Field(None, description="Last active processing stage")
     created_at: datetime
     updated_at: datetime
 

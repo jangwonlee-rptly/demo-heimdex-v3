@@ -4,6 +4,7 @@ This module initializes the Dramatiq broker and provides a clean interface
 for enqueueing video processing tasks using the shared actor definition.
 """
 import logging
+from datetime import datetime
 from uuid import UUID
 
 import dramatiq
@@ -32,13 +33,25 @@ class TaskQueue:
 
         Uses the shared process_video actor to send a job to the worker.
 
+        Phase 2: Sets queued_at timestamp for queue time tracking.
+
         Args:
             video_id: ID of the video to process
 
         Returns:
             None: This function does not return a value.
         """
+        from ..adapters.database import db
+
         logger.info(f"Enqueueing video processing task for video_id={video_id}")
+
+        # Phase 2: Set queued_at timestamp before enqueueing
+        queued_at = datetime.utcnow()
+        try:
+            db.update_video_queued_at(video_id, queued_at)
+        except Exception as e:
+            # Log but don't fail - timing is non-critical
+            logger.warning(f"Failed to set queued_at for video {video_id}: {e}")
 
         # Use the shared actor's .send() method to enqueue the job
         # The function body never executes in the API context - only in the worker

@@ -73,6 +73,9 @@ services:
       # OpenAI
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 
+      # Admin configuration
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS}
+
       # API config
       API_CORS_ORIGINS: http://localhost:3000,http://frontend:3000
 

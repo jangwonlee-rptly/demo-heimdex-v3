@@ -271,6 +271,22 @@ class Database:
         row["status"] = VideoStatus(row["status"])
         return Video(**row)
 
+    def update_video_queued_at(self, video_id: UUID, queued_at: datetime) -> None:
+        """Set the queued timestamp when job is enqueued (Phase 2).
+
+        Args:
+            video_id: The UUID of the video.
+            queued_at: Timestamp when job was enqueued.
+
+        Returns:
+            None: This function does not return a value.
+        """
+        update_data = {
+            "queued_at": queued_at.isoformat(),
+            "processing_stage": "queued",
+        }
+        self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
+
     def get_scene(self, scene_id: UUID) -> Optional[VideoScene]:
         """Get a single scene by ID.
 
@@ -873,6 +889,239 @@ class Database:
             completed_at=datetime.fromisoformat(row["completed_at"]) if row.get("completed_at") else None,
             expires_at=datetime.fromisoformat(row["expires_at"]) if row.get("expires_at") else None,
         )
+
+    # Admin Metrics operations
+    def get_admin_overview_metrics(self) -> dict:
+        """Get overview metrics for admin dashboard.
+
+        Returns:
+            dict: Overview metrics including video counts, hours, searches, latency.
+        """
+        # Use RPC function to compute metrics in single query
+        response = self.client.rpc("get_admin_overview_metrics").execute()
+
+        if not response.data or len(response.data) == 0:
+            # Return default metrics if no data
+            return {
+                "videos_ready_total": 0,
+                "videos_failed_total": 0,
+                "videos_total": 0,
+                "failure_rate_pct": 0.0,
+                "hours_ready_total": 0.0,
+                "searches_7d": 0,
+                "avg_search_latency_ms_7d": None,
+                "searches_30d": 0,
+                "avg_search_latency_ms_30d": None,
+            }
+
+        return response.data[0]
+
+    def get_throughput_timeseries(self, days: int = 30) -> list[dict]:
+        """Get daily throughput time series.
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            list[dict]: List of daily throughput data points.
+        """
+        response = self.client.rpc(
+            "get_throughput_timeseries",
+            {"days_back": days}
+        ).execute()
+
+        return response.data if response.data else []
+
+    def get_search_timeseries(self, days: int = 30) -> list[dict]:
+        """Get daily search time series.
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            list[dict]: List of daily search data points.
+        """
+        response = self.client.rpc(
+            "get_search_timeseries",
+            {"days_back": days}
+        ).execute()
+
+        return response.data if response.data else []
+
+    def get_admin_users_list(
+        self,
+        days: int = 7,
+        page: int = 1,
+        page_size: int = 50,
+        sort_by: str = "last_activity"
+    ) -> dict:
+        """Get paginated list of users with metrics.
+
+        Args:
+            days: Number of days for recent metrics.
+            page: Page number (1-indexed).
+            page_size: Items per page.
+            sort_by: Sort column (last_activity, hours_ready, videos_ready, searches_7d).
+
+        Returns:
+            dict: Paginated user list with items and metadata.
+        """
+        offset = (page - 1) * page_size
+
+        response = self.client.rpc(
+            "get_admin_users_list",
+            {
+                "days_back": days,
+                "limit_count": page_size,
+                "offset_count": offset,
+                "sort_column": sort_by
+            }
+        ).execute()
+
+        items = response.data if response.data else []
+
+        return {
+            "items": items,
+            "page": page,
+            "page_size": page_size,
+            "total_users": None  # Optional for Phase 1
+        }
+
+    def get_admin_user_detail(self, user_id: UUID, days: int = 7) -> Optional[dict]:
+        """Get detailed user information with recent videos and searches.
+
+        Args:
+            user_id: User UUID.
+            days: Number of days for recent metrics.
+
+        Returns:
+            Optional[dict]: User detail data or None if not found.
+        """
+        response = self.client.rpc(
+            "get_admin_user_detail",
+            {
+                "target_user_id": str(user_id),
+                "days_back": days
+            }
+        ).execute()
+
+        if not response.data or len(response.data) == 0:
+            return None
+
+        return response.data[0]
+
+    # Phase 2: Performance Metrics operations
+    def get_admin_processing_latency(self, days: int = 30) -> dict:
+        """Get processing latency percentiles and queue time (Phase 2).
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            dict: Latency metrics including p50/p95/p99 and queue time.
+        """
+        response = self.client.rpc(
+            "get_admin_processing_latency",
+            {"p_days_back": days}
+        ).execute()
+
+        if not response.data or len(response.data) == 0:
+            return {
+                "videos_measured": 0,
+                "avg_processing_ms": None,
+                "p50_processing_ms": None,
+                "p95_processing_ms": None,
+                "p99_processing_ms": None,
+                "avg_queue_ms": None,
+                "avg_total_ms": None,
+            }
+
+        return response.data[0]
+
+    def get_admin_rtf_distribution(self, days: int = 30) -> dict:
+        """Get RTF (Real-Time Factor) distribution (Phase 2).
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            dict: RTF distribution metrics.
+        """
+        response = self.client.rpc(
+            "get_admin_rtf_distribution",
+            {"p_days_back": days}
+        ).execute()
+
+        if not response.data or len(response.data) == 0:
+            return {
+                "videos_measured": 0,
+                "avg_rtf": None,
+                "p50_rtf": None,
+                "p95_rtf": None,
+                "p99_rtf": None,
+                "avg_video_duration_s": None,
+                "avg_processing_duration_s": None,
+            }
+
+        return response.data[0]
+
+    def get_admin_queue_analysis(self, days: int = 30) -> dict:
+        """Get queue vs processing time analysis (Phase 2).
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            dict: Queue analysis metrics.
+        """
+        response = self.client.rpc(
+            "get_admin_queue_analysis",
+            {"p_days_back": days}
+        ).execute()
+
+        if not response.data or len(response.data) == 0:
+            return {
+                "videos_measured": 0,
+                "avg_queue_time_s": None,
+                "avg_processing_time_s": None,
+                "avg_total_time_s": None,
+                "queue_time_pct": None,
+                "processing_time_pct": None,
+            }
+
+        return response.data[0]
+
+    def get_admin_failures_by_stage(self, days: int = 30) -> list[dict]:
+        """Get failures grouped by processing stage (Phase 2).
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            list[dict]: Failures by stage data.
+        """
+        response = self.client.rpc(
+            "get_admin_failures_by_stage",
+            {"p_days_back": days}
+        ).execute()
+
+        return response.data if response.data else []
+
+    def get_admin_throughput_timeseries_v2(self, days: int = 30) -> list[dict]:
+        """Get enhanced throughput time series with Phase 2 metrics.
+
+        Args:
+            days: Number of days to look back.
+
+        Returns:
+            list[dict]: Enhanced throughput data points.
+        """
+        response = self.client.rpc(
+            "get_admin_throughput_timeseries_v2",
+            {"p_days_back": days}
+        ).execute()
+
+        return response.data if response.data else []
 
 
 # Global database instance

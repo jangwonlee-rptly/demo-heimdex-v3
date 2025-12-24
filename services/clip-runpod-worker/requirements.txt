@@ -1,15 +1,23 @@
-# RunPod CLIP Worker Dependencies
-# Note: torch and torchvision are installed separately in Dockerfile with CUDA 11.8 wheels
+# CLIP RunPod Worker Dependencies (Always-On HTTP Service)
+# Pinned versions for reproducibility
 
-# RunPod SDK
-runpod==1.6.2
+# FastAPI + ASGI server
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
 
-# CLIP
-open-clip-torch==2.24.0
+# HTTP client for async downloads
+aiohttp==3.11.10
 
-# NumPy (torch 2.1.x friendly)
-numpy<2.0.0
+# CLIP (pinned - note: torch installed separately in Dockerfile)
+open-clip-torch==2.26.1
 
-# Image + HTTP
-pillow==10.2.0
-requests==2.31.0
+# NumPy (torch 2.x compatible)
+numpy==1.26.4
+
+# Image processing
+pillow==11.0.0
+
+# System/utilities
+python-multipart==0.0.20

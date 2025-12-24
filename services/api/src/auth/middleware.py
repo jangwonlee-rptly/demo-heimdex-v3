@@ -11,6 +11,7 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
+admin_security = HTTPBearer()
 
 
 class User(BaseModel):
@@ -67,3 +68,38 @@ def get_current_user(
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """
+    Require admin privileges for endpoint access.
+
+    Checks if the authenticated user's ID is in the ADMIN_USER_IDS allowlist.
+
+    Args:
+        user: Authenticated user from JWT (via get_current_user dependency)
+
+    Returns:
+        User: The authenticated admin user
+
+    Raises:
+        HTTPException: 403 Forbidden if user is not an admin
+    """
+    admin_ids = settings.admin_user_ids_list
+
+    if not admin_ids:
+        logger.warning("ADMIN_USER_IDS not configured - no admin access allowed")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access not configured",
+        )
+
+    if user.user_id not in admin_ids:
+        logger.warning(f"Non-admin user {user.user_id} attempted to access admin endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    logger.debug(f"Admin access granted to user {user.user_id}")
+    return user

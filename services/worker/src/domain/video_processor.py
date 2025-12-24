@@ -2,6 +2,7 @@
 import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from threading import Semaphore
 from typing import Optional
@@ -143,6 +144,10 @@ class VideoProcessor:
         """
         logger.info(f"Starting video processing for video_id={video_id}")
 
+        # Phase 2: Record processing start time
+        processing_started_at = datetime.utcnow()
+        db.update_video_processing_start(video_id, processing_started_at)
+
         # Create working directory
         work_dir = Path(settings.temp_dir) / str(video_id)
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -150,6 +155,7 @@ class VideoProcessor:
         try:
             # Step 1: Fetch video record
             logger.info("Fetching video record from database")
+            db.update_video_processing_stage(video_id, "downloading")
             video = db.get_video(video_id)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
@@ -185,6 +191,7 @@ class VideoProcessor:
 
             # Step 3: Extract metadata
             logger.info("Extracting video metadata")
+            db.update_video_processing_stage(video_id, "metadata")
             try:
                 metadata = ffmpeg.probe_video(video_path)
                 logger.info(
@@ -244,6 +251,7 @@ class VideoProcessor:
 
             # Step 4: Detect scenes using best-of-all-detectors approach
             logger.info("Detecting scenes using multi-detector approach")
+            db.update_video_processing_stage(video_id, "scene_detection")
             scenes, detection_result = scene_detector.detect_scenes_with_preferences(
                 video_path,
                 video_duration_s=metadata.duration_s,
@@ -258,6 +266,7 @@ class VideoProcessor:
 
             # Step 5: Extract audio and transcribe (with caching for idempotency)
             logger.info("Checking for cached transcript")
+            db.update_video_processing_stage(video_id, "transcription")
             full_transcript, transcript_segments = db.get_cached_transcript(video_id)
 
             if full_transcript:
@@ -311,6 +320,7 @@ class VideoProcessor:
 
             # Step 6: Process each scene in parallel (skip already processed scenes for idempotency)
             logger.info(f"Processing {len(scenes)} scenes in parallel")
+            db.update_video_processing_stage(video_id, "scene_processing")
 
             # Get set of scene indices that have already been processed
             existing_scene_indices = db.get_existing_scene_indices(video_id)
@@ -425,8 +435,23 @@ class VideoProcessor:
                 db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
 
             # Mark as READY
+            db.update_video_processing_stage(video_id, "finalizing")
             db.update_video_status(video_id, VideoStatus.READY)
-            logger.info(f"Video processing complete for video_id={video_id}")
+
+            # Phase 2: Record completion time and duration
+            processing_finished_at = datetime.utcnow()
+            processing_duration_ms = int((processing_finished_at - processing_started_at).total_seconds() * 1000)
+            db.update_video_processing_finish(
+                video_id,
+                processing_finished_at,
+                processing_duration_ms,
+                "completed"
+            )
+
+            logger.info(
+                f"Video processing complete for video_id={video_id}, "
+                f"duration={processing_duration_ms}ms ({processing_duration_ms/1000:.1f}s)"
+            )
 
         except Exception as e:
             logger.error(f"Video processing failed for video_id={video_id}: {e}", exc_info=True)
@@ -436,6 +461,17 @@ class VideoProcessor:
                 VideoStatus.FAILED,
                 error_message=str(e)[:500],  # Truncate error message
             )
+
+            # Phase 2: Record failure time and duration
+            processing_finished_at = datetime.utcnow()
+            processing_duration_ms = int((processing_finished_at - processing_started_at).total_seconds() * 1000)
+            db.update_video_processing_finish(
+                video_id,
+                processing_finished_at,
+                processing_duration_ms,
+                "failed"
+            )
+
             raise
 
         finally:
