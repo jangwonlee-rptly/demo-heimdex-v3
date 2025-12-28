@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
+import { SearchWeightControls, type Weights, type WeightState } from '@/components/SearchWeightControls';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,11 @@ export default function SearchPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const router = useRouter();
 
+  // Search weight state
+  const [useSavedPreferences, setUseSavedPreferences] = useState(true);
+  const [isOverride, setIsOverride] = useState(false);
+  const [overrideWeights, setOverrideWeights] = useState<Weights | null>(null);
+
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -28,6 +34,12 @@ export default function SearchPage() {
     checkAuth();
   }, [router]);
 
+  const handleWeightChange = (state: WeightState) => {
+    setUseSavedPreferences(state.useSaved);
+    setIsOverride(state.isOverride);
+    setOverrideWeights(state.isOverride ? state.weights : null);
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -35,18 +47,40 @@ export default function SearchPage() {
     setSearching(true);
 
     try {
+      // Build search payload with weight configuration
+      const payload: any = {
+        query: query.trim(),
+        limit: 20,
+        threshold: 0.2,
+        use_saved_preferences: useSavedPreferences,
+      };
+
+      // Only include channel_weights if user has overridden
+      if (isOverride && overrideWeights) {
+        payload.channel_weights = {
+          transcript: overrideWeights.transcript,
+          visual: overrideWeights.visual,
+          summary: overrideWeights.summary,
+          lexical: overrideWeights.lexical,
+        };
+      }
+
       const searchResults = await apiRequest<SearchResult>('/search', {
         method: 'POST',
-        body: JSON.stringify({
-          query: query.trim(),
-          limit: 20,
-          threshold: 0.2,
-        }),
+        body: JSON.stringify(payload),
       });
 
       setResults(searchResults);
       setSelectedScene(null);
       setCurrentVideo(null);
+
+      // Log weight source for debugging (if provided by backend)
+      if (process.env.NODE_ENV === 'development' && searchResults.weight_source) {
+        console.log('[Search] Weight source:', searchResults.weight_source);
+        if (searchResults.fusion_weights) {
+          console.log('[Search] Fusion weights:', searchResults.fusion_weights);
+        }
+      }
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
@@ -80,6 +114,9 @@ export default function SearchPage() {
       </div>
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Search Weights Controls */}
+        <SearchWeightControls onChange={handleWeightChange} className="mb-6" />
+
         {/* Search Header */}
         <div className="card mb-6">
           <div className="flex items-center gap-4 mb-4">

@@ -146,6 +146,14 @@ export interface SearchResult {
   results: VideoScene[];
   total: number;
   latency_ms: number;
+  // Optional debug fields (only present if backend includes them)
+  weight_source?: 'saved' | 'default' | 'request';
+  fusion_weights?: {
+    transcript: number;
+    visual: number;
+    summary: number;
+    lexical: number;
+  };
 }
 
 /**
