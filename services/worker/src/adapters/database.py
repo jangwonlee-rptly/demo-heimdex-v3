@@ -733,6 +733,71 @@ class Database:
         self.client.table("videos").update(update_data).eq("id", str(video_id)).execute()
         logger.debug(f"Video {video_id} stage: {stage}")
 
+    # =========================================================================
+    # Highlight Export Job Methods
+    # =========================================================================
+
+    def get_highlight_export_job(self, job_id: UUID) -> Optional[dict]:
+        """Get a highlight export job by ID.
+
+        Args:
+            job_id: UUID of the job.
+
+        Returns:
+            Optional[dict]: The job data if found, otherwise None.
+        """
+        response = (
+            self.client.table("highlight_export_jobs")
+            .select("*")
+            .eq("id", str(job_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data[0]
+
+    def update_highlight_export_job(
+        self,
+        job_id: UUID,
+        status: Optional[str] = None,
+        progress: Optional[dict] = None,
+        output: Optional[dict] = None,
+        error: Optional[dict] = None,
+    ) -> dict:
+        """Update a highlight export job record.
+
+        Args:
+            job_id: UUID of the job to update.
+            status: New status (optional).
+            progress: Progress data (optional).
+            output: Output metadata (optional).
+            error: Error details (optional).
+
+        Returns:
+            dict: The updated job record.
+        """
+        update_data = {}
+
+        if status is not None:
+            update_data["status"] = status
+        if progress is not None:
+            update_data["progress"] = progress
+        if output is not None:
+            update_data["output"] = output
+        if error is not None:
+            update_data["error"] = error
+
+        response = (
+            self.client.table("highlight_export_jobs")
+            .update(update_data)
+            .eq("id", str(job_id))
+            .execute()
+        )
+
+        return response.data[0] if response.data else {}
+
 
 # Global database instance
 db = Database(settings.supabase_url, settings.supabase_service_role_key)
