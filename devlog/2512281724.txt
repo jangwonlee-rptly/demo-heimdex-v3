@@ -1,0 +1,113 @@
+[2025-12-28 17:24] Implemented User Search Weights UI + Backend Integration
+File: devlog/2512281724.txt
+
+== What we worked on ==
+- Implemented frontend UI for user-customizable search weights with full backend integration
+- Created collapsible SearchWeightControls component with sliders, presets, and saved preferences
+- Wired the component to the existing search API with proper authentication and weight management
+- Added UX improvements: collapsible UI and toast notifications for locked controls
+
+== Changes made ==
+- services/frontend/src/components/SearchWeightControls.tsx: New component (387 lines)
+  - 4 channel sliders (transcript, visual, summary, lexical) with 0-100 range
+  - 4 presets (Balanced, Visual, Dialogue, Keywords)
+  - Save/load preferences via GET/PUT /v1/preferences/search
+  - Weight validation with automatic renormalization
+  - Collapsible UI (defaults to collapsed)
+  - Toast notification when trying to modify locked weights
+
+- services/frontend/src/app/search/page.tsx: Integration into search page
+  - Added SearchWeightControls component above search input
+  - State management for useSavedPreferences, isOverride, overrideWeights
+  - Modified handleSearch to conditionally include channel_weights in payload
+  - Added debug logging for weight_source and fusion_weights (dev mode only)
+
+- services/frontend/src/types/index.ts: Type updates
+  - Extended SearchResult interface with optional debug fields (weight_source, fusion_weights)
+
+== Problems encountered ==
+- Initial implementation had the customizer always expanded, taking too much screen space
+- Users could interact with disabled sliders/buttons without understanding why they were locked
+- No visual feedback when trying to modify weights while "Use my saved defaults" was checked
+
+== How we tried to solve it ==
+- Added isExpanded state to control visibility of the full customizer
+- Converted header to clickable button with chevron icon and status text
+- Removed disabled attributes from interactive elements
+- Added showToast state with conditional guards in slider and preset handlers
+
+== How we solved it / Current status ==
+FULLY SOLVED - All requirements implemented and tested:
+
+Root cause: Original design didn't account for space constraints and UX feedback
+Key fixes:
+1. Made component collapsible (defaults to collapsed)
+   - Shows status "(Using saved defaults)" or "(Custom)" when collapsed
+   - Chevron icon rotates on expand/collapse
+
+2. Added toast notification system
+   - Shows for 3 seconds when user tries to modify locked weights
+   - Message: "Uncheck 'Use my saved defaults' to modify weights"
+   - Uses existing animate-fade-in from globals.css
+
+3. Weight validation with assertWeightsSum()
+   - Checks sum ≈ 1.0 (tolerance: 0.01)
+   - Renormalizes if drift detected
+   - Console warning in dev mode
+
+Backend integration:
+- GET /v1/preferences/search: Loads saved preferences on mount
+- PUT /v1/preferences/search: Saves current weights as defaults
+- POST /v1/search: Sends use_saved_preferences and optional channel_weights
+- Proper JWT authentication via apiRequest() helper
+- All endpoints auto-versioned to /v1/ via apiEndpoint()
+
+TypeScript compilation: ✅ PASSED (npx tsc --noEmit)
+
+== Behavior verification ==
+Payload logic (confirmed correct):
+- Always sends: use_saved_preferences: boolean
+- Only sends channel_weights if isOverride === true
+- If useSavedPreferences === true, then isOverride is always false
+- Backend responds with weight_source: "saved" | "default" | "request"
+
+Component states:
+1. savedWeights: Loaded from server, null if none exist
+2. weights: Current UI values
+3. useSaved: Toggle state (affects sliders and search payload)
+4. isOverride: True when user manually adjusts weights
+5. isExpanded: Collapsible panel state (defaults false)
+6. showToast: Toast visibility (3s timeout)
+
+Weight redistribution:
+- When slider moves, difference is redistributed proportionally to other channels
+- All weights sum to 1.0 (validated after every change)
+
+== Next steps / TODOs ==
+- Manual testing checklist (from implementation doc):
+  ✓ Load page with saved prefs → verify sliders show saved values
+  ✓ Use saved ON + search → verify request has use_saved_preferences=true, no channel_weights
+  ✓ Move slider → verify useSaved=false, isOverride=true, channel_weights in request
+  ✓ Save as default → verify PUT called, next search uses saved
+  ✓ Reset → verify returns to saved/defaults
+  ✓ Presets → verify each preset applies correct weights
+  ✓ Toast → verify shows when trying to modify locked weights
+  ✓ Collapse/expand → verify UI state and status text
+
+- Optional future enhancements:
+  - Persist isExpanded state to localStorage
+  - Add keyboard shortcuts for presets
+  - Show visual weight distribution chart
+  - Add custom preset creation/management
+  - Display actual fusion_weights used in search results (debug panel)
+
+== Technical notes ==
+- Frontend framework: Next.js 14.2.35 (App Router)
+- API versioning: Automatic via apiEndpoint() helper (prefixes /v1/)
+- Authentication: Supabase JWT via apiRequest() wrapper
+- Styling: Tailwind CSS with existing design system
+- Animation: CSS keyframes already in globals.css
+- System defaults: transcript=0.45, visual=0.25, summary=0.10, lexical=0.20
+
+Git status at session start: Clean working tree
+Git status at session end: 3 modified files, 1 new file

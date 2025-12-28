@@ -1,11 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import { SearchWeightControls, type Weights, type WeightState } from '@/components/SearchWeightControls';
+import { FileToggleBar } from '@/components/FileToggleBar';
+import {
+  groupScenesByVideo,
+  filterScenesByToggles,
+  extractUniqueVideoIds,
+  createInitialToggles,
+} from '@/components/fileToggleUtils';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +30,9 @@ export default function SearchPage() {
   const [useSavedPreferences, setUseSavedPreferences] = useState(true);
   const [isOverride, setIsOverride] = useState(false);
   const [overrideWeights, setOverrideWeights] = useState<Weights | null>(null);
+
+  // File toggle state
+  const [fileToggles, setFileToggles] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -74,6 +84,10 @@ export default function SearchPage() {
       setSelectedScene(null);
       setCurrentVideo(null);
 
+      // Reset file toggles with all files enabled
+      const uniqueVideoIds = extractUniqueVideoIds(searchResults.results);
+      setFileToggles(createInitialToggles(uniqueVideoIds));
+
       // Log weight source for debugging (if provided by backend)
       if (process.env.NODE_ENV === 'development' && searchResults.weight_source) {
         console.log('[Search] Weight source:', searchResults.weight_source);
@@ -86,6 +100,36 @@ export default function SearchPage() {
     } finally {
       setSearching(false);
     }
+  };
+
+  // Derived data for file toggles (memoized)
+  const groupedFiles = useMemo(
+    () => groupScenesByVideo(results?.results ?? []),
+    [results]
+  );
+
+  const visibleScenes = useMemo(
+    () => filterScenesByToggles(results?.results ?? [], fileToggles),
+    [results, fileToggles]
+  );
+
+  // File toggle handlers
+  const handleToggleFile = (videoId: string) => {
+    setFileToggles((prev) => ({ ...prev, [videoId]: !prev[videoId] }));
+  };
+
+  const handleToggleAll = () => {
+    const allEnabled = Object.fromEntries(
+      groupedFiles.map((file) => [file.videoId, true])
+    );
+    setFileToggles(allEnabled);
+  };
+
+  const handleToggleNone = () => {
+    const allDisabled = Object.fromEntries(
+      groupedFiles.map((file) => [file.videoId, false])
+    );
+    setFileToggles(allDisabled);
   };
 
   const handleSceneClick = async (scene: VideoScene) => {
@@ -179,6 +223,19 @@ export default function SearchPage() {
           )}
         </div>
 
+        {/* File Toggle Bar */}
+        {results && results.results.length > 0 && (
+          <FileToggleBar
+            files={groupedFiles}
+            toggles={fileToggles}
+            onToggle={handleToggleFile}
+            onAll={handleToggleAll}
+            onNone={handleToggleNone}
+            totalScenes={results.total}
+            className="mb-6"
+          />
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Search Results */}
           <div className="card flex flex-col max-h-[calc(100vh-280px)]">
@@ -219,7 +276,21 @@ export default function SearchPage() {
 
             {results && results.results.length > 0 && (
               <div className="space-y-3">
-                {results.results.map((scene, index) => (
+                {visibleScenes.length === 0 && (
+                  <div className="empty-state py-12">
+                    <div className="empty-state-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="8" y1="12" x2="16" y2="12" />
+                      </svg>
+                    </div>
+                    <p className="empty-state-title">All files hidden</p>
+                    <p className="empty-state-description">
+                      Enable at least one file to see results
+                    </p>
+                  </div>
+                )}
+                {visibleScenes.map((scene, index) => (
                   <button
                     key={scene.id}
                     onClick={() => handleSceneClick(scene)}
