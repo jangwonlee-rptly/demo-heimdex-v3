@@ -1452,7 +1452,7 @@ class SidecarBuilder:
                 "normalized": result.get("normalized", True),
                 "device": "gpu",  # RunPod uses GPU
                 "backend": "runpod",
-                "frame_path": best_frame_path,
+                "frame_path": str(best_frame_path),  # Convert PosixPath to string
                 "frame_quality": {"quality_score": frame_quality_score},
                 "inference_time_ms": runpod_timings.get("inference_ms", 0),
                 "download_time_ms": runpod_timings.get("download_ms", 0),
