@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import get_current_user, User
-from ..adapters.database import Database, get_db
+from ..adapters.database import db
 from ..domain.search.weights import validate_user_weights
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,6 @@ class SearchPreferencesResponse(SearchPreferences):
 @router.get("/search", response_model=Optional[SearchPreferencesResponse])
 def get_search_preferences(
     current_user: User = Depends(get_current_user),
-    db: Database = Depends(get_db),
 ):
     """Get user's saved search preferences.
 
@@ -102,7 +101,6 @@ def get_search_preferences(
 def save_search_preferences(
     preferences: SearchPreferences,
     current_user: User = Depends(get_current_user),
-    db: Database = Depends(get_db),
 ):
     """Save or update user's search preferences.
 
@@ -162,7 +160,6 @@ def save_search_preferences(
 @router.delete("/search")
 def reset_search_preferences(
     current_user: User = Depends(get_current_user),
-    db: Database = Depends(get_db),
 ):
     """Reset to system defaults (delete saved preferences).
 
