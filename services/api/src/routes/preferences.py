@@ -10,9 +10,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from ..adapters.auth import get_current_user
+from ..auth.middleware import get_current_user, User
 from ..adapters.database import Database, get_db
-from ..domain.schemas import User
 from ..domain.search.weights import validate_user_weights
 
 logger = logging.getLogger(__name__)
