@@ -20,7 +20,7 @@ dramatiq.set_broker(redis_broker)
 
 # Import the canonical actors from shared tasks module
 # The API service only uses .send() - the function body never executes here
-from libs.tasks import process_video, export_scene_as_short
+from libs.tasks import process_video, export_scene_as_short, process_highlight_export
 
 
 class TaskQueue:
@@ -80,6 +80,27 @@ class TaskQueue:
         export_scene_as_short.send(str(scene_id), str(export_id))
 
         logger.info(f"Successfully enqueued export_id={export_id}")
+
+    @staticmethod
+    def enqueue_highlight_export(job_id: UUID) -> None:
+        """
+        Enqueue a highlight reel export task.
+
+        Uses the shared process_highlight_export actor to send a job to the worker.
+
+        Args:
+            job_id: ID of the highlight export job
+
+        Returns:
+            None: This function does not return a value.
+        """
+        logger.info(f"Enqueueing highlight export task for job_id={job_id}")
+
+        # Use the shared actor's .send() method to enqueue the job
+        # The function body never executes in the API context - only in the worker
+        process_highlight_export.send(str(job_id))
+
+        logger.info(f"Successfully enqueued highlight export job_id={job_id}")
 
 
 # Global task queue instance

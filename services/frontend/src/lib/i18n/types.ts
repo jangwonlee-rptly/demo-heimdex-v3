@@ -349,5 +349,19 @@ export interface Translations {
     exportSuccess: string;
     exportNotAvailable: string;
     exportError: string;
+    // Job status UI
+    jobStatus: string;
+    queued: string;
+    processing: string;
+    cuttingScenes: string;
+    concatenating: string;
+    uploading: string;
+    complete: string;
+    failed: string;
+    downloadReady: string;
+    downloadButton: string;
+    dismiss: string;
+    retry: string;
+    progressOf: string;
   };
 }

@@ -23,6 +23,15 @@ class ExportStatus(str, Enum):
     FAILED = "failed"
 
 
+class HighlightJobStatus(str, Enum):
+    """Highlight export job processing status."""
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    DONE = "done"
+    ERROR = "error"
+
+
 class AspectRatioStrategy(str, Enum):
     """Aspect ratio conversion strategy for exports."""
 
@@ -296,3 +305,42 @@ class SceneExport:
         self.created_at = created_at
         self.completed_at = completed_at
         self.expires_at = expires_at
+
+
+class HighlightExportJob:
+    """Highlight reel export job model."""
+
+    def __init__(
+        self,
+        id: UUID,
+        user_id: UUID,
+        status: HighlightJobStatus = HighlightJobStatus.QUEUED,
+        request: Optional[dict] = None,
+        progress: Optional[dict] = None,
+        output: Optional[dict] = None,
+        error: Optional[dict] = None,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ):
+        """Initialize HighlightExportJob.
+
+        Args:
+            id: UUID of the job.
+            user_id: UUID of the user who created the job.
+            status: Current processing status (default: queued).
+            request: JSONB containing ordered scenes + options.
+            progress: JSONB tracking processing progress.
+            output: JSONB containing output metadata (storage_path, etc).
+            error: JSONB containing error details if failed.
+            created_at: Timestamp when job was created.
+            updated_at: Timestamp when job was last updated.
+        """
+        self.id = id
+        self.user_id = user_id
+        self.status = status
+        self.request = request or {}
+        self.progress = progress
+        self.output = output
+        self.error = error
+        self.created_at = created_at
+        self.updated_at = updated_at

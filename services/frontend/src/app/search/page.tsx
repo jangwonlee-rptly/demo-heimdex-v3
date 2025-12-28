@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
 import type { SearchResult, VideoScene, Video } from '@/types';
@@ -8,6 +8,7 @@ import { useLanguage } from '@/lib/i18n';
 import { SearchWeightControls, type Weights, type WeightState } from '@/components/SearchWeightControls';
 import { FileToggleBar } from '@/components/FileToggleBar';
 import { SelectionTray } from '@/components/SelectionTray';
+import { HighlightJobStatus, type HighlightJob } from '@/components/HighlightJobStatus';
 import {
   groupScenesByVideo,
   filterScenesByToggles,
@@ -48,6 +49,7 @@ export default function SearchPage() {
   // Highlight reel selection state (persists across searches)
   const [selectedScenes, setSelectedScenes] = useState<SelectedScene[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [highlightJob, setHighlightJob] = useState<HighlightJob | null>(null);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -170,6 +172,18 @@ export default function SearchPage() {
     setSelectedScenes(reorderSelected(selectedScenes, fromIndex, toIndex));
   };
 
+  // Poll for job status updates
+  const pollJobStatus = useCallback(async () => {
+    if (!highlightJob?.job_id) return;
+
+    try {
+      const updatedJob = await apiRequest<HighlightJob>(`/highlights/jobs/${highlightJob.job_id}`);
+      setHighlightJob(updatedJob);
+    } catch (error) {
+      console.error('[Highlight Export] Failed to poll job status:', error);
+    }
+  }, [highlightJob?.job_id]);
+
   const handleExportHighlights = async () => {
     if (selectedScenes.length === 0) return;
 
@@ -177,11 +191,21 @@ export default function SearchPage() {
     const payload = buildExportPayload(selectedScenes);
 
     try {
-      await apiRequest('/highlights/export', {
+      const response = await apiRequest<{ job_id: string; status: string }>('/highlights/export', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      alert(t.highlightReel?.exportSuccess || 'Export started successfully!');
+
+      // Set initial job state and start polling
+      setHighlightJob({
+        job_id: response.job_id,
+        status: response.status as 'queued',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // Clear selection on successful export
+      setSelectedScenes([]);
     } catch (error: any) {
       console.log('[Highlight Export] Payload:', payload);
       // Graceful fallback if endpoint doesn't exist
@@ -194,6 +218,15 @@ export default function SearchPage() {
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const handleDismissJob = () => {
+    setHighlightJob(null);
+  };
+
+  const handleRetryExport = () => {
+    setHighlightJob(null);
+    // User can reselect scenes and try again
   };
 
   const handleSceneClick = async (scene: VideoScene) => {
@@ -309,6 +342,15 @@ export default function SearchPage() {
           onExport={handleExportHighlights}
           totalDurationS={totalDuration(selectedScenes)}
           isExporting={isExporting}
+          className="mb-6"
+        />
+
+        {/* Highlight Job Status */}
+        <HighlightJobStatus
+          job={highlightJob}
+          onPoll={pollJobStatus}
+          onDismiss={handleDismissJob}
+          onRetry={handleRetryExport}
           className="mb-6"
         />
 

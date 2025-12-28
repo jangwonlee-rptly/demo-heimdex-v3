@@ -15,6 +15,8 @@ from ..domain.models import (
     ExportStatus,
     AspectRatioStrategy,
     OutputQuality,
+    HighlightExportJob,
+    HighlightJobStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -1329,6 +1331,111 @@ class Database:
         ).execute()
 
         return response.data if response.data else []
+
+    # Highlight Export Job operations
+    def create_highlight_export_job(
+        self,
+        user_id: UUID,
+        request_data: dict,
+    ) -> HighlightExportJob:
+        """Create a new highlight export job.
+
+        Args:
+            user_id: UUID of the user creating the job.
+            request_data: JSONB containing ordered scenes + options.
+
+        Returns:
+            HighlightExportJob: The created job record.
+        """
+        data = {
+            "user_id": str(user_id),
+            "status": HighlightJobStatus.QUEUED.value,
+            "request": request_data,
+        }
+
+        response = self.client.table("highlight_export_jobs").insert(data).execute()
+        return self._map_highlight_job_response(response.data[0])
+
+    def get_highlight_export_job(self, job_id: UUID) -> Optional[HighlightExportJob]:
+        """Get a highlight export job by ID.
+
+        Args:
+            job_id: UUID of the job.
+
+        Returns:
+            Optional[HighlightExportJob]: The job if found, otherwise None.
+        """
+        response = (
+            self.client.table("highlight_export_jobs")
+            .select("*")
+            .eq("id", str(job_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return self._map_highlight_job_response(response.data[0])
+
+    def update_highlight_export_job(
+        self,
+        job_id: UUID,
+        status: Optional[HighlightJobStatus] = None,
+        progress: Optional[dict] = None,
+        output: Optional[dict] = None,
+        error: Optional[dict] = None,
+    ) -> HighlightExportJob:
+        """Update a highlight export job record.
+
+        Args:
+            job_id: UUID of the job to update.
+            status: New status (optional).
+            progress: Progress data (optional).
+            output: Output metadata (optional).
+            error: Error details (optional).
+
+        Returns:
+            HighlightExportJob: The updated job record.
+        """
+        update_data = {}
+        if status is not None:
+            update_data["status"] = status.value
+        if progress is not None:
+            update_data["progress"] = progress
+        if output is not None:
+            update_data["output"] = output
+        if error is not None:
+            update_data["error"] = error
+
+        response = (
+            self.client.table("highlight_export_jobs")
+            .update(update_data)
+            .eq("id", str(job_id))
+            .execute()
+        )
+
+        return self._map_highlight_job_response(response.data[0])
+
+    def _map_highlight_job_response(self, row: dict) -> HighlightExportJob:
+        """Map database row to HighlightExportJob model.
+
+        Args:
+            row: Database row as dictionary.
+
+        Returns:
+            HighlightExportJob: Mapped job model.
+        """
+        return HighlightExportJob(
+            id=UUID(row["id"]),
+            user_id=UUID(row["user_id"]),
+            status=HighlightJobStatus(row["status"]),
+            request=row.get("request") or {},
+            progress=row.get("progress"),
+            output=row.get("output"),
+            error=row.get("error"),
+            created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        )
 
 
 # Global database instance

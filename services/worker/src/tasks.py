@@ -41,6 +41,6 @@ dramatiq.set_broker(redis_broker)
 
 # Import the canonical actors from shared tasks module
 # This registers the actors with the broker initialized above
-from libs.tasks import process_video, export_scene_as_short  # noqa: F401
+from libs.tasks import process_video, export_scene_as_short, process_highlight_export  # noqa: F401
 
-logger.info("Worker initialized with process_video and export_scene_as_short actors from libs.tasks")
+logger.info("Worker initialized with process_video, export_scene_as_short, and process_highlight_export actors from libs.tasks")
