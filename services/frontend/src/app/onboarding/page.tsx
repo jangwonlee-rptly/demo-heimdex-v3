@@ -1,5 +1,12 @@
 'use client';
 
+/**
+ * Onboarding Page.
+ *
+ * Collects user profile information (name, industry, role, etc.)
+ * for first-time users after signup.
+ */
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';

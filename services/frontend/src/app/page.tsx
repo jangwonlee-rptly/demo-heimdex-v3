@@ -1,5 +1,12 @@
 'use client';
 
+/**
+ * Landing Page.
+ *
+ * Displays marketing content and entry points for login/signup.
+ * Redirects authenticated users to the dashboard.
+ */
+
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';

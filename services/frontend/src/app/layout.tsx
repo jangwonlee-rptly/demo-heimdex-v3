@@ -1,3 +1,10 @@
+/**
+ * Root Layout.
+ *
+ * Provides global styles, metadata, and providers (Language, Auth).
+ * Wraps all pages with the global navigation.
+ */
+
 import type { Metadata } from 'next';
 import './globals.css';
 import { LanguageProvider } from '@/lib/i18n';

@@ -14,6 +14,18 @@ interface ExportShortModalProps {
 const MAX_SHORTS_DURATION = 180; // YouTube Shorts max duration in seconds
 const POLL_INTERVAL = 2000; // Poll every 2 seconds
 
+/**
+ * Modal for exporting a scene as a YouTube Short.
+ *
+ * Allows user to configure aspect ratio and quality, then triggers the export job.
+ * Polls for status until completion.
+ *
+ * @param {ExportShortModalProps} props - Component props.
+ * @param {VideoScene} props.scene - The scene to export.
+ * @param {boolean} props.isOpen - Whether the modal is open.
+ * @param {() => void} props.onClose - Callback to close the modal.
+ * @returns {JSX.Element | null} Rendered modal or null if not open.
+ */
 export default function ExportShortModal({ scene, isOpen, onClose }: ExportShortModalProps) {
   const { t } = useLanguage();
   const [aspectRatioStrategy, setAspectRatioStrategy] = useState<AspectRatioStrategy>('center_crop');

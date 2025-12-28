@@ -12,6 +12,9 @@ export interface GroupedFile {
 
 /**
  * Shortens a UUID for display (first 8 characters).
+ *
+ * @param {string} uuid - The full UUID string.
+ * @returns {string} The first 8 characters of the UUID.
  */
 function shortId(uuid: string): string {
   return uuid.slice(0, 8);
@@ -20,8 +23,10 @@ function shortId(uuid: string): string {
 /**
  * Groups scenes by video_id and returns aggregated file information.
  *
- * @param scenes - Array of video scenes from search results
- * @returns Array of grouped files sorted by scene count (desc), then filename (asc)
+ * Used to populate the FileToggleBar with a list of files found in search results.
+ *
+ * @param {VideoScene[]} scenes - Array of video scenes from search results.
+ * @returns {GroupedFile[]} Array of grouped files sorted by scene count (desc), then filename (asc).
  */
 export function groupScenesByVideo(scenes: VideoScene[]): GroupedFile[] {
   const grouped = new Map<string, { filename: string | null; count: number }>();
@@ -60,9 +65,9 @@ export function groupScenesByVideo(scenes: VideoScene[]): GroupedFile[] {
  * If a video_id is not in toggles or is true, the scene is visible.
  * If a video_id is explicitly false, the scene is hidden.
  *
- * @param scenes - Array of video scenes to filter
- * @param toggles - Record of video_id to enabled/disabled state
- * @returns Filtered array of visible scenes
+ * @param {VideoScene[]} scenes - Array of video scenes to filter.
+ * @param {Record<string, boolean>} toggles - Record of video_id to enabled/disabled state.
+ * @returns {VideoScene[]} Filtered array of visible scenes.
  */
 export function filterScenesByToggles(
   scenes: VideoScene[],
@@ -79,8 +84,8 @@ export function filterScenesByToggles(
 /**
  * Creates initial toggle state with all video IDs enabled.
  *
- * @param videoIds - Array of unique video IDs
- * @returns Record with all video IDs set to true
+ * @param {string[]} videoIds - Array of unique video IDs.
+ * @returns {Record<string, boolean>} Record with all video IDs set to true.
  */
 export function createInitialToggles(videoIds: string[]): Record<string, boolean> {
   return Object.fromEntries(videoIds.map((id) => [id, true]));
@@ -89,8 +94,8 @@ export function createInitialToggles(videoIds: string[]): Record<string, boolean
 /**
  * Extracts unique video IDs from scenes.
  *
- * @param scenes - Array of video scenes
- * @returns Array of unique video IDs
+ * @param {VideoScene[]} scenes - Array of video scenes.
+ * @returns {string[]} Array of unique video IDs.
  */
 export function extractUniqueVideoIds(scenes: VideoScene[]): string[] {
   return Array.from(new Set(scenes.map((scene) => scene.video_id)));

@@ -1,5 +1,13 @@
 'use client';
 
+/**
+ * Upload Page.
+ *
+ * Handles video file upload to Supabase Storage.
+ * Provides drag-and-drop interface and upload progress tracking.
+ * Initiates processing upon successful upload.
+ */
+
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';

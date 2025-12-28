@@ -19,6 +19,17 @@ interface SelectionTrayProps {
 /**
  * SelectionTray component for displaying and managing selected scenes.
  * Supports drag-and-drop reordering on desktop and up/down buttons for all devices.
+ *
+ * @param {SelectionTrayProps} props - Component props.
+ * @param {SelectedScene[]} props.selected - List of selected scenes.
+ * @param {(sceneId: string) => void} props.onRemove - Callback to remove a scene.
+ * @param {() => void} props.onClear - Callback to clear all scenes.
+ * @param {(fromIndex: number, toIndex: number) => void} props.onReorder - Callback to reorder scenes.
+ * @param {() => void} props.onExport - Callback to trigger export.
+ * @param {number} props.totalDurationS - Total duration of selected scenes in seconds.
+ * @param {boolean} [props.isExporting=false] - Whether an export is currently in progress.
+ * @param {string} [props.className] - Optional CSS class.
+ * @returns {JSX.Element | null} Rendered selection tray or null if no scenes selected.
  */
 export function SelectionTray({
   selected,

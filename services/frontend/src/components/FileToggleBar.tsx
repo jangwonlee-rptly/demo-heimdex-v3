@@ -16,6 +16,16 @@ interface FileToggleBarProps {
 /**
  * FileToggleBar component for filtering search results by video file.
  * Displays a horizontal list of toggleable file chips.
+ *
+ * @param {FileToggleBarProps} props - Component props.
+ * @param {GroupedFile[]} props.files - List of files found in search results.
+ * @param {Record<string, boolean>} props.toggles - Map of video IDs to enabled state.
+ * @param {(videoId: string) => void} props.onToggle - Callback to toggle a file.
+ * @param {() => void} props.onAll - Callback to enable all files.
+ * @param {() => void} props.onNone - Callback to disable all files.
+ * @param {number} props.totalScenes - Total number of scenes in search results.
+ * @param {string} [props.className] - Optional CSS class.
+ * @returns {JSX.Element | null} Rendered file toggle bar or null if no files.
  */
 export function FileToggleBar({
   files,

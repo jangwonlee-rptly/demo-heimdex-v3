@@ -75,6 +75,11 @@ function assertWeightsSum(weights: Weights): Weights {
 /**
  * Component for managing search channel weights.
  * Supports user-customizable weights, presets, and saved defaults.
+ *
+ * @param {SearchWeightControlsProps} props - Component props.
+ * @param {(state: WeightState) => void} props.onChange - Callback when weight state changes.
+ * @param {string} [props.className] - Optional CSS class for the container.
+ * @returns {JSX.Element} Rendered search weight controls.
  */
 export function SearchWeightControls({ onChange, className = '' }: SearchWeightControlsProps) {
   const { t } = useLanguage();

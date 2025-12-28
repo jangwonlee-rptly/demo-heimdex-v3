@@ -34,6 +34,9 @@ export interface HighlightExportPayload {
 
 /**
  * Shortens a UUID for display (first 8 characters).
+ *
+ * @param {string} uuid - The full UUID string.
+ * @returns {string} The first 8 characters of the UUID.
  */
 function shortId(uuid: string): string {
   return uuid.slice(0, 8);
@@ -42,8 +45,8 @@ function shortId(uuid: string): string {
 /**
  * Converts a VideoScene to a SelectedScene with minimal fields.
  *
- * @param scene - Full VideoScene from search results
- * @returns SelectedScene with fields needed for tray + export
+ * @param {VideoScene} scene - Full VideoScene from search results.
+ * @returns {SelectedScene} SelectedScene with fields needed for tray + export.
  */
 export function toSelectedScene(scene: VideoScene): SelectedScene {
   return {
@@ -61,9 +64,9 @@ export function toSelectedScene(scene: VideoScene): SelectedScene {
  * Adds a scene to the selection if not already present.
  * Appends to end; maintains insertion order.
  *
- * @param selected - Current selection array
- * @param scene - Scene to add
- * @returns New array with scene appended (or unchanged if duplicate)
+ * @param {SelectedScene[]} selected - Current selection array.
+ * @param {SelectedScene} scene - Scene to add.
+ * @returns {SelectedScene[]} New array with scene appended (or unchanged if duplicate).
  */
 export function addSelected(
   selected: SelectedScene[],
@@ -79,9 +82,9 @@ export function addSelected(
 /**
  * Removes a scene from the selection by scene_id.
  *
- * @param selected - Current selection array
- * @param sceneId - ID of scene to remove
- * @returns New array without the specified scene
+ * @param {SelectedScene[]} selected - Current selection array.
+ * @param {string} sceneId - ID of scene to remove.
+ * @returns {SelectedScene[]} New array without the specified scene.
  */
 export function removeSelected(
   selected: SelectedScene[],
@@ -94,10 +97,10 @@ export function removeSelected(
  * Reorders a scene from one index to another.
  * Uses stable array splice approach.
  *
- * @param selected - Current selection array
- * @param fromIndex - Source index
- * @param toIndex - Destination index
- * @returns New array with reordered items
+ * @param {SelectedScene[]} selected - Current selection array.
+ * @param {number} fromIndex - Source index.
+ * @param {number} toIndex - Destination index.
+ * @returns {SelectedScene[]} New array with reordered items.
  */
 export function reorderSelected(
   selected: SelectedScene[],
@@ -123,8 +126,8 @@ export function reorderSelected(
 /**
  * Calculates total duration of selected scenes.
  *
- * @param selected - Array of selected scenes
- * @returns Total duration in seconds
+ * @param {SelectedScene[]} selected - Array of selected scenes.
+ * @returns {number} Total duration in seconds.
  */
 export function totalDuration(selected: SelectedScene[]): number {
   return selected.reduce((sum, s) => sum + (s.end_s - s.start_s), 0);
@@ -133,9 +136,9 @@ export function totalDuration(selected: SelectedScene[]): number {
 /**
  * Checks if a scene is currently selected.
  *
- * @param selected - Current selection array
- * @param sceneId - Scene ID to check
- * @returns true if scene is selected
+ * @param {SelectedScene[]} selected - Current selection array.
+ * @param {string} sceneId - Scene ID to check.
+ * @returns {boolean} true if scene is selected.
  */
 export function isSceneSelected(
   selected: SelectedScene[],
@@ -147,8 +150,8 @@ export function isSceneSelected(
 /**
  * Builds the export payload for the highlight reel.
  *
- * @param selected - Ordered array of selected scenes
- * @returns Export payload object ready for API
+ * @param {SelectedScene[]} selected - Ordered array of selected scenes.
+ * @returns {HighlightExportPayload} Export payload object ready for API.
  */
 export function buildExportPayload(
   selected: SelectedScene[]
@@ -168,8 +171,8 @@ export function buildExportPayload(
 /**
  * Formats duration in seconds to mm:ss display format.
  *
- * @param seconds - Duration in seconds
- * @returns Formatted string like "2:30"
+ * @param {number} seconds - Duration in seconds.
+ * @returns {string} Formatted string like "2:30".
  */
 export function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60);

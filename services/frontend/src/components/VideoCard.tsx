@@ -11,6 +11,19 @@ interface VideoCardProps {
   index?: number;
 }
 
+/**
+ * Card component for displaying video information.
+ *
+ * Shows thumbnail, metadata, status, and provides actions for processing/viewing.
+ *
+ * @param {VideoCardProps} props - Component props.
+ * @param {Video} props.video - The video object to display.
+ * @param {(videoId: string) => void} [props.onProcess] - Callback when "Start Processing" is clicked.
+ * @param {(videoId: string) => void} [props.onView] - Callback when "View Details" is clicked.
+ * @param {(video: Video) => void} [props.onReprocess] - Callback when "Reprocess" is clicked.
+ * @param {number} [props.index=0] - Index for animation delay.
+ * @returns {JSX.Element} Rendered video card.
+ */
 export default function VideoCard({ video, onProcess, onView, onReprocess, index = 0 }: VideoCardProps) {
   const { t } = useLanguage();
 

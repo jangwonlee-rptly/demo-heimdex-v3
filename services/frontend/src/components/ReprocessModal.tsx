@@ -18,6 +18,19 @@ const SUPPORTED_LANGUAGES = [
 
 type SupportedLanguage = typeof SUPPORTED_LANGUAGES[number];
 
+/**
+ * Modal for initiating video reprocessing.
+ *
+ * Allows user to optionally specify a language hint to fix transcription errors.
+ *
+ * @param {ReprocessModalProps} props - Component props.
+ * @param {string} props.videoId - ID of the video to reprocess.
+ * @param {string} props.videoName - Display name of the video.
+ * @param {boolean} props.isOpen - Whether the modal is open.
+ * @param {() => void} props.onClose - Callback to close the modal.
+ * @param {() => void} props.onSuccess - Callback when reprocessing is successfully triggered.
+ * @returns {JSX.Element | null} Rendered modal or null if not open.
+ */
 export default function ReprocessModal({
   videoId,
   videoName,
