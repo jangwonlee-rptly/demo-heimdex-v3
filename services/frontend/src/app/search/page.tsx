@@ -172,7 +172,7 @@ export default function SearchPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-surface-100">{t.search.title}</h1>
-              <p className="text-surface-400 text-sm">Search your videos with natural language</p>
+              <p className="text-surface-400 text-sm">{t.search.subtitle}</p>
             </div>
           </div>
 
@@ -240,7 +240,7 @@ export default function SearchPage() {
           {/* Search Results */}
           <div className="card flex flex-col max-h-[calc(100vh-280px)]">
             <h2 className="text-lg font-semibold text-surface-100 mb-4 flex-shrink-0">
-              Results
+              {t.search.results}
             </h2>
 
             <div className="flex-1 overflow-y-auto no-scrollbar">
@@ -252,9 +252,9 @@ export default function SearchPage() {
                     <line x1="21" y1="21" x2="16.65" y2="16.65" />
                   </svg>
                 </div>
-                <p className="empty-state-title">Enter a search query</p>
+                <p className="empty-state-title">{t.search.enterQuery}</p>
                 <p className="empty-state-description">
-                  Search for anything in your videos using natural language
+                  {t.search.enterQueryDescription}
                 </p>
               </div>
             )}
@@ -269,7 +269,7 @@ export default function SearchPage() {
                 </div>
                 <p className="empty-state-title">{t.search.noResults}</p>
                 <p className="empty-state-description">
-                  Try adjusting your search query
+                  {t.search.tryAdjusting}
                 </p>
               </div>
             )}
@@ -284,9 +284,9 @@ export default function SearchPage() {
                         <line x1="8" y1="12" x2="16" y2="12" />
                       </svg>
                     </div>
-                    <p className="empty-state-title">All files hidden</p>
+                    <p className="empty-state-title">{t.search.allFilesHidden}</p>
                     <p className="empty-state-description">
-                      Enable at least one file to see results
+                      {t.search.enableFiles}
                     </p>
                   </div>
                 )}
@@ -319,7 +319,7 @@ export default function SearchPage() {
                           </span>
                           {scene.similarity && (
                             <span className="badge badge-accent text-[10px] py-0.5">
-                              {(scene.similarity * 100).toFixed(0)}% match
+                              {(scene.similarity * 100).toFixed(0)}% {t.search.match}
                             </span>
                           )}
                         </div>
@@ -374,7 +374,7 @@ export default function SearchPage() {
 
           {/* Video Player */}
           <div className="card">
-            <h2 className="text-lg font-semibold text-surface-100 mb-4">Video Player</h2>
+            <h2 className="text-lg font-semibold text-surface-100 mb-4">{t.search.videoPlayer}</h2>
 
             {!selectedScene && (
               <div className="video-container aspect-video flex items-center justify-center">
@@ -382,7 +382,7 @@ export default function SearchPage() {
                   <svg className="w-12 h-12 text-surface-600 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <polygon points="5 3 19 12 5 21 5 3" />
                   </svg>
-                  <p className="text-surface-500">Select a scene to watch</p>
+                  <p className="text-surface-500">{t.search.selectScene}</p>
                 </div>
               </div>
             )}
@@ -416,7 +416,7 @@ export default function SearchPage() {
                   {(selectedScene.visual_description || selectedScene.visual_summary) && (
                     <div>
                       <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">
-                        Visual Description
+                        {t.search.visualDescription}
                       </p>
                       <p className="text-sm text-surface-300">
                         {selectedScene.visual_description || selectedScene.visual_summary}
@@ -427,7 +427,7 @@ export default function SearchPage() {
                   {selectedScene.transcript_segment && (
                     <div>
                       <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">
-                        Transcript
+                        {t.search.transcript}
                       </p>
                       <p className="text-sm text-surface-400 italic">
                         &quot;{selectedScene.transcript_segment}&quot;
@@ -438,7 +438,7 @@ export default function SearchPage() {
                   {selectedScene.visual_entities && selectedScene.visual_entities.length > 0 && (
                     <div>
                       <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
-                        Detected Entities
+                        {t.search.detectedEntities}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {selectedScene.visual_entities.map((entity, idx) => (
@@ -453,7 +453,7 @@ export default function SearchPage() {
                   {selectedScene.visual_actions && selectedScene.visual_actions.length > 0 && (
                     <div>
                       <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
-                        Detected Actions
+                        {t.search.detectedActions}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {selectedScene.visual_actions.map((action, idx) => (
@@ -468,7 +468,7 @@ export default function SearchPage() {
                   {selectedScene.tags && selectedScene.tags.length > 0 && (
                     <div>
                       <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
-                        Tags
+                        {t.search.tags}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {selectedScene.tags.map((tag, idx) => (

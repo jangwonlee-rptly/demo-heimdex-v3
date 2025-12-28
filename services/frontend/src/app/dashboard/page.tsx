@@ -107,11 +107,11 @@ export default function DashboardPage() {
       await apiRequest(`/videos/${videoId}/process`, { method: 'POST' });
       const videoData = await apiRequest<{ videos: Video[]; total: number }>('/videos');
       setVideos(videoData.videos);
-      setNotification({ message: 'Video processing started!', type: 'info' });
+      setNotification({ message: t.dashboard.processingStarted, type: 'info' });
       setTimeout(() => setNotification(null), 5000);
     } catch (error) {
       console.error('Failed to process video:', error);
-      setNotification({ message: 'Failed to start processing', type: 'error' });
+      setNotification({ message: t.dashboard.failedToProcess, type: 'error' });
       setTimeout(() => setNotification(null), 5000);
     }
   };
@@ -243,19 +243,19 @@ export default function DashboardPage() {
         {/* Stats Overview */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <div className="stat-card">
-            <div className="stat-label">Total Videos</div>
+            <div className="stat-label">{t.dashboard.totalVideos}</div>
             <div className="stat-value">{videos.length}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Ready</div>
+            <div className="stat-label">{t.dashboard.ready}</div>
             <div className="stat-value text-status-success">{videos.filter(v => v.status === 'READY').length}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Processing</div>
+            <div className="stat-label">{t.dashboard.processing}</div>
             <div className="stat-value text-status-info">{videos.filter(v => v.status === 'PROCESSING').length}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Pending</div>
+            <div className="stat-label">{t.dashboard.pending}</div>
             <div className="stat-value text-status-warning">{videos.filter(v => v.status === 'PENDING').length}</div>
           </div>
         </div>
@@ -264,7 +264,7 @@ export default function DashboardPage() {
         <div className="card">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-semibold text-surface-100">{t.dashboard.yourVideos}</h2>
-            <span className="text-sm text-surface-500">{videos.length} videos</span>
+            <span className="text-sm text-surface-500">{videos.length} {t.dashboard.videos}</span>
           </div>
 
           {videos.length === 0 ? (
@@ -292,7 +292,7 @@ export default function DashboardPage() {
                   <polyline points="17 8 12 3 7 8" />
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
-                Upload your first video
+                {t.dashboard.uploadFirstVideo}
               </button>
             </div>
           ) : (

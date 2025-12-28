@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { apiRequest } from '@/lib/supabase';
+import { useLanguage } from '@/lib/i18n';
 
 export type Weights = {
   transcript: number;
@@ -76,6 +77,7 @@ function assertWeightsSum(weights: Weights): Weights {
  * Supports user-customizable weights, presets, and saved defaults.
  */
 export function SearchWeightControls({ onChange, className = '' }: SearchWeightControlsProps) {
+  const { t } = useLanguage();
   const [savedWeights, setSavedWeights] = useState<Weights | null>(null);
   const [weights, setWeights] = useState<Weights>(SYSTEM_DEFAULTS);
   const [useSaved, setUseSaved] = useState(true);
@@ -173,7 +175,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
     setWeights(preset);
     setUseSaved(false);
     setIsOverride(true);
-    setStatusMessage(`Applied ${presetName} preset`);
+    setStatusMessage(`${t.searchWeights.appliedPreset}: ${presetName}`);
     setTimeout(() => setStatusMessage(''), 2000);
   };
 
@@ -185,11 +187,11 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
       // Switch to saved or defaults
       setWeights(savedWeights || SYSTEM_DEFAULTS);
       setIsOverride(false);
-      setStatusMessage(savedWeights ? 'Using saved defaults' : 'Using system defaults');
+      setStatusMessage(savedWeights ? t.searchWeights.usingSaved : t.searchWeights.usingSystem);
     } else {
       // Keep current weights but mark as override
       setIsOverride(true);
-      setStatusMessage('Custom weights active');
+      setStatusMessage(t.searchWeights.customActive);
     }
 
     setTimeout(() => setStatusMessage(''), 2000);
@@ -217,11 +219,11 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
       setSavedWeights(weights);
       setUseSaved(true);
       setIsOverride(false);
-      setStatusMessage('Saved as default');
+      setStatusMessage(t.searchWeights.savedAsDefault);
       setTimeout(() => setStatusMessage(''), 2000);
     } catch (error) {
       console.error('Failed to save preferences:', error);
-      setStatusMessage('Failed to save');
+      setStatusMessage(t.searchWeights.failedToSave);
       setTimeout(() => setStatusMessage(''), 3000);
     } finally {
       setSaving(false);
@@ -233,12 +235,12 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
       setWeights(savedWeights);
       setUseSaved(true);
       setIsOverride(false);
-      setStatusMessage('Reset to saved defaults');
+      setStatusMessage(t.searchWeights.resetToSaved);
     } else {
       setWeights(SYSTEM_DEFAULTS);
       setUseSaved(true);
       setIsOverride(false);
-      setStatusMessage('Reset to system defaults');
+      setStatusMessage(t.searchWeights.resetToSystem);
     }
     setTimeout(() => setStatusMessage(''), 2000);
   };
@@ -248,7 +250,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
       <div className={`card ${className}`}>
         <div className="flex items-center gap-2 text-surface-500">
           <div className="w-4 h-4 spinner" />
-          <span className="text-sm">Loading preferences...</span>
+          <span className="text-sm">{t.searchWeights.loadingPreferences}</span>
         </div>
       </div>
     );
@@ -266,7 +268,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             <span className="text-xs text-surface-200">
-              Uncheck &quot;Use my saved defaults&quot; to modify weights
+              {t.searchWeights.modifyHint}
             </span>
           </div>
         </div>
@@ -278,10 +280,10 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
         className="w-full flex items-center justify-between mb-4 group"
       >
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-surface-100">Search Weights</h3>
+          <h3 className="text-sm font-semibold text-surface-100">{t.searchWeights.title}</h3>
           {!isExpanded && (
             <span className="text-xs text-surface-500">
-              {useSaved ? '(Using saved defaults)' : '(Custom)'}
+              {useSaved ? `(${t.searchWeights.usingSavedDefaults})` : `(${t.searchWeights.custom})`}
             </span>
           )}
         </div>
@@ -334,7 +336,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
           {/* Presets */}
           <div>
             <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
-              Presets
+              {t.searchWeights.presets}
             </p>
             <div className="grid grid-cols-4 gap-2">
               {Object.keys(PRESETS).map((presetName) => (
@@ -359,7 +361,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
                 className="w-4 h-4 rounded bg-surface-700 border-surface-600 text-accent-cyan focus:ring-accent-cyan focus:ring-offset-0"
               />
               <span className="text-xs text-surface-400 group-hover:text-surface-300">
-                Use my saved defaults
+                {t.searchWeights.useSavedDefaults}
               </span>
             </label>
 
@@ -368,7 +370,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
                 onClick={handleReset}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-800/50 border border-surface-700/30 text-surface-400 hover:bg-surface-700/50 hover:border-surface-600 hover:text-surface-300 transition-all"
               >
-                Reset
+                {t.searchWeights.reset}
               </button>
               <button
                 onClick={handleSaveAsDefault}
@@ -376,7 +378,7 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan hover:bg-accent-cyan/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 {saving && <div className="w-3 h-3 spinner" />}
-                Save as default
+                {t.searchWeights.saveAsDefault}
               </button>
             </div>
           </div>

@@ -178,7 +178,7 @@ export default function VideoDetailsPage() {
           <p className="text-lg font-medium text-surface-100 mb-2">{t.common.error}</p>
           <p className="text-surface-400 mb-6">{error || t.videoDetails.notFound}</p>
           <button onClick={() => router.push('/dashboard')} className="btn btn-primary">
-            Go to Dashboard
+            {t.videoDetails.goToDashboard}
           </button>
         </div>
       </div>
@@ -301,7 +301,7 @@ export default function VideoDetailsPage() {
                 : 'text-surface-400 hover:text-surface-200'
             }`}
           >
-            Details
+            {t.videoDetails.details}
           </button>
           <button
             onClick={() => setViewMode('transcript')}
@@ -311,7 +311,7 @@ export default function VideoDetailsPage() {
                 : 'text-surface-400 hover:text-surface-200'
             }`}
           >
-            Transcript View
+            {t.videoDetails.transcriptView}
           </button>
         </div>
 
@@ -329,7 +329,7 @@ export default function VideoDetailsPage() {
                 <div className="stat-value">{video.width && video.height ? `${video.width}x${video.height}` : 'N/A'}</div>
               </div>
               <div className="stat-card">
-                <div className="stat-label">Frame Rate</div>
+                <div className="stat-label">{t.videoDetails.frameRate}</div>
                 <div className="stat-value">{video.frame_rate ? `${video.frame_rate.toFixed(0)} fps` : 'N/A'}</div>
               </div>
               <div className="stat-card">
@@ -341,7 +341,7 @@ export default function VideoDetailsPage() {
             {/* EXIF Metadata Section */}
             {(video.location_latitude || video.camera_make || video.camera_model || video.exif_metadata) && (
               <div className="card mb-6">
-                <h2 className="text-lg font-semibold text-surface-100 mb-4">Recording Information</h2>
+                <h2 className="text-lg font-semibold text-surface-100 mb-4">{t.videoDetails.recordingInfo}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {/* Location */}
                   {(video.location_latitude || video.location_name) && (
@@ -353,7 +353,7 @@ export default function VideoDetailsPage() {
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">Location</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">{t.videoDetails.location}</p>
                         {video.location_name ? (
                           <p className="text-surface-200 font-medium">{video.location_name}</p>
                         ) : null}
@@ -379,7 +379,7 @@ export default function VideoDetailsPage() {
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">Camera</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">{t.videoDetails.camera}</p>
                         <p className="text-surface-200 font-medium">
                           {video.camera_make && video.camera_model
                             ? `${video.camera_make} ${video.camera_model}`
@@ -404,7 +404,7 @@ export default function VideoDetailsPage() {
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">Recorded</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">{t.videoDetails.recorded}</p>
                         <p className="text-surface-200 font-medium">{formatDate(video.video_created_at)}</p>
                         <p className="text-xs text-surface-500">
                           {new Date(video.video_created_at).toLocaleTimeString()}
@@ -423,7 +423,7 @@ export default function VideoDetailsPage() {
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">Settings</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide">{t.videoDetails.settings}</p>
                         <div className="flex flex-wrap gap-2 mt-1">
                           {video.exif_metadata.recording.iso && (
                             <span className="text-xs px-2 py-0.5 rounded bg-surface-600/50 text-surface-300">
@@ -452,12 +452,12 @@ export default function VideoDetailsPage() {
             {video.video_summary && (
               <div className="card mb-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-surface-100">Video Summary</h2>
+                  <h2 className="text-lg font-semibold text-surface-100">{t.videoDetails.videoSummary}</h2>
                   <button
                     onClick={() => setExpandedSummary(!expandedSummary)}
                     className="text-sm text-accent-cyan hover:text-accent-cyan/80 transition-colors"
                   >
-                    {expandedSummary ? 'Collapse' : 'Expand'}
+                    {expandedSummary ? t.videoDetails.collapse : t.videoDetails.expand}
                   </button>
                 </div>
                 <div className={`relative ${!expandedSummary ? 'max-h-24 overflow-hidden' : ''}`}>
@@ -492,7 +492,7 @@ export default function VideoDetailsPage() {
                     onClick={() => setExpandedTranscript(!expandedTranscript)}
                     className="text-sm text-accent-cyan hover:text-accent-cyan/80 transition-colors"
                   >
-                    {expandedTranscript ? 'Collapse' : 'Expand'}
+                    {expandedTranscript ? t.videoDetails.collapse : t.videoDetails.expand}
                   </button>
                 </div>
                 <div className={`relative ${!expandedTranscript ? 'max-h-24 overflow-hidden' : ''}`}>
@@ -509,7 +509,7 @@ export default function VideoDetailsPage() {
               <div className="card mb-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-surface-100">
-                    All Tags
+                    {t.videoDetails.allTags}
                     <span className="ml-2 text-sm font-normal text-surface-500">({allTags.length})</span>
                   </h2>
                   {selectedTag && (
@@ -517,7 +517,7 @@ export default function VideoDetailsPage() {
                       onClick={() => setSelectedTag(null)}
                       className="text-sm text-accent-cyan hover:text-accent-cyan/80 transition-colors"
                     >
-                      Clear filter
+                      {t.videoDetails.clearFilter}
                     </button>
                   )}
                 </div>
@@ -546,9 +546,9 @@ export default function VideoDetailsPage() {
             {/* Scenes */}
             <div className="mb-6">
               <h2 className="text-xl font-bold text-surface-100 mb-4">
-                Scene-by-Scene Breakdown
+                {t.videoDetails.sceneBreakdown}
                 <span className="ml-2 text-sm font-normal text-surface-500">
-                  ({selectedTag ? `${filteredScenes.length} filtered` : total_scenes} scenes)
+                  ({selectedTag ? `${filteredScenes.length} ${t.videoDetails.filtered}` : total_scenes} {t.videoDetails.scenes})
                 </span>
               </h2>
             </div>
@@ -631,15 +631,15 @@ export default function VideoDetailsPage() {
 
             {filteredScenes.length === 0 && scenes.length > 0 && (
               <div className="empty-state">
-                <p className="empty-state-title">No scenes found with tag &quot;{selectedTag}&quot;</p>
-                <button onClick={() => setSelectedTag(null)} className="btn btn-secondary mt-4">Clear filter</button>
+                <p className="empty-state-title">{t.videoDetails.noScenesWithTag} &quot;{selectedTag}&quot;</p>
+                <button onClick={() => setSelectedTag(null)} className="btn btn-secondary mt-4">{t.videoDetails.clearFilter}</button>
               </div>
             )}
 
             {scenes.length === 0 && (
               <div className="empty-state">
                 <p className="empty-state-title">
-                  {video.status === 'READY' ? t.videoDetails.noScenes : 'Processing in progress...'}
+                  {video.status === 'READY' ? t.videoDetails.noScenes : t.videoDetails.processingInProgress}
                 </p>
               </div>
             )}
@@ -654,7 +654,7 @@ export default function VideoDetailsPage() {
               {/* Non-scrolling Header */}
               <div className="flex-shrink-0 pb-4 border-b border-surface-700/30">
                 <h2 className="text-lg font-semibold text-surface-100">
-                  Transcript Segments
+                  {t.videoDetails.transcriptSegments}
                 </h2>
               </div>
 
@@ -662,7 +662,7 @@ export default function VideoDetailsPage() {
               <div className="flex-1 overflow-y-auto no-scrollbar pt-4">
                 {scenes.length === 0 ? (
                   <div className="empty-state py-8">
-                    <p className="empty-state-title">No transcript available</p>
+                    <p className="empty-state-title">{t.videoDetails.noTranscript}</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -689,7 +689,7 @@ export default function VideoDetailsPage() {
                                 {scene.transcript_segment ? (
                                   <p className="text-sm text-surface-300 line-clamp-2">{scene.transcript_segment}</p>
                                 ) : (
-                                  <p className="text-sm text-surface-600 italic">No transcript</p>
+                                  <p className="text-sm text-surface-600 italic">{t.videoDetails.noTranscriptShort}</p>
                                 )}
                               </div>
                             </div>
@@ -709,12 +709,12 @@ export default function VideoDetailsPage() {
                                   ? 'bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20'
                                   : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
                               }`}
-                              title={!canExport ? 'Scene too long for YouTube Shorts (max 180s)' : 'Export as YouTube Short'}
+                              title={!canExport ? t.export.exceedsMax : t.export.title}
                             >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                               </svg>
-                              {canExport ? 'Export to Short' : `Too long (${sceneDuration.toFixed(0)}s)`}
+                              {canExport ? t.videoDetails.exportToShort : `${t.videoDetails.tooLong} (${sceneDuration.toFixed(0)}s)`}
                             </button>
                           </div>
                         </div>
@@ -726,7 +726,7 @@ export default function VideoDetailsPage() {
             </div>
 
             <div className="card">
-              <h2 className="text-lg font-semibold text-surface-100 mb-4">Video Player</h2>
+              <h2 className="text-lg font-semibold text-surface-100 mb-4">{t.search.videoPlayer}</h2>
 
               {!selectedScene ? (
                 <div className="video-container aspect-video flex items-center justify-center">
@@ -734,7 +734,7 @@ export default function VideoDetailsPage() {
                     <svg className="w-12 h-12 text-surface-600 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                       <polygon points="5 3 19 12 5 21 5 3" />
                     </svg>
-                    <p className="text-surface-500">Select a segment to watch</p>
+                    <p className="text-surface-500">{t.videoDetails.selectSegment}</p>
                   </div>
                 </div>
               ) : (
@@ -749,20 +749,20 @@ export default function VideoDetailsPage() {
                   </div>
                   <div className="p-4 rounded-xl bg-surface-800/50 border border-surface-700/30">
                     <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-semibold text-surface-100">Scene {selectedScene.index + 1}</h3>
+                      <h3 className="font-semibold text-surface-100">{t.search.scene} {selectedScene.index + 1}</h3>
                       <span className="text-sm text-surface-500">
                         {formatTimestamp(selectedScene.start_s)} - {formatTimestamp(selectedScene.end_s)}
                       </span>
                     </div>
                     {selectedScene.visual_summary && (
                       <div className="mb-3">
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">Visual</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">{t.videoDetails.visual}</p>
                         <p className="text-sm text-surface-300">{selectedScene.visual_summary}</p>
                       </div>
                     )}
                     {selectedScene.transcript_segment && (
                       <div>
-                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">Transcript</p>
+                        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-1">{t.videoDetails.transcript}</p>
                         <p className="text-sm text-surface-400 italic">&quot;{selectedScene.transcript_segment}&quot;</p>
                       </div>
                     )}

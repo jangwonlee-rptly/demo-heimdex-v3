@@ -123,6 +123,14 @@ export interface Translations {
       READY: string;
       FAILED: string;
     };
+    totalVideos: string;
+    ready: string;
+    processing: string;
+    pending: string;
+    videos: string;
+    uploadFirstVideo: string;
+    processingStarted: string;
+    failedToProcess: string;
   };
 
   // Upload
@@ -156,6 +164,21 @@ export interface Translations {
     scene: string;
     timestamp: string;
     viewVideo: string;
+    subtitle: string;
+    results: string;
+    enterQuery: string;
+    enterQueryDescription: string;
+    tryAdjusting: string;
+    allFilesHidden: string;
+    enableFiles: string;
+    match: string;
+    videoPlayer: string;
+    selectScene: string;
+    visualDescription: string;
+    transcript: string;
+    detectedEntities: string;
+    detectedActions: string;
+    tags: string;
   };
 
   // Video Details
@@ -184,6 +207,30 @@ export interface Translations {
     noMetadata: string;
     processingDetails: string;
     aiAnalyzed: string;
+    goToDashboard: string;
+    details: string;
+    transcriptView: string;
+    frameRate: string;
+    recordingInfo: string;
+    location: string;
+    camera: string;
+    recorded: string;
+    settings: string;
+    videoSummary: string;
+    collapse: string;
+    expand: string;
+    allTags: string;
+    clearFilter: string;
+    sceneBreakdown: string;
+    filtered: string;
+    transcriptSegments: string;
+    noTranscriptShort: string;
+    exportToShort: string;
+    tooLong: string;
+    selectSegment: string;
+    visual: string;
+    processingInProgress: string;
+    noScenesWithTag: string;
   };
 
   // Reprocess
@@ -214,5 +261,76 @@ export interface Translations {
     completed: string;
     failed: string;
     error: string;
+  };
+
+  // Search Weights
+  searchWeights: {
+    title: string;
+    loadingPreferences: string;
+    usingSavedDefaults: string;
+    custom: string;
+    presets: string;
+    balanced: string;
+    visual: string;
+    dialogue: string;
+    keywords: string;
+    useSavedDefaults: string;
+    reset: string;
+    saveAsDefault: string;
+    savedAsDefault: string;
+    failedToSave: string;
+    appliedPreset: string;
+    usingSaved: string;
+    usingSystem: string;
+    customActive: string;
+    resetToSaved: string;
+    resetToSystem: string;
+    modifyHint: string;
+  };
+
+  // File Filter
+  fileFilter: {
+    title: string;
+    showing: string;
+    files: string;
+    scenes: string;
+    all: string;
+    none: string;
+    clickToHide: string;
+    clickToShow: string;
+  };
+
+  // Export
+  export: {
+    title: string;
+    sceneDuration: string;
+    exceedsMax: string;
+    aspectRatioStrategy: string;
+    centerCrop: string;
+    cropTo916: string;
+    letterbox: string;
+    addBlackBars: string;
+    quality: string;
+    highQuality: string;
+    mediumQuality: string;
+    status: string;
+    queued: string;
+    processing: string;
+    ready: string;
+    failed: string;
+    waitingForWorker: string;
+    convertingVideo: string;
+    usuallyTakes: string;
+    downloadVideo: string;
+    size: string;
+    resolution: string;
+    expires: string;
+    exportFailed: string;
+    unknownError: string;
+    limitReached: string;
+    cancel: string;
+    starting: string;
+    exportButton: string;
+    close: string;
   };
 }

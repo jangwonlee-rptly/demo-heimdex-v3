@@ -1,6 +1,7 @@
 'use client';
 
 import type { GroupedFile } from './fileToggleUtils';
+import { useLanguage } from '@/lib/i18n';
 
 interface FileToggleBarProps {
   files: GroupedFile[];
@@ -25,6 +26,8 @@ export function FileToggleBar({
   totalScenes,
   className = '',
 }: FileToggleBarProps) {
+  const { t } = useLanguage();
+
   if (files.length === 0) {
     return null;
   }
@@ -38,9 +41,9 @@ export function FileToggleBar({
     <div className={`card ${className}`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
-          <h3 className="text-sm font-semibold text-surface-100">Filter by File</h3>
+          <h3 className="text-sm font-semibold text-surface-100">{t.fileFilter.title}</h3>
           <span className="text-xs text-surface-500">
-            Showing {enabledCount}/{files.length} files, {visibleSceneCount}/{totalScenes} scenes
+            {t.fileFilter.showing} {enabledCount}/{files.length} {t.fileFilter.files}, {visibleSceneCount}/{totalScenes} {t.fileFilter.scenes}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -48,13 +51,13 @@ export function FileToggleBar({
             onClick={onAll}
             className="px-2 py-1 text-xs font-medium rounded bg-surface-800/50 border border-surface-700/30 text-surface-400 hover:bg-surface-700/50 hover:border-surface-600 hover:text-surface-300 transition-all"
           >
-            All
+            {t.fileFilter.all}
           </button>
           <button
             onClick={onNone}
             className="px-2 py-1 text-xs font-medium rounded bg-surface-800/50 border border-surface-700/30 text-surface-400 hover:bg-surface-700/50 hover:border-surface-600 hover:text-surface-300 transition-all"
           >
-            None
+            {t.fileFilter.none}
           </button>
         </div>
       </div>
