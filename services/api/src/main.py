@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .routes import health, profile, videos, search, exports, admin
+from .routes import health, profile, videos, search, exports, admin, preferences
 from .exceptions import HeimdexException
 
 # Configure logging
@@ -101,6 +101,7 @@ app.include_router(profile.router, prefix="/v1", tags=["v1", "Profile"])
 app.include_router(videos.router, prefix="/v1", tags=["v1", "Videos"])
 app.include_router(search.router, prefix="/v1", tags=["v1", "Search"])
 app.include_router(exports.router, prefix="/v1", tags=["v1", "Exports"])
+app.include_router(preferences.router, prefix="/v1", tags=["v1", "Preferences"])
 app.include_router(admin.router, tags=["v1", "Admin"])
 
 

@@ -490,13 +490,62 @@ async def search_scenes(
         # Multi-dense mode: run N dense channels + lexical in parallel
         logger.debug("Running multi-dense search (transcript + visual + summary + lexical)")
 
-        # Validate weights
-        is_valid, error_msg, active_weights = settings.validate_multi_dense_weights()
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Invalid multi-dense configuration: {error_msg}",
+        # Resolve weights with precedence: request > saved > defaults
+        from ..domain.search.weights import resolve_weights, get_default_weights, map_to_user_keys
+
+        # Get saved preferences if enabled
+        saved_prefs_weights = None
+        if request.use_saved_preferences:
+            try:
+                prefs_data = db.get_user_search_preferences(user_id)
+                if prefs_data and prefs_data.get("weights"):
+                    saved_prefs_weights = prefs_data["weights"]
+            except Exception as e:
+                logger.warning(f"Failed to load saved preferences: {e}")
+
+        # Resolve final weights
+        try:
+            weight_resolution = resolve_weights(
+                request_weights=request.channel_weights,
+                saved_weights=saved_prefs_weights,
+                default_weights=get_default_weights(),
+                use_saved_preferences=request.use_saved_preferences,
+                visual_mode=visual_mode,
+                enable_guardrails=True,
             )
+
+            # Log warnings
+            for warning in weight_resolution.warnings:
+                logger.warning(f"Weight resolution: {warning}")
+
+            # Get fusion weights (internal fusion keys)
+            active_weights_fusion = weight_resolution.weights_applied
+            weight_source = weight_resolution.source
+
+            logger.info(
+                f"Weights resolved: source={weight_source}, "
+                f"weights={map_to_user_keys(active_weights_fusion)}"
+            )
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid channel weights: {e}",
+            )
+
+        # Save weights if requested
+        if request.save_weights and request.channel_weights:
+            try:
+                prefs_dict = {
+                    "weights": weight_resolution.weights_resolved,
+                    "fusion_method": fusion_method,
+                    "visual_mode": visual_mode,
+                    "version": 1,
+                }
+                db.save_user_search_preferences(user_id=user_id, preferences=prefs_dict)
+                logger.info(f"Saved search preferences for user {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to save preferences: {e}")
 
         # Run parallel multi-channel retrieval
         # Pass CLIP embedding for visual channel (recall mode) or None (rerank mode)
@@ -530,32 +579,29 @@ async def search_scenes(
             if "lexical" in channel_candidates:
                 fusion_channels["lexical"] = channel_candidates["lexical"]
 
-            # Prepare weights dict with matching keys
-            fusion_weights = {}
-            if "dense_transcript" in fusion_channels:
-                fusion_weights["dense_transcript"] = active_weights.get("transcript", 0.45)
-            if "dense_visual" in fusion_channels:
-                fusion_weights["dense_visual"] = active_weights.get("visual", 0.25)
-            if "dense_summary" in fusion_channels:
-                fusion_weights["dense_summary"] = active_weights.get("summary", 0.10)
-            if "lexical" in fusion_channels:
-                fusion_weights["lexical"] = active_weights.get("lexical", 0.20)
+            # Use resolved weights (active_weights_fusion already has fusion keys)
+            fusion_weights = active_weights_fusion
+
+            # Track fusion metadata for response
+            fusion_metadata = None
 
             if fusion_method == "rrf":
-                fused_results = multi_channel_rrf_fuse(
+                fused_results, fusion_metadata = multi_channel_rrf_fuse(
                     channel_candidates=fusion_channels,
                     k=settings.rrf_k,
                     top_k=request.limit,
                     include_debug=settings.search_debug,
+                    return_metadata=True,
                 )
                 actual_score_type = ScoreType.MULTI_DENSE_RRF
             else:  # minmax_mean (default)
-                fused_results = multi_channel_minmax_fuse(
+                fused_results, fusion_metadata = multi_channel_minmax_fuse(
                     channel_candidates=fusion_channels,
                     channel_weights=fusion_weights,
                     eps=settings.fusion_minmax_eps,
                     top_k=request.limit,
                     include_debug=settings.search_debug,
+                    return_metadata=True,
                 )
                 actual_score_type = ScoreType.MULTI_DENSE_MINMAX_MEAN
 
@@ -766,14 +812,34 @@ async def search_scenes(
         )
 
     # Build fusion metadata for response
-    fusion_weights = None
+    fusion_weights_response = None
+    weight_source_response = None
+    channels_active_response = None
+    channels_empty_response = None
+    channel_score_ranges_response = None
+
     if actual_score_type == ScoreType.MINMAX_MEAN:
-        fusion_weights = {"dense": weight_dense, "lexical": weight_lexical}
-    elif actual_score_type == ScoreType.MULTI_DENSE_MINMAX_MEAN:
-        # Include multi-channel weights
-        is_valid, _, active_weights = settings.validate_multi_dense_weights()
-        if is_valid:
-            fusion_weights = active_weights
+        fusion_weights_response = {"dense": weight_dense, "lexical": weight_lexical}
+    elif actual_score_type in (ScoreType.MULTI_DENSE_MINMAX_MEAN, ScoreType.MULTI_DENSE_RRF):
+        # Include multi-channel weights (convert to user keys)
+        if 'weight_source' in locals() and 'active_weights_fusion' in locals():
+            fusion_weights_response = map_to_user_keys(active_weights_fusion)
+            weight_source_response = weight_source
+        else:
+            # Fallback to settings
+            is_valid, _, active_weights = settings.validate_multi_dense_weights()
+            if is_valid:
+                fusion_weights_response = active_weights
+
+        # Add fusion metadata if available
+        if 'fusion_metadata' in locals() and fusion_metadata:
+            channels_active_response = [map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch) for ch in fusion_metadata.active_channels]
+            channels_empty_response = [map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch) for ch in fusion_metadata.empty_channels]
+            if fusion_metadata.channel_score_ranges:
+                channel_score_ranges_response = {
+                    map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch): ranges
+                    for ch, ranges in fusion_metadata.channel_score_ranges.items()
+                }
 
     # Build response
     response = SearchResponse(
@@ -782,7 +848,42 @@ async def search_scenes(
         total=len(scene_responses),
         latency_ms=latency_ms,
         fusion_method=actual_score_type.value,
-        fusion_weights=fusion_weights,
+        fusion_weights=fusion_weights_response,
+        weight_source=weight_source_response if settings.search_debug else None,
+        weights_requested=weight_resolution.weights_requested if settings.search_debug and 'weight_resolution' in locals() else None,
+        channels_active=channels_active_response if settings.search_debug else None,
+        channels_empty=channels_empty_response if settings.search_debug else None,
+        channel_score_ranges=channel_score_ranges_response if settings.search_debug else None,
+        visual_mode_used=visual_mode if settings.search_debug else None,
+    )
+
+    # Log search with metadata
+    search_metadata = None
+    if use_multi_dense and 'fusion_metadata' in locals():
+        search_metadata = {
+            "fusion_method": actual_score_type.value,
+            "weights": fusion_weights_response,
+            "weight_source": weight_source_response if 'weight_source' in locals() else "default",
+            "visual_mode": visual_mode,
+            "channels_active": channels_active_response or [],
+            "channels_empty": channels_empty_response or [],
+            "timing": {
+                "embedding_ms": embedding_ms,
+                "clip_embedding_ms": clip_embedding_ms if clip_embedding_ms > 0 else 0,
+                **multi_dense_timings,
+                "fusion_ms": fusion_ms if 'fusion_ms' in locals() else 0,
+                "rerank_ms": rerank_ms if 'rerank_ms' in locals() else 0,
+            },
+        }
+
+    # Log search query
+    db.log_search_query(
+        user_id=user_id,
+        query_text=request.query,
+        results_count=len(scene_responses),
+        latency_ms=latency_ms,
+        video_id=request.video_id,
+        search_metadata=search_metadata,
     )
 
     # Reset OpenSearch availability cache for next request

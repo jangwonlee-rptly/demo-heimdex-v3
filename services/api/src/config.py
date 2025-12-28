@@ -108,6 +108,18 @@ class Settings(BaseSettings):
     visual_router_boost_weight: float = 0.15  # Additional weight for visual queries in auto mode
     visual_router_reduce_weight: float = 0.05  # Reduced weight for speech queries in auto mode
 
+    # Feature flags
+    enable_user_search_weights: bool = True  # Enable user-customizable search weights
+
+    # Fusion percentile clipping (optional outlier control)
+    fusion_percentile_clip_enabled: bool = False
+    fusion_percentile_clip_lo: float = 0.05  # 5th percentile
+    fusion_percentile_clip_hi: float = 0.95  # 95th percentile
+
+    # Weight guardrails
+    max_visual_weight: float = 0.8  # Cap visual weight (prevent sparse match over-reliance)
+    min_lexical_weight: float = 0.05  # Minimum lexical weight (preserve keyword signal)
+
     def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
         """Validate and redistribute multi-dense channel weights.
 

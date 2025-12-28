@@ -792,6 +792,7 @@ class Database:
         results_count: int,
         latency_ms: int,
         video_id: Optional[UUID] = None,
+        search_metadata: Optional[dict] = None,
     ) -> None:
         """Log a search query for analytics.
 
@@ -801,6 +802,7 @@ class Database:
             results_count: Number of results returned.
             latency_ms: Search latency in milliseconds.
             video_id: The specific video ID searched, if any (optional).
+            search_metadata: Search execution metadata (fusion config, timings, etc).
 
         Returns:
             None: This function does not return a value.
@@ -811,9 +813,87 @@ class Database:
             "query_text": query_text,
             "results_count": results_count,
             "latency_ms": latency_ms,
+            "search_metadata": search_metadata,
         }
 
         self.client.table("search_queries").insert(data).execute()
+
+    # Search Preferences operations
+    def get_user_search_preferences(self, user_id: UUID) -> Optional[dict]:
+        """Get user's saved search preferences.
+
+        Args:
+            user_id: The UUID of the user.
+
+        Returns:
+            Optional[dict]: Preferences dict with weights, fusion_method, etc, or None.
+        """
+        response = (
+            self.client.table("user_profiles")
+            .select("search_preferences, created_at, updated_at")
+            .eq("user_id", str(user_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        row = response.data[0]
+        prefs = row.get("search_preferences")
+
+        if not prefs:
+            return None
+
+        return {
+            **prefs,
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def save_user_search_preferences(
+        self, user_id: UUID, preferences: dict
+    ) -> dict:
+        """Save or update user's search preferences.
+
+        Args:
+            user_id: The UUID of the user.
+            preferences: Preferences dict to save (weights, fusion_method, visual_mode, etc).
+
+        Returns:
+            dict: Saved preferences with timestamps.
+
+        Raises:
+            ValueError: If user profile not found.
+        """
+        response = (
+            self.client.table("user_profiles")
+            .update({"search_preferences": preferences})
+            .eq("user_id", str(user_id))
+            .execute()
+        )
+
+        if not response.data:
+            raise ValueError(f"User profile not found: {user_id}")
+
+        row = response.data[0]
+        return {
+            **preferences,
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def delete_user_search_preferences(self, user_id: UUID) -> None:
+        """Delete user's search preferences (reset to defaults).
+
+        Args:
+            user_id: The UUID of the user.
+
+        Returns:
+            None
+        """
+        self.client.table("user_profiles").update({
+            "search_preferences": None,
+        }).eq("user_id", str(user_id)).execute()
 
     # Scene Export operations
     def create_scene_export(

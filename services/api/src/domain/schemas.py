@@ -290,19 +290,48 @@ class SearchRequest(BaseModel):
                     "minmax_mean normalizes and weights scores; rrf uses rank-based fusion.",
         pattern="^(minmax_mean|rrf)$",
     )
+
+    # Legacy 2-signal mode weights (deprecated in favor of channel_weights)
     weight_dense: Optional[float] = Field(
         None,
         ge=0.0,
         le=1.0,
-        description="Weight for dense (semantic) scores in minmax_mean fusion. "
-                    "Must sum with weight_lexical to ~1.0. Default: 0.7",
+        description="[LEGACY] Weight for dense (semantic) scores in minmax_mean fusion. "
+                    "Prefer using channel_weights instead. Default: 0.7",
     )
     weight_lexical: Optional[float] = Field(
         None,
         ge=0.0,
         le=1.0,
-        description="Weight for lexical (BM25) scores in minmax_mean fusion. "
-                    "Must sum with weight_dense to ~1.0. Default: 0.3",
+        description="[LEGACY] Weight for lexical (BM25) scores in minmax_mean fusion. "
+                    "Prefer using channel_weights instead. Default: 0.3",
+    )
+
+    # Multi-channel weights (preferred over legacy weight_dense/weight_lexical)
+    channel_weights: Optional[dict[str, float]] = Field(
+        None,
+        description="Per-channel weights for multi-dense fusion. "
+                    "Keys: 'transcript' (spoken word), 'visual' (CLIP), 'summary', 'lexical' (keywords). "
+                    "Weights do NOT need to sum to 1.0 - they will be normalized automatically. "
+                    "All weights must be in [0, 1] and at least one must be > 0. "
+                    "If provided, takes precedence over saved preferences and legacy weight_dense/weight_lexical.",
+        examples=[
+            {"transcript": 0.5, "visual": 0.3, "summary": 0.1, "lexical": 0.1},
+            {"transcript": 0.6, "visual": 0.4, "summary": 0, "lexical": 0},  # Some can be 0
+        ],
+    )
+
+    # Preferences control
+    use_saved_preferences: bool = Field(
+        True,
+        description="Whether to use saved user preferences if no channel_weights provided. "
+                    "Set to False to force system defaults.",
+    )
+
+    save_weights: bool = Field(
+        False,
+        description="If True, saves channel_weights as user's default preferences. "
+                    "Requires channel_weights to be provided.",
     )
 
 
@@ -320,11 +349,40 @@ class SearchResponse(BaseModel):
     # Fusion metadata (helps clients understand score semantics)
     fusion_method: Optional[str] = Field(
         None,
-        description="Fusion method used: 'minmax_mean', 'rrf', 'dense_only', or 'lexical_only'"
+        description="Fusion method used: 'minmax_mean', 'rrf', 'dense_only', 'lexical_only', "
+                    "'multi_dense_minmax_mean', 'multi_dense_rrf', 'rerank_clip'"
     )
     fusion_weights: Optional[dict] = Field(
         None,
-        description="Fusion weights used (only for minmax_mean): {'dense': 0.7, 'lexical': 0.3}"
+        description="Fusion weights used (after normalization and redistribution). "
+                    "Multi-channel: {'transcript': 0.45, 'visual': 0.25, 'summary': 0.1, 'lexical': 0.2}. "
+                    "Legacy 2-signal: {'dense': 0.7, 'lexical': 0.3}"
+    )
+
+    # Weight resolution metadata (debug)
+    weight_source: Optional[str] = Field(
+        None,
+        description="Source of weights used: 'request' | 'saved' | 'default'"
+    )
+    weights_requested: Optional[dict] = Field(
+        None,
+        description="Original weights requested (if different from applied)"
+    )
+    channels_active: Optional[list[str]] = Field(
+        None,
+        description="Channels that participated in fusion (had non-empty results)"
+    )
+    channels_empty: Optional[list[str]] = Field(
+        None,
+        description="Channels that returned no results (excluded from fusion)"
+    )
+    channel_score_ranges: Optional[dict] = Field(
+        None,
+        description="Score ranges per channel: {'transcript': {'min': 0.2, 'max': 0.9}, ...}"
+    )
+    visual_mode_used: Optional[str] = Field(
+        None,
+        description="Visual search mode used: 'recall' | 'rerank' | 'skip'"
     )
 
 

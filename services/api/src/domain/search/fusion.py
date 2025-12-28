@@ -94,10 +94,74 @@ class FusedCandidate:
         return self.lexical_score_raw
 
 
+def percentile_clip(
+    scores: list[float],
+    lower_percentile: float = 0.05,
+    upper_percentile: float = 0.95,
+) -> list[float]:
+    """Clip scores to percentile range to reduce outlier impact.
+
+    Args:
+        scores: Raw scores to clip
+        lower_percentile: Lower percentile (0.0 - 1.0)
+        upper_percentile: Upper percentile (0.0 - 1.0)
+
+    Returns:
+        Clipped scores
+
+    Example:
+        >>> percentile_clip([1, 2, 3, 4, 100])  # 100 is outlier
+        [1, 2, 3, 4, 4]  # Clipped to 95th percentile
+    """
+    if not scores or len(scores) < 3:
+        return scores.copy()
+
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+
+    # Calculate percentile indices
+    lower_idx = int(n * lower_percentile)
+    upper_idx = int(n * upper_percentile)
+
+    # Get threshold values
+    lower_threshold = sorted_scores[lower_idx]
+    upper_threshold = sorted_scores[upper_idx]
+
+    # Clip scores
+    clipped = [
+        max(lower_threshold, min(upper_threshold, score))
+        for score in scores
+    ]
+
+    return clipped
+
+
+def is_flat_distribution(scores: list[float], eps: float = 1e-9) -> bool:
+    """Check if score distribution is flat (uninformative).
+
+    Args:
+        scores: Scores to check
+        eps: Threshold for flatness
+
+    Returns:
+        True if distribution is flat (max - min < eps)
+    """
+    if not scores:
+        return True
+
+    min_score = min(scores)
+    max_score = max(scores)
+
+    return (max_score - min_score) < eps
+
+
 def minmax_normalize(
     scores: list[float],
     eps: float = 1e-9,
-) -> list[float]:
+    percentile_clip_enabled: bool = False,
+    percentile_clip_lo: float = 0.05,
+    percentile_clip_hi: float = 0.95,
+) -> tuple[list[float], bool]:
     """Normalize scores to [0, 1] range using min-max normalization.
 
     Formula: norm(x) = (x - min) / (max - min + eps)
@@ -105,30 +169,38 @@ def minmax_normalize(
     Args:
         scores: List of raw scores to normalize.
         eps: Small epsilon to avoid division by zero (default: 1e-9).
+        percentile_clip_enabled: Whether to clip outliers before normalization
+        percentile_clip_lo: Lower percentile for clipping
+        percentile_clip_hi: Upper percentile for clipping
 
     Returns:
-        list[float]: Normalized scores in [0, 1] range.
+        (normalized_scores, is_flat): Normalized scores and flatness indicator
 
     Edge cases:
-        - Empty list: Returns empty list
-        - Single element: Returns [1.0] (contributes uniformly)
-        - All same value (max == min): Returns all 1.0 (contributes uniformly)
+        - Empty list: Returns ([], True)
+        - Single element: Returns ([1.0], True)
+        - All same value (max == min): Returns ([1.0, ...], True) - flat distribution
 
     Example:
         >>> minmax_normalize([10, 20, 30])
-        [0.0, 0.5, 1.0]
+        ([0.0, 0.5, 1.0], False)
         >>> minmax_normalize([5, 5, 5])
-        [1.0, 1.0, 1.0]
+        ([1.0, 1.0, 1.0], True)
     """
     if not scores:
-        return []
+        return [], True
+
+    # Apply percentile clipping if enabled
+    if percentile_clip_enabled and len(scores) >= 3:
+        scores = percentile_clip(scores, percentile_clip_lo, percentile_clip_hi)
 
     min_score = min(scores)
     max_score = max(scores)
 
     # If all scores are the same, return 1.0 for all (uniform contribution)
+    # Mark as flat so caller can decide to exclude this channel
     if max_score - min_score < eps:
-        return [1.0] * len(scores)
+        return [1.0] * len(scores), True
 
     # Normalize to [0, 1]
     normalized = []
@@ -138,7 +210,7 @@ def minmax_normalize(
         norm = max(0.0, min(1.0, norm))
         normalized.append(norm)
 
-    return normalized
+    return normalized, False
 
 
 def minmax_weighted_mean_fuse(
@@ -206,8 +278,9 @@ def minmax_weighted_mean_fuse(
     dense_scores = [c.score for c in dense_candidates]
     lexical_scores = [c.score for c in lexical_candidates]
 
-    dense_norm_scores = minmax_normalize(dense_scores, eps)
-    lexical_norm_scores = minmax_normalize(lexical_scores, eps)
+    # Use new signature (returns tuple with flatness indicator)
+    dense_norm_scores, _ = minmax_normalize(dense_scores, eps) if dense_scores else ([], True)
+    lexical_norm_scores, _ = minmax_normalize(lexical_scores, eps) if lexical_scores else ([], True)
 
     # Build normalized lookup
     dense_norm_by_id: dict[str, float] = {}
@@ -388,7 +461,7 @@ def dense_only_fusion(
     # Optionally normalize
     if normalize:
         scores = [c.score for c in dense_candidates[:top_k]]
-        norm_scores = minmax_normalize(scores, eps)
+        norm_scores, _ = minmax_normalize(scores, eps)
     else:
         norm_scores = None
 
@@ -434,7 +507,7 @@ def lexical_only_fusion(
     # Optionally normalize
     if normalize:
         scores = [c.score for c in lexical_candidates[:top_k]]
-        norm_scores = minmax_normalize(scores, eps)
+        norm_scores, _ = minmax_normalize(scores, eps)
     else:
         norm_scores = None
 
@@ -511,13 +584,24 @@ def fuse(
         raise ValueError(f"Unknown fusion method: {method}. Use 'minmax_mean' or 'rrf'.")
 
 
+@dataclass
+class FusionMetadata:
+    """Metadata from fusion process for debugging and analytics."""
+    active_channels: list[str]  # Channels that participated
+    empty_channels: list[str]  # Channels with no candidates
+    flat_channels: list[str]  # Channels with uninformative scores
+    channel_score_ranges: dict[str, dict[str, float]]  # Per-channel min/max/count
+    weights_applied: dict[str, float]  # Final weights after redistribution
+
+
 def multi_channel_minmax_fuse(
     channel_candidates: dict[str, list[Candidate]],
     channel_weights: dict[str, float],
     eps: float = 1e-9,
     top_k: int = 10,
     include_debug: bool = False,
-) -> list[FusedCandidate]:
+    return_metadata: bool = False,
+) -> tuple[list[FusedCandidate], Optional[FusionMetadata]]:
     """
     Fuse multiple dense channels + lexical using min-max normalization and weighted mean.
 
@@ -526,25 +610,29 @@ def multi_channel_minmax_fuse(
 
     Algorithm:
         1. For each channel independently: min-max normalize scores → [0, 1]
-        2. For each scene in union of all channels:
+        2. Detect and exclude flat score distributions (uninformative)
+        3. For each scene in union of all channels:
            final_score = sum(weight[ch] * norm_score[ch] for ch in channels)
-        3. Sort by final_score descending, return top_k
+        4. Sort by final_score descending, return top_k
 
     Args:
         channel_candidates: Dict mapping channel name → list of Candidates
             Example: {
-                "transcript": [Candidate("a", 1, 0.85), ...],
-                "visual": [Candidate("b", 1, 0.72), ...],
-                "bm25": [Candidate("a", 1, 23.4), ...],
+                "dense_transcript": [Candidate("a", 1, 0.85), ...],
+                "dense_visual": [Candidate("b", 1, 0.72), ...],
+                "lexical": [Candidate("a", 1, 23.4), ...],
             }
         channel_weights: Dict mapping channel name → weight (must sum to ≈1.0)
-            Example: {"transcript": 0.45, "visual": 0.25, "bm25": 0.30}
+            Example: {"dense_transcript": 0.45, "dense_visual": 0.25, "lexical": 0.30}
         eps: Epsilon for min-max normalization (default: 1e-9)
         top_k: Number of results to return after fusion
         include_debug: If True, populate channel_scores field with per-channel debug info
+        return_metadata: If True, return fusion metadata as second element of tuple
 
     Returns:
-        list[FusedCandidate]: Top-k fused results sorted by score descending
+        (results, metadata): Tuple of:
+            - list[FusedCandidate]: Top-k fused results sorted by score descending
+            - FusionMetadata | None: Fusion metadata (if return_metadata=True)
 
     Raises:
         ValueError: If weights don't sum to approximately 1.0 (tolerance 0.01)
@@ -587,7 +675,15 @@ def multi_channel_minmax_fuse(
     # Build per-channel normalized score lookups
     channel_norm_by_id: dict[str, dict[str, float]] = {}
     channel_by_id: dict[str, dict[str, Candidate]] = {}
+    channel_score_ranges: dict[str, dict[str, float]] = {}
     active_channels = []  # Channels that have non-empty candidates
+    flat_channels = []  # Channels with flat score distributions (uninformative)
+
+    # Get percentile clipping config (if needed)
+    from ...config import settings
+    percentile_clip_enabled = getattr(settings, "fusion_percentile_clip_enabled", False)
+    percentile_clip_lo = getattr(settings, "fusion_percentile_clip_lo", 0.05)
+    percentile_clip_hi = getattr(settings, "fusion_percentile_clip_hi", 0.95)
 
     for ch_name, candidates in channel_candidates.items():
         if not candidates:
@@ -596,14 +692,40 @@ def multi_channel_minmax_fuse(
             channel_by_id[ch_name] = {}
             continue
 
-        active_channels.append(ch_name)
-
         # Build lookup by ID
         channel_by_id[ch_name] = {c.scene_id: c for c in candidates}
 
         # Normalize scores within this channel
         scores = [c.score for c in candidates]
-        norm_scores = minmax_normalize(scores, eps)
+
+        # Store score range for debugging
+        channel_score_ranges[ch_name] = {
+            "min": min(scores),
+            "max": max(scores),
+            "count": len(scores),
+        }
+
+        norm_scores, is_flat = minmax_normalize(
+            scores,
+            eps,
+            percentile_clip_enabled=percentile_clip_enabled,
+            percentile_clip_lo=percentile_clip_lo,
+            percentile_clip_hi=percentile_clip_hi,
+        )
+
+        # If channel has flat scores, exclude it from fusion (uninformative)
+        if is_flat:
+            logger.warning(
+                f"Channel '{ch_name}' has flat score distribution "
+                f"(range={channel_score_ranges[ch_name]['max'] - channel_score_ranges[ch_name]['min']:.6f}), "
+                f"excluding from fusion"
+            )
+            flat_channels.append(ch_name)
+            channel_norm_by_id[ch_name] = {}
+            continue
+
+        # Channel is active (has informative scores)
+        active_channels.append(ch_name)
 
         # Build normalized lookup
         channel_norm_by_id[ch_name] = {}
@@ -714,7 +836,24 @@ def multi_channel_minmax_fuse(
 
     fused_results.sort(key=sort_key)
 
-    return fused_results[:top_k]
+    # Build metadata if requested
+    metadata = None
+    if return_metadata:
+        # Track empty channels (no candidates)
+        empty_channels = [
+            ch for ch, candidates in channel_candidates.items()
+            if not candidates
+        ]
+
+        metadata = FusionMetadata(
+            active_channels=active_channels,
+            empty_channels=empty_channels,
+            flat_channels=flat_channels,
+            channel_score_ranges=channel_score_ranges,
+            weights_applied=redistributed_weights,
+        )
+
+    return fused_results[:top_k], metadata
 
 
 def multi_channel_rrf_fuse(
@@ -722,7 +861,8 @@ def multi_channel_rrf_fuse(
     rrf_k: int = 60,
     top_k: int = 10,
     include_debug: bool = False,
-) -> list[FusedCandidate]:
+    return_metadata: bool = False,
+) -> tuple[list[FusedCandidate], Optional[FusionMetadata]]:
     """
     Fuse multiple channels using Reciprocal Rank Fusion (RRF).
 
@@ -814,4 +954,16 @@ def multi_channel_rrf_fuse(
     # Sort by RRF score descending
     fused_results.sort(key=lambda c: (-c.score, c.scene_id))
 
-    return fused_results[:top_k]
+    # Build metadata if requested
+    metadata = None
+    if return_metadata:
+        empty_channels = [ch for ch, candidates in channel_candidates.items() if not candidates]
+        metadata = FusionMetadata(
+            active_channels=active_channels,
+            empty_channels=empty_channels,
+            flat_channels=[],  # RRF doesn't use flat detection
+            channel_score_ranges={},  # RRF doesn't use scores
+            weights_applied={},  # RRF is unweighted
+        )
+
+    return fused_results[:top_k], metadata
