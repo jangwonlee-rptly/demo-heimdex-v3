@@ -78,27 +78,37 @@ class ClipClient:
             f"timeout={timeout_s}s, max_retries={max_retries}"
         )
 
-    def _create_hmac_signature(self, method: str, path: str, **params) -> str:
+    def _create_hmac_signature(self, method: str, path: str, timestamp: int, text: Optional[str] = None) -> str:
         """Create HMAC-SHA256 signature for request authentication.
+
+        Matches the RunPod service's expected format:
+        1. Canonical message: {method}|{path}|{text_hash}
+        2. Final message: {canonical_message}|{timestamp}
 
         Args:
             method: HTTP method (e.g., "POST")
             path: Request path (e.g., "/v1/embed/text")
-            **params: Request parameters to include in canonical message
+            timestamp: Unix timestamp
+            text: Optional text to hash (for text embedding requests)
 
         Returns:
             Hex-encoded HMAC signature
         """
-        # Create canonical message (same format as RunPod service expects)
-        canonical_parts = [method, path]
-        for key in sorted(params.keys()):
-            canonical_parts.append(f"{key}={params[key]}")
-        canonical_message = "|".join(canonical_parts)
+        # Create canonical message matching RunPod service format
+        if text:
+            # Hash the text content (don't include raw text in signature)
+            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            canonical_message = f"{method}|{path}|{text_hash}"
+        else:
+            canonical_message = f"{method}|{path}|"
+
+        # Append timestamp to canonical message
+        message_to_sign = f"{canonical_message}|{timestamp}"
 
         # Generate HMAC signature
         signature = hmac.new(
             self.secret_key.encode(),
-            canonical_message.encode(),
+            message_to_sign.encode(),
             hashlib.sha256,
         ).hexdigest()
 
@@ -135,14 +145,18 @@ class ClipClient:
         endpoint = "/v1/embed/text"
         url = f"{self.base_url}{endpoint}"
 
-        # Create HMAC signature
-        signature = self._create_hmac_signature("POST", endpoint, text=text)
+        # Create HMAC signature with timestamp
+        timestamp = int(time.time())
+        signature = self._create_hmac_signature("POST", endpoint, timestamp, text=text)
 
         payload = {
             "text": text,
             "normalize": normalize,
             "request_id": request_id,
-            "auth": signature,
+            "auth": {
+                "ts": timestamp,
+                "sig": signature,
+            },
         }
 
         # Execute with retries
