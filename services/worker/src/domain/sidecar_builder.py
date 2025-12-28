@@ -777,7 +777,7 @@ class SidecarBuilder:
                         )
                         try:
                             # Route to appropriate backend
-                            if settings.clip_inference_backend == "runpod":
+                            if settings.clip_inference_backend in ("runpod", "runpod_pod", "runpod_serverless"):
                                 # RunPod GPU backend: upload thumbnail first, then call endpoint
                                 embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_runpod(
                                     best_frame_path=best_frame_path,
