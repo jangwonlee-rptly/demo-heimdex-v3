@@ -83,6 +83,8 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   // Load saved preferences on mount
   useEffect(() => {
@@ -126,6 +128,13 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
   }, [weights, useSaved, isOverride, loading, onChange]);
 
   const handleSliderChange = (channel: keyof Weights, value: number) => {
+    // Show toast if user tries to modify while using saved defaults
+    if (useSaved) {
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+      return;
+    }
+
     const newValue = value / 100; // Convert from 0-100 to 0-1
     const oldValue = weights[channel];
     const diff = newValue - oldValue;
@@ -153,6 +162,13 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
   };
 
   const handlePresetClick = (presetName: string) => {
+    // Show toast if user tries to modify while using saved defaults
+    if (useSaved) {
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+      return;
+    }
+
     const preset = PRESETS[presetName];
     setWeights(preset);
     setUseSaved(false);
@@ -239,90 +255,133 @@ export function SearchWeightControls({ onChange, className = '' }: SearchWeightC
   }
 
   return (
-    <div className={`card ${className}`}>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-surface-100">Search Weights</h3>
-        {statusMessage && (
-          <span className="text-xs text-accent-cyan">{statusMessage}</span>
-        )}
-      </div>
-
-      {/* Sliders */}
-      <div className="space-y-3 mb-4">
-        {(Object.keys(weights) as Array<keyof Weights>).map((channel) => (
-          <div key={channel}>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-surface-300 capitalize">
-                {channel}
-              </label>
-              <span className="text-xs font-mono text-surface-500">
-                {Math.round(weights[channel] * 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="5"
-              value={Math.round(weights[channel] * 100)}
-              onChange={(e) => handleSliderChange(channel, parseInt(e.target.value))}
-              className="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-accent-cyan"
-              disabled={useSaved}
-            />
+    <div className={`card ${className} relative`}>
+      {/* Toast Notification */}
+      {showToast && (
+        <div className="absolute top-4 right-4 z-50 animate-fade-in">
+          <div className="px-4 py-2 rounded-lg bg-surface-800 border border-accent-cyan/30 shadow-lg flex items-center gap-2">
+            <svg className="w-4 h-4 text-accent-cyan flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <span className="text-xs text-surface-200">
+              Uncheck &quot;Use my saved defaults&quot; to modify weights
+            </span>
           </div>
-        ))}
-      </div>
-
-      {/* Presets */}
-      <div className="mb-4">
-        <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
-          Presets
-        </p>
-        <div className="grid grid-cols-4 gap-2">
-          {Object.keys(PRESETS).map((presetName) => (
-            <button
-              key={presetName}
-              onClick={() => handlePresetClick(presetName)}
-              disabled={useSaved}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-800/50 border border-surface-700/30 text-surface-300 hover:bg-surface-700/50 hover:border-accent-cyan/30 hover:text-accent-cyan transition-all disabled:opacity-50 disabled:cursor-not-allowed capitalize"
-            >
-              {presetName}
-            </button>
-          ))}
         </div>
-      </div>
+      )}
 
-      {/* Controls */}
-      <div className="flex items-center justify-between pt-4 border-t border-surface-700/30">
-        <label className="flex items-center gap-2 cursor-pointer group">
-          <input
-            type="checkbox"
-            checked={useSaved}
-            onChange={handleToggleUseSaved}
-            className="w-4 h-4 rounded bg-surface-700 border-surface-600 text-accent-cyan focus:ring-accent-cyan focus:ring-offset-0"
-          />
-          <span className="text-xs text-surface-400 group-hover:text-surface-300">
-            Use my saved defaults
-          </span>
-        </label>
-
-        <div className="flex gap-2">
-          <button
-            onClick={handleReset}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-800/50 border border-surface-700/30 text-surface-400 hover:bg-surface-700/50 hover:border-surface-600 hover:text-surface-300 transition-all"
-          >
-            Reset
-          </button>
-          <button
-            onClick={handleSaveAsDefault}
-            disabled={saving || useSaved}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan hover:bg-accent-cyan/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-          >
-            {saving && <div className="w-3 h-3 spinner" />}
-            Save as default
-          </button>
+      {/* Header with collapse button */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between mb-4 group"
+      >
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-surface-100">Search Weights</h3>
+          {!isExpanded && (
+            <span className="text-xs text-surface-500">
+              {useSaved ? '(Using saved defaults)' : '(Custom)'}
+            </span>
+          )}
         </div>
-      </div>
+        <div className="flex items-center gap-2">
+          {statusMessage && (
+            <span className="text-xs text-accent-cyan">{statusMessage}</span>
+          )}
+          <svg
+            className={`w-5 h-5 text-surface-400 group-hover:text-surface-300 transition-transform ${
+              isExpanded ? 'rotate-180' : ''
+            }`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </div>
+      </button>
+
+      {/* Collapsible content */}
+      {isExpanded && (
+        <div className="space-y-4">
+          {/* Sliders */}
+          <div className="space-y-3">
+            {(Object.keys(weights) as Array<keyof Weights>).map((channel) => (
+              <div key={channel}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-surface-300 capitalize">
+                    {channel}
+                  </label>
+                  <span className="text-xs font-mono text-surface-500">
+                    {Math.round(weights[channel] * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={Math.round(weights[channel] * 100)}
+                  onChange={(e) => handleSliderChange(channel, parseInt(e.target.value))}
+                  className="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-accent-cyan"
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Presets */}
+          <div>
+            <p className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
+              Presets
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {Object.keys(PRESETS).map((presetName) => (
+                <button
+                  key={presetName}
+                  onClick={() => handlePresetClick(presetName)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-800/50 border border-surface-700/30 text-surface-300 hover:bg-surface-700/50 hover:border-accent-cyan/30 hover:text-accent-cyan transition-all capitalize"
+                >
+                  {presetName}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Controls */}
+          <div className="flex items-center justify-between pt-4 border-t border-surface-700/30">
+            <label className="flex items-center gap-2 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={useSaved}
+                onChange={handleToggleUseSaved}
+                className="w-4 h-4 rounded bg-surface-700 border-surface-600 text-accent-cyan focus:ring-accent-cyan focus:ring-offset-0"
+              />
+              <span className="text-xs text-surface-400 group-hover:text-surface-300">
+                Use my saved defaults
+              </span>
+            </label>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleReset}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-800/50 border border-surface-700/30 text-surface-400 hover:bg-surface-700/50 hover:border-surface-600 hover:text-surface-300 transition-all"
+              >
+                Reset
+              </button>
+              <button
+                onClick={handleSaveAsDefault}
+                disabled={saving || useSaved}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan hover:bg-accent-cyan/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {saving && <div className="w-3 h-3 spinner" />}
+                Save as default
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
