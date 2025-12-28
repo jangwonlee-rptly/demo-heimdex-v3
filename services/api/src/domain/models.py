@@ -51,6 +51,7 @@ class UserProfile:
         marketing_consent: bool = False,
         marketing_consent_at: Optional[datetime] = None,
         scene_detector_preferences: Optional[dict] = None,
+        search_preferences: Optional[dict] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
@@ -65,6 +66,7 @@ class UserProfile:
             marketing_consent: Whether the user has consented to marketing.
             marketing_consent_at: Timestamp when marketing consent was given.
             scene_detector_preferences: User's custom thresholds for scene detectors (optional).
+            search_preferences: User's saved search preferences (weights, fusion_method, etc.) (optional).
             created_at: Timestamp when the profile was created.
             updated_at: Timestamp when the profile was last updated.
         """
@@ -76,6 +78,7 @@ class UserProfile:
         self.marketing_consent = marketing_consent
         self.marketing_consent_at = marketing_consent_at
         self.scene_detector_preferences = scene_detector_preferences
+        self.search_preferences = search_preferences
         self.created_at = created_at
         self.updated_at = updated_at
 
