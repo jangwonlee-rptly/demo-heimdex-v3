@@ -50,6 +50,8 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState<'last_activity' | 'hours_ready' | 'videos_ready' | 'searches_7d'>('last_activity');
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessResult, setReprocessResult] = useState<{ success: boolean; message: string } | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -92,6 +94,33 @@ export default function AdminPage() {
     router.push(`/admin/users/${userId}`);
   };
 
+  const handleReprocessAll = async () => {
+    if (!confirm('Are you sure you want to reprocess ALL videos? This will clear existing data and re-queue all videos for processing.')) {
+      return;
+    }
+
+    setReprocessing(true);
+    setReprocessResult(null);
+
+    try {
+      const result = await apiRequest<{ status: string; videos_queued: number; videos_skipped: number; message: string }>(
+        '/admin/reprocess-all',
+        { method: 'POST' }
+      );
+      setReprocessResult({
+        success: true,
+        message: result.message,
+      });
+    } catch (err) {
+      setReprocessResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to trigger reprocessing',
+      });
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 pt-16 flex items-center justify-center">
@@ -124,9 +153,35 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-gray-50 pt-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-          <p className="text-gray-600 mt-2">System metrics and user analytics</p>
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
+            <p className="text-gray-600 mt-2">System metrics and user analytics</p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <button
+              onClick={handleReprocessAll}
+              disabled={reprocessing}
+              className={`px-4 py-2 rounded-md text-white font-medium ${
+                reprocessing
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-orange-600 hover:bg-orange-700'
+              }`}
+            >
+              {reprocessing ? 'Reprocessing...' : 'Reprocess All Videos'}
+            </button>
+            {reprocessResult && (
+              <div
+                className={`text-sm px-3 py-1 rounded ${
+                  reprocessResult.success
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
+                }`}
+              >
+                {reprocessResult.message}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* KPI Cards */}

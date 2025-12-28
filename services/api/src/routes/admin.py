@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.middleware import require_admin, User
 from ..adapters.database import db
+from ..adapters.queue import task_queue
+from ..domain.models import VideoStatus
 from ..domain.admin_schemas import (
     AdminOverviewResponse,
     ThroughputTimeSeriesResponse,
@@ -25,6 +27,8 @@ from ..domain.admin_schemas import (
     FailureByStageItem,
     EnhancedThroughputTimeSeriesResponse,
     EnhancedThroughputDataPoint,
+    # Admin actions
+    ReprocessAllResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -448,3 +452,77 @@ async def get_throughput_timeseries_v2(
     except Exception as e:
         logger.error(f"Failed to fetch enhanced throughput timeseries: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch enhanced throughput timeseries")
+
+
+# ============================================
+# Admin Actions Endpoints
+# ============================================
+
+
+@router.post("/reprocess-all", response_model=ReprocessAllResponse, status_code=202)
+async def reprocess_all_videos(
+    admin: User = Depends(require_admin)
+):
+    """
+    Reprocess all videos in the system.
+
+    This admin-only endpoint will:
+    1. Fetch all videos that are not currently being processed
+    2. Clear their cached data (transcript, summary, etc.)
+    3. Delete existing scenes
+    4. Re-enqueue them for processing
+
+    Use this for system-wide reprocessing after algorithm updates or
+    to recover from batch failures.
+
+    Returns count of videos queued and skipped.
+
+    Requires admin privileges.
+    """
+    logger.info(f"Admin {admin.user_id} triggered reprocess-all operation")
+
+    try:
+        # Get all videos that are not currently processing
+        videos = db.get_all_videos_for_reprocess()
+
+        videos_queued = 0
+        videos_skipped = 0
+
+        for video in videos:
+            try:
+                # Skip if somehow still processing (defensive check)
+                if video.status == VideoStatus.PROCESSING:
+                    videos_skipped += 1
+                    continue
+
+                # Delete existing scenes
+                db.delete_scenes_for_video(video.id)
+
+                # Clear video data for reprocess (keeps original language setting)
+                db.clear_video_for_reprocess(
+                    video_id=video.id,
+                    transcript_language=video.transcript_language,
+                )
+
+                # Enqueue processing job
+                task_queue.enqueue_video_processing(video.id)
+                videos_queued += 1
+
+            except Exception as e:
+                logger.error(f"Failed to queue video {video.id} for reprocessing: {e}")
+                videos_skipped += 1
+
+        logger.info(
+            f"Reprocess-all completed: {videos_queued} queued, {videos_skipped} skipped"
+        )
+
+        return ReprocessAllResponse(
+            status="accepted",
+            videos_queued=videos_queued,
+            videos_skipped=videos_skipped,
+            message=f"Queued {videos_queued} videos for reprocessing, skipped {videos_skipped}",
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to execute reprocess-all: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to execute reprocess-all operation")

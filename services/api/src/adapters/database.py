@@ -1099,6 +1099,31 @@ class Database:
             expires_at=datetime.fromisoformat(row["expires_at"]) if row.get("expires_at") else None,
         )
 
+    # Admin operations
+    def get_all_videos_for_reprocess(self) -> list[Video]:
+        """Get all videos for admin bulk reprocessing.
+
+        Returns videos that are not currently being processed.
+
+        Returns:
+            list[Video]: A list of all videos eligible for reprocessing.
+        """
+        response = (
+            self.client.table("videos")
+            .select("*")
+            .neq("status", VideoStatus.PROCESSING.value)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        videos = []
+        for row in response.data:
+            row["id"] = UUID(row["id"])
+            row["owner_id"] = UUID(row["owner_id"])
+            row["status"] = VideoStatus(row["status"])
+            videos.append(Video(**row))
+        return videos
+
     # Admin Metrics operations
     def get_admin_overview_metrics(self) -> dict:
         """Get overview metrics for admin dashboard.

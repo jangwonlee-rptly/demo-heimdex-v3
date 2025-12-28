@@ -174,3 +174,17 @@ class EnhancedThroughputTimeSeriesResponse(BaseModel):
     """Enhanced throughput time series with Phase 2 metrics."""
 
     data: List[EnhancedThroughputDataPoint] = Field(..., description="Time series data points")
+
+
+# ============================================
+# Admin Actions Schemas
+# ============================================
+
+
+class ReprocessAllResponse(BaseModel):
+    """Response for reprocess all videos operation."""
+
+    status: str = Field(..., description="Operation status ('accepted')")
+    videos_queued: int = Field(..., description="Number of videos queued for reprocessing")
+    videos_skipped: int = Field(..., description="Number of videos skipped (already processing)")
+    message: str = Field(..., description="Human-readable status message")
