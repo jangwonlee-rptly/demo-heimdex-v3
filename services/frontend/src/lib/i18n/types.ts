@@ -333,4 +333,21 @@ export interface Translations {
     exportButton: string;
     close: string;
   };
+
+  // Highlight Reel
+  highlightReel: {
+    selectedScenes: string;
+    totalDuration: string;
+    clear: string;
+    export: string;
+    moveUp: string;
+    moveDown: string;
+    remove: string;
+    reorderHint: string;
+    addToSelection: string;
+    removeFromSelection: string;
+    exportSuccess: string;
+    exportNotAvailable: string;
+    exportError: string;
+  };
 }

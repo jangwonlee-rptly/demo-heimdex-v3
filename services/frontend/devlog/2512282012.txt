@@ -1,0 +1,91 @@
+[2025-12-28 20:12] Complete Korean Translation Update for All UI Components
+File: devlog/2512282012.txt
+
+== What we worked on ==
+- Comprehensive i18n update to ensure all UI components have Korean translations
+- Identified and translated all hardcoded English strings across the application
+- Added new translation sections for components that were missing i18n support
+
+== Changes made ==
+- src/lib/i18n/types.ts:
+  - Added 70+ new translation keys
+  - New sections: searchWeights, fileFilter, export
+  - Extended: dashboard (8 keys), search (15 keys), videoDetails (24 keys)
+
+- src/lib/i18n/translations.ts:
+  - Added English translations for all new keys
+  - Added Korean translations for all new keys
+  - Total file now contains 620+ lines of translations
+
+- src/app/search/page.tsx:
+  - Translated: subtitle, results header, empty states, match percentage
+  - Translated: video player title, scene selection prompt
+  - Translated: visual description, transcript, entities, actions, tags labels
+
+- src/app/dashboard/page.tsx:
+  - Translated: stats cards (Total Videos, Ready, Processing, Pending)
+  - Translated: video count label, upload first video button
+  - Translated: processing started/failed notification messages
+
+- src/app/videos/[id]/page.tsx:
+  - Translated: view mode toggle (Details, Transcript View)
+  - Translated: stat cards (Frame Rate), recording info section
+  - Translated: Location, Camera, Recorded, Settings labels
+  - Translated: Video Summary, Transcript sections with expand/collapse
+  - Translated: All Tags, Clear filter, Scene-by-Scene Breakdown
+  - Translated: Transcript Segments, No transcript, Export to Short
+  - Translated: Video Player section in transcript view
+
+- src/components/SearchWeightControls.tsx:
+  - Added useLanguage hook
+  - Translated: title, loading state, presets label
+  - Translated: status messages (saved, reset, custom active)
+  - Translated: checkbox label, Reset/Save buttons
+  - Translated: toast hint message
+
+- src/components/FileToggleBar.tsx:
+  - Added useLanguage hook
+  - Translated: title, showing X/Y files/scenes
+  - Translated: All/None buttons
+
+- src/components/ExportShortModal.tsx:
+  - Added useLanguage hook
+  - Translated: modal title, scene duration label
+  - Translated: aspect ratio options (Center Crop, Letterbox)
+  - Translated: quality dropdown options
+  - Translated: status badges (Queued, Processing, Ready, Failed)
+  - Translated: download section labels (Size, Resolution, Expires)
+  - Translated: error messages, footer buttons (Cancel, Export, Close)
+
+== Problems encountered ==
+- None significant. The existing i18n infrastructure was well-designed
+  and made it straightforward to add new translation keys.
+
+== How we solved it / Current status ==
+- Systematic approach:
+  1. Explored codebase to understand i18n setup (custom React Context solution)
+  2. Scanned all TSX files to identify hardcoded strings
+  3. Updated types.ts with new translation key interfaces
+  4. Added English translations first, then Korean
+  5. Updated each component to import useLanguage and use t.* keys
+  6. Verified build passes with `npm run build`
+
+- Build status: SUCCESS
+- All components now properly use the translation system
+
+== Key Korean translations added ==
+- 검색 가중치 (Search Weights)
+- 파일별 필터 (Filter by File)
+- 유튜브 쇼츠로 내보내기 (Export to YouTube Short)
+- 장면별 분석 (Scene-by-Scene Breakdown)
+- 전사 세그먼트 (Transcript Segments)
+- 녹화 정보 (Recording Information)
+- 비디오 요약 (Video Summary)
+- 비디오 처리가 시작되었습니다! (Video processing started!)
+- 저장된 기본값 사용 (Use my saved defaults)
+- 기본값으로 저장 (Save as default)
+
+== Next steps / TODOs ==
+- Consider adding translations for admin page if needed for non-English admins
+- Monitor for any new UI strings added in future features
+- Consider adding more languages beyond en/ko if user base expands

@@ -7,12 +7,23 @@ import type { SearchResult, VideoScene, Video } from '@/types';
 import { useLanguage } from '@/lib/i18n';
 import { SearchWeightControls, type Weights, type WeightState } from '@/components/SearchWeightControls';
 import { FileToggleBar } from '@/components/FileToggleBar';
+import { SelectionTray } from '@/components/SelectionTray';
 import {
   groupScenesByVideo,
   filterScenesByToggles,
   extractUniqueVideoIds,
   createInitialToggles,
 } from '@/components/fileToggleUtils';
+import {
+  type SelectedScene,
+  toSelectedScene,
+  addSelected,
+  removeSelected,
+  reorderSelected,
+  totalDuration,
+  isSceneSelected,
+  buildExportPayload,
+} from '@/components/highlightReelUtils';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +44,10 @@ export default function SearchPage() {
 
   // File toggle state
   const [fileToggles, setFileToggles] = useState<Record<string, boolean>>({});
+
+  // Highlight reel selection state (persists across searches)
+  const [selectedScenes, setSelectedScenes] = useState<SelectedScene[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -130,6 +145,55 @@ export default function SearchPage() {
       groupedFiles.map((file) => [file.videoId, false])
     );
     setFileToggles(allDisabled);
+  };
+
+  // Highlight reel selection handlers
+  const handleToggleSelection = (scene: VideoScene, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const selectedScene = toSelectedScene(scene);
+    if (isSceneSelected(selectedScenes, scene.id)) {
+      setSelectedScenes(removeSelected(selectedScenes, scene.id));
+    } else {
+      setSelectedScenes(addSelected(selectedScenes, selectedScene));
+    }
+  };
+
+  const handleRemoveFromSelection = (sceneId: string) => {
+    setSelectedScenes(removeSelected(selectedScenes, sceneId));
+  };
+
+  const handleClearSelection = () => {
+    setSelectedScenes([]);
+  };
+
+  const handleReorderSelection = (fromIndex: number, toIndex: number) => {
+    setSelectedScenes(reorderSelected(selectedScenes, fromIndex, toIndex));
+  };
+
+  const handleExportHighlights = async () => {
+    if (selectedScenes.length === 0) return;
+
+    setIsExporting(true);
+    const payload = buildExportPayload(selectedScenes);
+
+    try {
+      await apiRequest('/highlights/export', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      alert(t.highlightReel?.exportSuccess || 'Export started successfully!');
+    } catch (error: any) {
+      console.log('[Highlight Export] Payload:', payload);
+      // Graceful fallback if endpoint doesn't exist
+      if (error.message?.includes('404') || error.message?.includes('not found')) {
+        alert(t.highlightReel?.exportNotAvailable || 'Export endpoint not available yet. Check console for payload.');
+        console.log('[Highlight Export] Endpoint not available. Payload logged above.');
+      } else {
+        alert(`${t.highlightReel?.exportError || 'Export failed'}: ${error.message}`);
+      }
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleSceneClick = async (scene: VideoScene) => {
@@ -236,6 +300,18 @@ export default function SearchPage() {
           />
         )}
 
+        {/* Selection Tray for Highlight Reel */}
+        <SelectionTray
+          selected={selectedScenes}
+          onRemove={handleRemoveFromSelection}
+          onClear={handleClearSelection}
+          onReorder={handleReorderSelection}
+          onExport={handleExportHighlights}
+          totalDurationS={totalDuration(selectedScenes)}
+          isExporting={isExporting}
+          className="mb-6"
+        />
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Search Results */}
           <div className="card flex flex-col max-h-[calc(100vh-280px)]">
@@ -300,6 +376,25 @@ export default function SearchPage() {
                     style={{ animationDelay: `${index * 0.03}s` }}
                   >
                     <div className="flex gap-3">
+                      {/* Selection Toggle */}
+                      <div
+                        onClick={(e) => handleToggleSelection(scene, e)}
+                        className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center cursor-pointer transition-all ${
+                          isSceneSelected(selectedScenes, scene.id)
+                            ? 'bg-accent-cyan border-accent-cyan text-surface-950'
+                            : 'border-surface-600 hover:border-accent-cyan/50'
+                        }`}
+                        title={isSceneSelected(selectedScenes, scene.id)
+                          ? (t.highlightReel?.removeFromSelection || 'Remove from selection')
+                          : (t.highlightReel?.addToSelection || 'Add to selection')
+                        }
+                      >
+                        {isSceneSelected(selectedScenes, scene.id) && (
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </div>
                       {scene.thumbnail_url && (
                         <div className="thumbnail w-28 h-[70px] flex-shrink-0">
                           <img
