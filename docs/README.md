@@ -7,6 +7,7 @@ Welcome to the Heimdex documentation. This directory contains comprehensive guid
 ```
 docs/
 ├── architecture/       # System architecture and design
+├── clip/              # CLIP visual search documentation
 ├── deployment/         # Deployment guides and checklists
 ├── features/          # Feature specifications and admin metrics
 ├── implementation/    # Phase summaries and migration guides
@@ -31,6 +32,37 @@ Background worker (Dramatiq) architecture:
 - Actor patterns and message passing
 - Task queuing and job processing
 - Retry strategies and error handling
+
+---
+
+## CLIP Visual Search
+
+### [CLIP Overview](./clip/README.md)
+**Main entry point for CLIP visual search documentation**:
+- Complete feature overview and architecture
+- Visual modes (recall, rerank, auto, skip)
+- Visual intent router
+- Testing and deployment
+- Troubleshooting guide
+
+### [CLIP Implementation Guide](./clip/IMPLEMENTATION.md)
+Detailed implementation guide:
+- Architecture and code changes
+- Configuration reference
+- Search mode behavior
+
+### [CLIP Quick Reference](./clip/QUICK_REFERENCE.md)
+Quick reference for common tasks:
+- Setup commands
+- Configuration cheat sheet
+- Debugging commands
+- Common issues
+
+### [CLIP Implementation Summary](./clip/SUMMARY.md)
+Executive summary of CLIP implementation:
+- Design decisions
+- File changes
+- Performance impact
 
 ---
 
@@ -230,6 +262,8 @@ Historical development notes and decisions
 - **Deploy to production** → [Deployment Guide](./deployment/README.md)
 - **Understand the architecture** → [Architecture Overview](./architecture/OVERVIEW.md)
 - **Understand how search works** → [Search Pipeline](./search-pipeline.md)
+- **Understand CLIP visual search** → [CLIP Overview](./clip/README.md)
+- **Configure CLIP settings** → [CLIP Quick Reference](./clip/QUICK_REFERENCE.md)
 - **Debug search results** → [Search Pipeline: Observability & Debugging](./search-pipeline.md#observability--debugging)
 - **Understand why Scene A ranked above Scene B** → [Deep Dive: Scoring Signals](./search-pipeline-deep-dive.md#scoring-signal-table)
 - **Optimize search performance** → [Search Pipeline: Performance & Unit Economics](./search-pipeline.md#performance--unit-economics)
@@ -251,6 +285,7 @@ When adding new documentation:
 
 1. **Choose the right directory**:
    - `architecture/` - System design and architecture
+   - `clip/` - CLIP visual search documentation
    - `deployment/` - Deployment guides and procedures
    - `features/` - Feature specifications
    - `implementation/` - Implementation summaries and migrations
@@ -266,4 +301,4 @@ When adding new documentation:
 
 ---
 
-**Last Updated:** 2025-12-24
+**Last Updated:** 2025-12-28

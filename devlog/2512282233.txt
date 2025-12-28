@@ -1,0 +1,78 @@
+[2025-12-28 22:33] Highlight Reel Export - Full Stack Implementation
+File: devlog/2512282233.txt
+
+== What we worked on ==
+- Implemented the Highlight Reel Export feature end-to-end
+- This feature allows users to select multiple scenes from search results,
+  reorder them, and export as a single concatenated MP4 video
+- Full async job processing with FFmpeg via Dramatiq worker
+
+== Changes made ==
+
+Backend (API):
+- infra/migrations/023_add_highlight_export_jobs.sql: New table with RLS policies
+- services/api/src/domain/models.py: Added HighlightJobStatus enum, HighlightExportJob class
+- services/api/src/routes/highlights.py: New router with POST /export and GET /jobs/{job_id}
+- services/api/src/adapters/database.py: CRUD methods for highlight_export_jobs
+- services/api/src/adapters/queue.py: Added enqueue_highlight_export method
+- services/api/src/main.py: Registered highlights router at /v1/highlights
+
+Backend (Worker):
+- libs/tasks/highlight_export.py: Dramatiq actor for video processing
+  - Downloads source videos from Supabase storage
+  - Cuts clips with FFmpeg (re-encoding for compatibility)
+  - Concatenates clips (stream copy with re-encode fallback)
+  - Uploads final video, updates job with presigned URL
+- libs/tasks/__init__.py: Export process_highlight_export
+- services/worker/src/tasks.py: Import new task
+- services/worker/src/adapters/database.py: Added get/update_highlight_export_job methods
+
+Frontend:
+- src/components/SelectionTray.tsx: UI for managing selected scenes with drag-and-drop
+- src/components/highlightReelUtils.ts: Utility functions for selection management
+- src/components/__tests__/highlightReelUtils.test.js: 51 test cases
+- src/components/HighlightJobStatus.tsx: Job status display with polling
+- src/app/search/page.tsx: Integrated selection and export flow
+- src/lib/i18n/types.ts, translations.ts: i18n keys for EN and KO
+
+== Problems encountered ==
+
+Problem 1: CORS error when testing export from frontend
+- Symptom: "No 'Access-Control-Allow-Origin' header is present on the requested resource"
+- Frontend was getting blocked by CORS policy on POST to /v1/highlights/export
+
+Problem 2: Worker crash with AttributeError
+- Symptom: "'Database' object has no attribute 'update_highlight_export_job'"
+- Worker was failing immediately when processing highlight export jobs
+
+== How we tried to solve it ==
+
+Problem 1:
+- Initial suspicion was CORS middleware configuration
+- Investigated and realized CORS errors often mask underlying 500 errors
+- Checked if the database migration had been run
+
+Problem 2:
+- Read the worker's database adapter code
+- Discovered worker has its own separate Database class in services/worker/src/adapters/
+
+== How we solved it / Current status ==
+
+Problem 1 - Root cause: Database migration not run on production
+- The highlight_export_jobs table didn't exist
+- Insert failed with 500 error, which bypassed CORS middleware
+- Solution: User ran migration SQL in Supabase SQL Editor
+
+Problem 2 - Root cause: Worker has separate database adapter
+- The API and Worker services each have their own Database class
+- I had only added methods to API's adapter, not Worker's
+- Solution: Added get_highlight_export_job and update_highlight_export_job to
+  services/worker/src/adapters/database.py
+
+Current status: Both fixes committed, awaiting deployment to production
+
+== Next steps / TODOs ==
+- Redeploy worker service to pick up new database methods
+- Test full export flow end-to-end in production
+- Consider adding job history endpoint for users to see past exports
+- Consider adding cleanup job for expired highlight exports in storage

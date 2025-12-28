@@ -1,97 +1,281 @@
-# RunPod CLIP Worker
+# CLIP RunPod Worker - Always-On HTTP Service (v2.0)
 
-GPU-accelerated CLIP embedding generation service for Heimdex, deployed on RunPod Serverless.
+Production-grade CLIP embedding service for RunPod Pods. Exposes HTTP endpoints for image and text embedding generation.
 
 ## Overview
 
-This service handles CLIP image embedding generation on GPU infrastructure, offloading CPU-intensive inference from the main Railway deployment. It receives image URLs, downloads the images, generates embeddings using CLIP ViT-B-32, and returns normalized 512-dimensional vectors.
+This service has been **rewritten from RunPod Serverless to Always-On HTTP** to:
+- Support batch processing with controlled GPU batching
+- Enable text embedding for visual search
+- Provide predictable performance and better observability
+- Reduce cold-start latency with always-on deployment
 
 ## Architecture
 
+- **Framework**: FastAPI + uvicorn
 - **Model**: OpenAI CLIP ViT-B-32 (512 dimensions)
-- **Framework**: OpenCLIP + PyTorch
-- **Deployment**: RunPod Serverless (GPU)
+- **Deployment**: RunPod Pod (always-on HTTP)
 - **Security**: HMAC-based request authentication
-- **Cold Start Optimization**: Model pre-downloaded in Docker image
+- **Batching**: Two-phase pipeline (concurrent download → single GPU batch)
 
 ## Files
 
-- `handler.py` - Main RunPod serverless handler
-- `Dockerfile` - GPU-optimized container image
-- `requirements.txt` - Python dependencies
-- `test_input.json` - Example input for testing
-- `.dockerignore` - Docker build exclusions
+```
+services/clip-runpod-worker/
+├── app/
+│   ├── __init__.py         # Package metadata
+│   ├── main.py             # FastAPI application + routes
+│   ├── model.py            # CLIP model loading + inference
+│   ├── schemas.py          # Pydantic request/response models
+│   ├── security.py         # HMAC authentication
+│   ├── download.py         # Image download with concurrency control
+│   └── settings.py         # Environment configuration
+├── tests/
+│   ├── test_auth.py        # Authentication tests
+│   └── test_schemas.py     # Schema validation tests
+├── Dockerfile.pod          # Production Dockerfile (CUDA 12.4)
+├── requirements.txt        # Pinned Python dependencies
+├── Makefile                # Development tasks
+└── README.pod.md           # This file
+```
 
-## Input/Output Contract
+## API Endpoints
 
-### Input Schema
+### Health Check
 
+**GET** `/health`
+
+Returns service status and model metadata.
+
+**Response:**
 ```json
 {
-  "input": {
-    "image_url": "https://signed-url-to-thumbnail",
-    "request_id": "scene-uuid-or-identifier",
-    "normalize": true,
-    "model": "ViT-B-32",
-    "auth": {
-      "ts": 1730000000,
-      "sig": "hmac_sha256_signature"
-    }
+  "status": "ok",
+  "model_name": "ViT-B-32",
+  "pretrained": "openai",
+  "device": "cuda",
+  "torch_version": "2.5.1",
+  "cuda_version": "12.4",
+  "uptime_seconds": 3600.5
+}
+```
+
+### Single Image Embedding
+
+**POST** `/v1/embed/image`
+
+**Request:**
+```json
+{
+  "image_url": "https://storage.example.com/image.jpg",
+  "request_id": "scene-123",
+  "normalize": true,
+  "auth": {
+    "ts": 1703001234,
+    "sig": "abc123..."
   }
 }
 ```
 
-**Fields:**
-- `image_url` (required): Publicly accessible URL to image (typically signed URL from Supabase Storage)
-- `request_id` (optional): Identifier for request tracing (e.g., scene ID)
-- `normalize` (optional): Whether to L2-normalize embedding (default: true)
-- `model` (optional): Model name (informational; only ViT-B-32 supported currently)
-- `auth` (required): Authentication object
-  - `ts`: Unix timestamp when request was created
-  - `sig`: HMAC-SHA256 signature of `image_url|ts` using shared secret
-
-### Output Schema
-
-**Success:**
+**Response:**
 ```json
 {
-  "request_id": "scene-uuid",
+  "request_id": "scene-123",
   "embedding": [0.123, -0.456, ...],
   "dim": 512,
-  "model": "ViT-B-32",
+  "model_name": "ViT-B-32",
   "pretrained": "openai",
+  "device": "cuda",
   "normalized": true,
   "timings": {
-    "download_ms": 234.56,
-    "inference_ms": 89.12,
-    "total_ms": 323.68
+    "download_ms": 150.5,
+    "inference_ms": 45.2,
+    "total_ms": 195.7
   }
 }
 ```
 
-**Error:**
+### Batch Image Embedding
+
+**POST** `/v1/embed/image-batch`
+
+**Request:**
 ```json
 {
-  "error": "Error message description",
-  "request_id": "scene-uuid"
+  "items": [
+    {
+      "image_url": "https://storage.example.com/img1.jpg",
+      "request_id": "scene-1",
+      "normalize": true,
+      "auth": {"ts": 1703001234, "sig": "abc123..."}
+    },
+    {
+      "image_url": "https://storage.example.com/img2.jpg",
+      "request_id": "scene-2",
+      "normalize": true,
+      "auth": {"ts": 1703001234, "sig": "def456..."}
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "request_id": "scene-1",
+      "embedding": [...],
+      "dim": 512,
+      "normalized": true,
+      "timings": {"download_ms": 75.0, "inference_ms": 22.5, "total_ms": 97.5}
+    },
+    {
+      "request_id": "scene-2",
+      "error": {
+        "code": "DOWNLOAD_ERROR",
+        "message": "Image download timeout after 30s",
+        "request_id": "scene-2"
+      }
+    }
+  ],
+  "model_name": "ViT-B-32",
+  "pretrained": "openai",
+  "device": "cuda",
+  "batch_timings": {
+    "total_download_ms": 150.0,
+    "total_inference_ms": 45.0,
+    "total_ms": 195.0
+  }
+}
+```
+
+### Text Embedding
+
+**POST** `/v1/embed/text`
+
+**Request:**
+```json
+{
+  "text": "a person walking in the rain",
+  "request_id": "query-1",
+  "normalize": true,
+  "auth": {
+    "ts": 1703001234,
+    "sig": "xyz789..."
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "request_id": "query-1",
+  "embedding": [...],
+  "dim": 512,
+  "model_name": "ViT-B-32",
+  "pretrained": "openai",
+  "device": "cuda",
+  "normalized": true,
+  "timings": {
+    "download_ms": null,
+    "inference_ms": 12.3,
+    "total_ms": 12.3
+  }
 }
 ```
 
 ## Environment Variables
 
-### Required (RunPod Endpoint)
+### Required
 
-- `EMBEDDING_HMAC_SECRET` - Shared secret for HMAC authentication (must match Heimdex worker)
+- `EMBEDDING_HMAC_SECRET` - HMAC secret for authentication (must match worker client)
 
-### Optional (RunPod Endpoint)
+### Optional
 
-- `CLIP_MODEL_NAME` - Model architecture (default: `ViT-B-32`)
-- `CLIP_PRETRAINED` - Pretrained weights (default: `openai`)
-- `MAX_IMAGE_SIZE_BYTES` - Max image download size (default: `10485760` = 10MB)
-- `IMAGE_DOWNLOAD_TIMEOUT` - Image download timeout in seconds (default: `30`)
+**Server:**
+- `HOST` - Server host (default: `0.0.0.0`)
+- `PORT` - Server port (default: `8000`)
+- `WORKERS` - Uvicorn workers (default: `1`, keep at 1 for GPU)
+- `LOG_LEVEL` - Logging level (default: `INFO`)
+
+**Security:**
+- `ALLOW_INSECURE_AUTH` - Allow requests without auth (dev only, default: `false`)
 - `AUTH_TIME_WINDOW_SECONDS` - HMAC timestamp tolerance (default: `120`)
 
-## Deployment Instructions
+**Model:**
+- `CLIP_MODEL_NAME` - Model architecture (default: `ViT-B-32`)
+- `CLIP_PRETRAINED` - Pretrained weights (default: `openai`)
+
+**Limits:**
+- `MAX_IMAGE_SIZE_BYTES` - Max image size (default: `10485760` = 10MB)
+- `IMAGE_DOWNLOAD_TIMEOUT_S` - Download timeout (default: `30`)
+- `DOWNLOAD_CONCURRENCY` - Max concurrent downloads (default: `8`)
+- `MAX_BATCH_SIZE` - Max batch size (default: `16`)
+- `TOTAL_REQUEST_TIMEOUT_S` - Total request timeout (default: `300`)
+
+## Authentication
+
+### HMAC Signature Generation
+
+**For image embedding:**
+```python
+import hashlib
+import hmac
+import time
+
+secret = "your-hmac-secret"
+image_url = "https://storage.example.com/image.jpg"
+ts = int(time.time())
+
+# Canonical message: method|path|image_url
+canonical = f"POST|/v1/embed/image|{image_url}"
+message = f"{canonical}|{ts}"
+
+sig = hmac.new(
+    secret.encode("utf-8"),
+    message.encode("utf-8"),
+    hashlib.sha256
+).hexdigest()
+
+# Include in request:
+# {"image_url": "...", "auth": {"ts": ts, "sig": sig}}
+```
+
+**For text embedding:**
+```python
+import hashlib
+import hmac
+import time
+
+secret = "your-hmac-secret"
+text = "a person walking in the rain"
+ts = int(time.time())
+
+# Canonical message: method|path|text_hash
+text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+canonical = f"POST|/v1/embed/text|{text_hash}"
+message = f"{canonical}|{ts}"
+
+sig = hmac.new(
+    secret.encode("utf-8"),
+    message.encode("utf-8"),
+    hashlib.sha256
+).hexdigest()
+```
+
+**For batch requests:**
+- Each item has its own `auth` field
+- Each signature includes that specific item's image URL
+- Canonical message: `POST|/v1/embed/image-batch|{item.image_url}`
+
+### Security Features
+
+- **Replay protection**: Timestamp must be within 120 seconds (configurable)
+- **HMAC-SHA256**: Prevents tampering and unauthorized access
+- **Dev mode**: Set `ALLOW_INSECURE_AUTH=1` for local testing (never in production)
+
+## Deployment
 
 ### 1. Build Docker Image
 
@@ -99,279 +283,358 @@ This service handles CLIP image embedding generation on GPU infrastructure, offl
 cd services/clip-runpod-worker
 
 # Build image
-docker build -t your-dockerhub-username/heimdex-clip-worker:latest .
+docker build -f Dockerfile.pod -t your-dockerhub-username/clip-pod-worker:2.0 .
 
 # Test locally (CPU mode)
-docker run --rm \
-  -e EMBEDDING_HMAC_SECRET="your-secret-here" \
-  your-dockerhub-username/heimdex-clip-worker:latest
+docker run --rm -p 8000:8000 \
+  -e EMBEDDING_HMAC_SECRET="test-secret" \
+  -e ALLOW_INSECURE_AUTH=1 \
+  your-dockerhub-username/clip-pod-worker:2.0
 ```
 
-### 2. Push to Docker Registry
+**Verify local startup:**
+```bash
+# In another terminal
+curl http://localhost:8000/health
+```
+
+### 2. Push to Registry
 
 ```bash
-# Login to Docker Hub (or your registry)
 docker login
-
-# Push image
-docker push your-dockerhub-username/heimdex-clip-worker:latest
+docker push your-dockerhub-username/clip-pod-worker:2.0
 ```
 
-### 3. Create RunPod Endpoint
+### 3. Create RunPod Pod
 
-1. Go to https://www.runpod.io/console/serverless
-2. Click "New Endpoint"
-3. Configure:
-   - **Name**: `heimdex-clip-worker`
-   - **Container Image**: `your-dockerhub-username/heimdex-clip-worker:latest`
-   - **GPU Type**: Select GPU tier (e.g., RTX 4090, A100)
-   - **Workers**:
-     - Min: 0 (auto-scale to zero)
-     - Max: 3-5 (adjust based on load)
-   - **Idle Timeout**: 30 seconds
-   - **Execution Timeout**: 60 seconds
-   - **Environment Variables**:
-     ```
-     EMBEDDING_HMAC_SECRET=<generate-strong-random-secret>
-     ```
+1. Go to https://www.runpod.io/console/pods
+2. Click **Deploy**
+3. **GPU Configuration**:
+   - GPU Type: RTX 4090 (recommended for dev) or A100 (production)
+   - GPU Count: 1
+   - Container Disk: 20GB
+4. **Container Image**:
+   - `your-dockerhub-username/clip-pod-worker:2.0`
+5. **Expose HTTP Ports**:
+   - HTTP Port: `8000`
+   - ✅ Enable **HTTP Service** (this generates a proxy URL)
+6. **Environment Variables**:
+   ```
+   EMBEDDING_HMAC_SECRET=<generate-strong-random-secret>
+   LOG_LEVEL=INFO
+   ```
+7. Click **Deploy**
 
-4. Click "Deploy"
-5. Copy the **Endpoint ID** (format: `xxxxxxxxxx`)
-6. Copy your **API Key** from RunPod settings
+### 4. Get Pod Proxy URL
 
-### 4. Configure Heimdex Worker (Railway)
+After deployment:
+1. Go to **Pods** → Select your pod
+2. Copy the **Proxy URL** (format: `https://<pod-id>-8000.proxy.runpod.net`)
+3. Test it:
+   ```bash
+   curl https://<pod-id>-8000.proxy.runpod.net/health
+   ```
 
-Add these environment variables to your Railway worker service:
-
-```bash
-# RunPod Configuration
-CLIP_INFERENCE_BACKEND=runpod
-RUNPOD_API_KEY=<your-runpod-api-key>
-RUNPOD_CLIP_ENDPOINT_ID=<your-endpoint-id>
-RUNPOD_TIMEOUT_S=60
-
-# Security (MUST match RunPod secret)
-EMBEDDING_HMAC_SECRET=<same-secret-as-runpod>
-
-# CLIP Configuration
-CLIP_MODEL_NAME=ViT-B-32
-CLIP_MODEL_VERSION=openai-vit-b-32-v1
-```
-
-## Testing
-
-### Local Testing (Without RunPod)
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variable
-export EMBEDDING_HMAC_SECRET="test-secret"
-
-# Run handler locally
-python handler.py
-```
-
-### Test with RunPod CLI
-
-```bash
-# Install RunPod CLI
-pip install runpod
-
-# Generate HMAC signature
-python -c "
-import hmac, hashlib, time
-secret = 'your-secret'
-image_url = 'https://example.com/image.jpg'
-ts = int(time.time())
-message = f'{image_url}|{ts}'
-sig = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-print(f'ts: {ts}')
-print(f'sig: {sig}')
-"
-
-# Create test_request.json with actual signature
-cat > test_request.json << EOF
-{
-  "input": {
-    "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg",
-    "request_id": "test-001",
-    "normalize": true,
-    "auth": {
-      "ts": <timestamp-from-above>,
-      "sig": "<signature-from-above>"
-    }
-  }
-}
-EOF
-
-# Test endpoint
-curl -X POST https://api.runpod.ai/v2/<ENDPOINT_ID>/runsync \
-  -H "Authorization: Bearer <YOUR_API_KEY>" \
-  -H "Content-Type: application/json" \
-  -d @test_request.json
-```
-
-### Expected Response
-
+**Expected response:**
 ```json
 {
-  "id": "sync-request-id",
-  "status": "COMPLETED",
-  "output": {
-    "request_id": "test-001",
-    "embedding": [0.123, -0.456, ...],
-    "dim": 512,
-    "model": "ViT-B-32",
-    "pretrained": "openai",
-    "normalized": true,
-    "timings": {
-      "download_ms": 150.0,
-      "inference_ms": 45.0,
-      "total_ms": 195.0
-    }
-  }
+  "status": "ok",
+  "model_name": "ViT-B-32",
+  "pretrained": "openai",
+  "device": "cuda",
+  ...
 }
 ```
 
-## Smoke Test Script
+### 5. Configure Heimdex Worker
 
-See `../worker/src/scripts/test_runpod_clip.py` for an end-to-end smoke test that:
-1. Generates signed URL from Supabase Storage
-2. Creates HMAC signature
-3. Calls RunPod endpoint
-4. Validates response shape and dimensions
+Update `services/worker/.env` (or Railway environment):
+
+```bash
+# Switch to RunPod Pod backend
+CLIP_INFERENCE_BACKEND=runpod_pod
+
+# RunPod Pod configuration
+CLIP_POD_BASE_URL=https://<pod-id>-8000.proxy.runpod.net
+
+# Security (MUST match Pod secret)
+EMBEDDING_HMAC_SECRET=<same-secret-as-pod>
+
+# Model metadata
+CLIP_MODEL_NAME=ViT-B-32
+```
+
+## Local Development
+
+### Setup
+
+```bash
+cd services/clip-runpod-worker
+
+# Create virtual environment
+python3.11 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # CPU for local dev
+```
+
+### Run Locally
+
+```bash
+# Set environment
+export EMBEDDING_HMAC_SECRET="test-secret"
+export ALLOW_INSECURE_AUTH=1  # Dev mode only
+export LOG_LEVEL=DEBUG
+
+# Run server
+make run
+# OR
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Test Endpoints
+
+**Health check:**
+```bash
+curl http://localhost:8000/health
+```
+
+**Single image embedding (with auth):**
+```bash
+python3 << 'EOF'
+import hashlib
+import hmac
+import time
+import requests
+
+secret = "test-secret"
+image_url = "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=512"
+ts = int(time.time())
+
+canonical = f"POST|/v1/embed/image|{image_url}"
+message = f"{canonical}|{ts}"
+sig = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+response = requests.post(
+    "http://localhost:8000/v1/embed/image",
+    json={
+        "image_url": image_url,
+        "request_id": "test-001",
+        "normalize": True,
+        "auth": {"ts": ts, "sig": sig}
+    }
+)
+
+print(f"Status: {response.status_code}")
+print(f"Dim: {response.json()['dim']}")
+print(f"First 5 values: {response.json()['embedding'][:5]}")
+EOF
+```
+
+**Text embedding:**
+```bash
+python3 << 'EOF'
+import hashlib
+import hmac
+import time
+import requests
+
+secret = "test-secret"
+text = "a person walking in the rain"
+ts = int(time.time())
+
+text_hash = hashlib.sha256(text.encode()).hexdigest()
+canonical = f"POST|/v1/embed/text|{text_hash}"
+message = f"{canonical}|{ts}"
+sig = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+response = requests.post(
+    "http://localhost:8000/v1/embed/text",
+    json={
+        "text": text,
+        "request_id": "query-001",
+        "normalize": True,
+        "auth": {"ts": ts, "sig": sig}
+    }
+)
+
+print(f"Status: {response.status_code}")
+print(f"Dim: {response.json()['dim']}")
+print(f"First 5 values: {response.json()['embedding'][:5]}")
+EOF
+```
+
+### Run Tests
+
+```bash
+make test
+# OR
+pytest tests/ -v
+```
+
+## Makefile Targets
+
+```bash
+make install        # Install dependencies
+make run            # Run server locally
+make test           # Run tests
+make smoke          # Run smoke test (health + 1 image + 1 text)
+make docker-build   # Build Docker image
+make docker-run     # Run Docker container locally
+make lint           # Run linting (ruff)
+make format         # Format code (black)
+```
 
 ## Performance
 
-**Typical Latency (GPU):**
-- Cold start (first request): ~5-10 seconds (model loading)
-- Warm request: ~200-500ms total
-  - Image download: 50-200ms
-  - Inference: 30-150ms (depending on GPU)
+**Typical Latency (GPU - RTX 4090):**
+- Startup time: ~10-15 seconds (model loading)
+- Single image: 50-150ms total (30-80ms inference)
+- Batch (16 images): 200-400ms total (~100-200ms for batch inference)
+- Text: 10-30ms
 
-**Recommended GPU Tiers:**
-- Development: RTX 4090 (~$0.50/hr)
-- Production: A100 (~$1.50/hr) or L40S (~$1.00/hr)
+**Batching Benefits:**
+- Single forward pass for batch → ~10x faster than sequential
+- Downloads run concurrently → no I/O bottleneck
+- Controlled concurrency prevents OOM
 
-## Security
+**Recommended GPU:**
+- **Development**: RTX 4090 (~$0.50/hr on RunPod)
+- **Production**: A100 (~$1.50/hr) or L40S (~$1.00/hr)
 
-### HMAC Authentication
+## Error Handling
 
-Prevents unauthorized access to the RunPod endpoint:
+All errors return structured JSON:
 
-1. Heimdex worker generates signature:
-   ```python
-   message = f"{image_url}|{current_timestamp}"
-   signature = hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
-   ```
+```json
+{
+  "error": {
+    "code": "AUTH_FAILED",
+    "message": "HMAC signature mismatch",
+    "request_id": "scene-123"
+  }
+}
+```
 
-2. RunPod worker validates:
-   - Timestamp within 120 seconds (prevents replay attacks)
-   - Signature matches expected value
+**Error Codes:**
+- `AUTH_FAILED` - Authentication failure (401)
+- `DOWNLOAD_ERROR` - Image download failure (400)
+- `INFERENCE_ERROR` - Model inference failure (500)
+- `BATCH_TOO_LARGE` - Batch exceeds max size (400)
 
-### Image Download Safety
-
-- Max image size: 10MB (configurable)
-- Download timeout: 30 seconds
-- Streaming download with size checks
-- Validates image format after download
+**Batch error handling:**
+- Each item can succeed or fail independently
+- Successful items return embeddings
+- Failed items return error details
+- HTTP 200 with mixed results (check per-item status)
 
 ## Monitoring
 
-### RunPod Dashboard
-
-Monitor in RunPod console:
-- Request rate
-- Error rate
-- Average latency
-- Worker scaling (active/idle)
-- GPU utilization
-
 ### Logs
 
-View logs in RunPod console:
+Structured JSON logs with request tracing:
 ```
-[INFO] Processing request: scene-abc-123
-[INFO] Image downloaded successfully: (1920, 1080)
-[INFO] Generated embedding with 512 dimensions
-[INFO] Request scene-abc-123 completed in 0.234s (download: 0.150s, inference: 0.084s)
+2025-12-23 10:15:23 [INFO] app.main - Processing image embedding request: request_id=scene-123
+2025-12-23 10:15:23 [INFO] app.download - Image downloaded successfully: size=(1920, 1080), bytes=234567, request_id=scene-123
+2025-12-23 10:15:23 [INFO] app.main - Image embedding completed: request_id=scene-123, total_ms=195.7, download_ms=150.5, inference_ms=45.2
 ```
+
+### Health Checks
+
+RunPod automatically monitors `/health` endpoint:
+- Interval: 30 seconds
+- Timeout: 10 seconds
+- Unhealthy after 3 failures
+
+### Metrics to Monitor
+
+- Request rate (requests/second)
+- Latency (p50, p95, p99)
+- Error rate
+- GPU utilization
+- Memory usage
+- Batch size distribution
 
 ## Troubleshooting
 
-### Common Issues
+### Pod not starting
 
-**1. Authentication failures**
-```json
-{"error": "Authentication failed", "request_id": "..."}
+**Check logs:**
+```bash
+# In RunPod console → Pods → Logs
 ```
+
+**Common issues:**
+- Model download failed → Check HF_HOME cache
+- OOM during startup → Reduce container size or use larger GPU
+- Port not exposed → Verify HTTP port 8000 is enabled
+
+### Authentication failures
+
+```json
+{"error": {"code": "AUTH_FAILED", "message": "HMAC signature mismatch"}}
+```
+
+**Fixes:**
 - Verify `EMBEDDING_HMAC_SECRET` matches on both sides
 - Check timestamp is current (within 120 seconds)
-- Ensure signature calculation matches exactly
+- Verify canonical message format matches exactly
 
-**2. Image download timeouts**
+### Download timeouts
+
 ```json
-{"error": "Image download failed: Timeout", "request_id": "..."}
+{"error": {"code": "DOWNLOAD_ERROR", "message": "Image download timeout after 30s"}}
 ```
-- Increase `IMAGE_DOWNLOAD_TIMEOUT`
+
+**Fixes:**
+- Increase `IMAGE_DOWNLOAD_TIMEOUT_S`
 - Verify image URL is publicly accessible
-- Check signed URL expiration
+- Check Supabase signed URL expiration
 
-**3. Cold start latency**
-- First request after idle period loads model (~5-10s)
-- Increase min workers to 1 for always-warm endpoint
-- Trade-off: Higher cost vs lower latency
+### Batch inference OOM
 
-**4. Out of memory errors**
-- Reduce `MAX_IMAGE_SIZE_BYTES`
-- Use smaller GPU tier (may increase per-request cost)
-- Ensure images are reasonable size (<5MB recommended)
-
-## Rollback Plan
-
-If RunPod endpoint has issues, rollback to local CLIP:
-
+**Reduce batch size:**
 ```bash
-# In Railway worker service
-CLIP_INFERENCE_BACKEND=local
+MAX_BATCH_SIZE=8  # Default is 16
 ```
 
-This will use the existing `ClipEmbedder` adapter on CPU.
+Or use larger GPU tier.
 
-Alternatively, disable CLIP entirely:
-```bash
-CLIP_INFERENCE_BACKEND=off
-```
+## Migration from Serverless
 
-## Cost Optimization
+**Old (Serverless):**
+- RunPod Serverless endpoint (`/runsync`)
+- Single image only
+- Cold starts (0→1 workers)
+- No text embedding
 
-**Minimize cold starts:**
-- Set min workers to 1 during peak hours
-- Use webhook to keep endpoint warm if needed
+**New (Pod HTTP):**
+- Always-on HTTP service (proxy URL)
+- Batch + single image + text
+- Always warm (no cold starts)
+- Better observability
 
-**Right-size GPU:**
-- Start with RTX 4090 for development
-- Monitor GPU utilization in RunPod dashboard
-- Upgrade to A100 only if seeing GPU bottlenecks
-
-**Batch processing:**
-- For backfill operations, process in batches with controlled concurrency
-- Use worker pool to keep RunPod endpoint warm
+**Client code changes:**
+- See `services/worker/src/adapters/clip_inference.py`
+- Backend: `runpod_serverless` → `runpod_pod`
+- URL: RunPod API → Pod proxy URL
+- Batch support via `/v1/embed/image-batch`
 
 ## Next Steps
 
-1. Deploy RunPod endpoint
-2. Configure Heimdex worker environment variables
-3. Run smoke test to verify connectivity
-4. Process test video to confirm end-to-end flow
-5. Monitor logs and performance
-6. Adjust worker scaling based on load
+1. ✅ Deploy Pod and verify `/health`
+2. ✅ Test single image embedding
+3. ✅ Test batch embedding (2-4 images)
+4. ✅ Test text embedding
+5. Update worker client to use new backend
+6. Run end-to-end video processing test
+7. Monitor performance and adjust settings
+8. Consider auto-scaling based on load
 
 ## Support
 
-For issues or questions:
-- RunPod Documentation: https://docs.runpod.io/
-- OpenCLIP Documentation: https://github.com/mlfoundations/open_clip
-- Heimdex Internal: See `docs/clip-runpod-migration.md`
+- **RunPod Docs**: https://docs.runpod.io/
+- **OpenCLIP**: https://github.com/mlfoundations/open_clip
+- **FastAPI**: https://fastapi.tiangolo.com/
