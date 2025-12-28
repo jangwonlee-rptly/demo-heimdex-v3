@@ -1420,7 +1420,10 @@ class SidecarBuilder:
 
             # Step 3: Call RunPod CLIP endpoint
             request_id = f"scene-{scene_index}"
-            logger.debug(f"Scene {scene_index}: Calling RunPod CLIP endpoint")
+            logger.info(
+                f"🎬 Scene {scene_index}: Calling RunPod GPU for CLIP embedding "
+                f"(backend={settings.clip_inference_backend})"
+            )
 
             result = clip_inference.embed_image_url(
                 image_url=signed_url,
@@ -1455,9 +1458,11 @@ class SidecarBuilder:
             }
 
             logger.info(
-                f"Scene {scene_index}: RunPod CLIP embedding generated "
-                f"(dim={len(embedding)}, inference={metadata['inference_time_ms']:.1f}ms, "
-                f"total={metadata['total_time_ms']:.1f}ms)"
+                f"✅ Scene {scene_index}: RunPod GPU embedding complete! "
+                f"device={metadata.get('device', 'gpu')}, "
+                f"dim={len(embedding)}, "
+                f"inference={metadata['inference_time_ms']:.1f}ms, "
+                f"total={metadata['total_time_ms']:.1f}ms"
             )
 
             return embedding, metadata

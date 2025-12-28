@@ -311,13 +311,13 @@ Check worker logs: `docker-compose logs worker`
 
 Ready to deploy Heimdex? See the comprehensive deployment guide:
 
-📘 **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide with platform comparisons
+📘 **[docs/deployment/README.md](docs/deployment/README.md)** - Complete deployment guide with platform comparisons
 
 **Quick Start**:
 1. Run pre-deployment check: `./scripts/pre-deploy-check.sh`
 2. Choose platform (Railway.app recommended)
-3. Follow step-by-step guide in DEPLOYMENT.md
-4. Use [DEPLOYMENT-CHECKLIST.md](DEPLOYMENT-CHECKLIST.md) to track progress
+3. Follow step-by-step guide in [docs/deployment/README.md](docs/deployment/README.md)
+4. Use [docs/deployment/CHECKLIST.md](docs/deployment/CHECKLIST.md) to track progress
 
 **Recommended Platform**: [Railway.app](https://railway.app)
 - Native Docker Compose support
@@ -327,6 +327,20 @@ Ready to deploy Heimdex? See the comprehensive deployment guide:
 - ~$20-30/month
 
 **Alternative Platforms**: Render.com, DigitalOcean App Platform, Fly.io
+
+## Documentation
+
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
+
+- **[Architecture](docs/architecture/)** - System design and architecture patterns
+- **[Deployment](docs/deployment/)** - Deployment guides and checklists
+- **[Features](docs/features/)** - Feature specifications and admin metrics
+- **[Implementation](docs/implementation/)** - Phase summaries and migration guides
+- **[Operations](docs/operations/)** - Backfill, troubleshooting, and maintenance
+- **[Search](docs/search/)** - Search pipeline and hybrid search documentation
+- **[Testing](docs/testing/)** - Testing guides and procedures
+
+Start here: **[docs/README.md](docs/README.md)**
 
 ## Production Considerations
 
@@ -343,7 +357,7 @@ Key considerations for production deployment:
 9. **HTTPS**: Automatic on Railway/Render
 10. **Costs**: Budget ~$20-50/month (infrastructure + OpenAI API usage)
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed guidance on all topics.
+See [docs/deployment/README.md](docs/deployment/README.md) for detailed guidance on all topics.
 
 ## Technology Stack
 

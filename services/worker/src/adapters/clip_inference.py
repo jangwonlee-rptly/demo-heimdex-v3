@@ -50,7 +50,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from config import settings
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +214,9 @@ class RunPodPodClipClient:
         request_start = time.time()
 
         try:
-            logger.debug(
-                f"Calling RunPod Pod CLIP: request_id={request_id}, url={image_url[:100]}..."
+            logger.info(
+                f"🚀 CALLING RUNPOD GPU: request_id={request_id}, "
+                f"url={self.base_url}/v1/embed/image"
             )
 
             response = self.session.post(
@@ -267,9 +268,15 @@ class RunPodPodClipClient:
                     f"Unexpected embedding dimension: {len(embedding)} (expected {expected_dim})"
                 )
 
+            # Extract device info from response
+            device = result.get("device", "unknown")
+            timings = result.get("timings", {})
+            inference_ms = timings.get("inference_ms", 0)
+
             logger.info(
-                f"CLIP embedding generated successfully: request_id={request_id}, "
-                f"dim={len(embedding)}, total_latency={request_duration*1000:.1f}ms"
+                f"✅ RUNPOD GPU RESPONSE: request_id={request_id}, "
+                f"device={device}, dim={len(embedding)}, "
+                f"inference={inference_ms:.1f}ms, total={request_duration*1000:.1f}ms"
             )
 
             return result
@@ -798,7 +805,11 @@ def get_clip_inference_client():
                 backoff_factor=2.0,
             )
 
-            logger.info("RunPod Pod CLIP client initialized successfully")
+            logger.info(
+                f"🎯 RUNPOD GPU BACKEND INITIALIZED: "
+                f"base_url={settings.clip_pod_base_url}, "
+                f"timeout={settings.clip_pod_timeout_s}s"
+            )
 
         return _runpod_pod_client
 

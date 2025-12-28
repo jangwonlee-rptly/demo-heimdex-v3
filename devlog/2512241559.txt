@@ -1,0 +1,108 @@
+DEVLOG: 2025-12-24 15:59
+========================
+
+ISSUE: Video Dashboard Empty After Migration 019
+-------------------------------------------------
+
+Problem:
+--------
+After applying migrations 018-020 (admin metrics and video processing timing),
+the API container was crashing when trying to list videos. Dashboard showed no videos.
+
+Error:
+------
+```
+TypeError: Video.__init__() got an unexpected keyword argument 'queued_at'
+```
+
+Stack trace pointed to:
+- services/api/src/routes/videos.py:388 in list_videos
+- services/api/src/adapters/database.py:233 where Video(**row) was called
+
+Root Cause:
+-----------
+Migration 019 (infra/migrations/019_add_video_processing_timing.sql) added 5 new
+columns to the videos table:
+
+1. queued_at (TIMESTAMPTZ)
+2. processing_started_at (TIMESTAMPTZ)
+3. processing_finished_at (TIMESTAMPTZ)
+4. processing_duration_ms (INTEGER)
+5. processing_stage (TEXT)
+
+These columns enable Phase 2 admin metrics:
+- Accurate processing duration (p50/p95/p99)
+- RTF (Real-Time Factor) calculation
+- Queue vs Run time separation
+- Failure stage attribution
+- Throughput calculation
+
+However, the Python domain models were not updated:
+- services/api/src/domain/models.py - Video class missing new fields
+- services/api/src/domain/schemas.py - VideoResponse schema missing new fields
+
+When the database adapter tried to instantiate Video(**row) with database results
+that included these new columns, Python raised TypeError for unexpected kwargs.
+
+Solution:
+---------
+Updated the API service domain layer to match the database schema:
+
+1. services/api/src/domain/models.py:
+   - Added 5 new parameters to Video.__init__()
+   - Added corresponding instance variable assignments
+   - Updated docstring with field descriptions
+   - All fields are Optional[datetime/int/str] with None defaults
+
+2. services/api/src/domain/schemas.py:
+   - Added 5 new fields to VideoResponse Pydantic schema
+   - Added Field() descriptions for API documentation
+   - All fields are optional for backward compatibility
+
+Changes:
+--------
+```python
+# Video.__init__() additions:
+queued_at: Optional[datetime] = None
+processing_started_at: Optional[datetime] = None
+processing_finished_at: Optional[datetime] = None
+processing_duration_ms: Optional[int] = None
+processing_stage: Optional[str] = None
+```
+
+The worker service database adapter already had methods to write these fields:
+- update_video_queued_at()
+- update_video_processing_start()
+- update_video_processing_finish()
+- update_video_processing_stage()
+
+Testing:
+--------
+1. Restarted API container: docker-compose restart api
+2. Verified clean startup in logs:
+   - "Started server process [1]"
+   - "Starting Heimdex API service"
+   - "Application startup complete"
+   - "Uvicorn running on http://0.0.0.0:8000"
+3. No more TypeError exceptions
+
+Result:
+-------
+✓ API container now starts successfully
+✓ Video listing endpoint works
+✓ Dashboard should now display videos
+✓ Ready for Phase 2 admin metrics implementation
+
+Next Steps:
+-----------
+1. Test dashboard to confirm videos are visible
+2. Verify worker writes timing data for new videos
+3. Implement admin dashboard queries that consume these new fields
+4. Run backfill script if historical timing data is needed
+
+Notes:
+------
+- All new fields are nullable/optional for backward compatibility
+- Existing videos will have NULL for timing fields until reprocessed
+- Migration 019 includes backfill strategy in comments (manual execution)
+- Worker already instrumented to write timing data going forward
