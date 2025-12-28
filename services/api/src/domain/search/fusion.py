@@ -34,6 +34,7 @@ class ScoreType(str, Enum):
     LEXICAL_ONLY = "lexical_only"
     MULTI_DENSE_MINMAX_MEAN = "multi_dense_minmax_mean"  # v3-multi: N dense + BM25
     MULTI_DENSE_RRF = "multi_dense_rrf"  # v3-multi: N dense + BM25 with RRF
+    RERANK_CLIP = "rerank_clip"  # CLIP rerank mode: base fusion + CLIP reranking
 
 
 @dataclass

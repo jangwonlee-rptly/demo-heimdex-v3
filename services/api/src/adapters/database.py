@@ -569,6 +569,133 @@ class Database:
             logger.error(f"Summary embedding search failed: {e}", exc_info=True)
             return []
 
+    def search_scenes_visual_clip_embedding(
+        self,
+        query_embedding: list[float],
+        user_id: UUID,
+        video_id: Optional[UUID] = None,
+        match_count: int = 200,
+        threshold: float = 0.15,
+    ) -> list[tuple[str, int, float]]:
+        """Search scenes by CLIP visual embedding (true visual similarity).
+
+        This is the CORRECT visual search method that compares CLIP text embeddings
+        (512d from query) against CLIP image embeddings (512d from keyframes).
+        Both live in the same vision-language vector space, enabling true multimodal search.
+
+        Args:
+            query_embedding: CLIP text embedding (512 dimensions).
+            user_id: User ID for tenant scoping (required).
+            video_id: Filter by specific video ID (optional).
+            match_count: Maximum number of results to return.
+            threshold: Similarity threshold (0.0 to 1.0).
+
+        Returns:
+            list[tuple[str, int, float]]: List of (scene_id, rank, similarity) tuples.
+        """
+        # Validate embedding dimension (512 for CLIP ViT-B-32)
+        if len(query_embedding) != 512:
+            logger.warning(
+                f"CLIP embedding dimension mismatch: expected 512, got {len(query_embedding)}. "
+                "Returning empty results."
+            )
+            return []
+
+        # Convert embedding list to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "match_threshold": threshold,
+            "match_count": match_count,
+            "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id),  # Always required for tenancy
+        }
+
+        try:
+            response = self.client.rpc("search_scenes_by_visual_clip_embedding", params).execute()
+            results = []
+            for rank, row in enumerate(response.data, start=1):
+                results.append((str(row["id"]), rank, float(row["similarity"])))
+
+            if settings.search_debug and results:
+                logger.info(
+                    f"CLIP visual search: {len(results)} results, "
+                    f"top score={results[0][2]:.4f}, threshold={threshold}"
+                )
+            else:
+                logger.debug(f"CLIP visual search: {len(results)} results")
+
+            return results
+        except Exception as e:
+            logger.error(f"CLIP visual embedding search failed: {e}", exc_info=True)
+            return []
+
+    def batch_score_scenes_clip(
+        self,
+        scene_ids: list[str],
+        query_embedding: list[float],
+        user_id: UUID,
+    ) -> dict[str, float]:
+        """Batch compute CLIP similarity scores for a set of candidate scenes.
+
+        Used in rerank mode: given a candidate pool from other channels,
+        compute CLIP visual similarity scores efficiently in a single DB query.
+
+        Args:
+            scene_ids: List of scene IDs to score (candidate pool).
+            query_embedding: CLIP text embedding (512 dimensions).
+            user_id: User ID for tenant scoping.
+
+        Returns:
+            dict[str, float]: Map of scene_id → CLIP similarity score.
+                              Missing scenes are omitted (not accessible or no CLIP embedding).
+        """
+        if not scene_ids:
+            return {}
+
+        # Validate embedding dimension
+        if len(query_embedding) != 512:
+            logger.warning(
+                f"CLIP embedding dimension mismatch: expected 512, got {len(query_embedding)}. "
+                "Returning empty scores."
+            )
+            return {}
+
+        # Convert embedding to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "scene_ids": scene_ids,  # Pass as array
+            "filter_user_id": str(user_id),
+        }
+
+        try:
+            response = self.client.rpc("batch_score_scenes_clip", params).execute()
+
+            # Build score map
+            scores = {}
+            for row in response.data:
+                scene_id = str(row["id"])
+                similarity = float(row["similarity"])
+                scores[scene_id] = similarity
+
+            if settings.search_debug:
+                score_values = list(scores.values())
+                if score_values:
+                    logger.info(
+                        f"CLIP batch scoring: {len(scores)}/{len(scene_ids)} scenes scored, "
+                        f"range=[{min(score_values):.4f}, {max(score_values):.4f}]"
+                    )
+                else:
+                    logger.info(f"CLIP batch scoring: 0/{len(scene_ids)} scenes scored (no embeddings)")
+
+            return scores
+        except Exception as e:
+            logger.error(f"CLIP batch scoring failed: {e}", exc_info=True)
+            return {}
+
     def get_scenes_by_ids(
         self,
         scene_ids: list[UUID],

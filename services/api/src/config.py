@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # OpenAI configuration
     openai_api_key: str
 
+    # CLIP RunPod configuration (for visual search)
+    clip_runpod_url: str = ""  # e.g., "https://api-xxxx.runpod.net"
+    clip_runpod_secret: str = ""  # HMAC secret for auth
+    clip_text_embedding_timeout_s: float = 1.5
+    clip_text_embedding_max_retries: int = 1
+
     # API configuration
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -85,6 +91,22 @@ class Settings(BaseSettings):
 
     # Multi-dense fusion method (reuses fusion_method setting)
     # Options: "minmax_mean" (default) | "rrf"
+
+    # Visual search mode configuration
+    # Options: "recall" | "rerank" | "auto"
+    # - recall: CLIP participates in retrieval (parallel topK + fusion)
+    # - rerank: CLIP only reranks candidates from other channels (more stable)
+    # - auto: use visual intent router to decide per-query
+    visual_mode: str = "auto"
+
+    # Rerank mode configuration
+    rerank_candidate_pool_size: int = 500  # How many candidates to retrieve before CLIP rerank
+    rerank_clip_weight: float = 0.3  # CLIP contribution in rerank blend (0.0-1.0)
+    rerank_min_score_range: float = 0.05  # Skip CLIP if score range < this (flat scores)
+
+    # Visual intent router configuration (for auto mode)
+    visual_router_boost_weight: float = 0.15  # Additional weight for visual queries in auto mode
+    visual_router_reduce_weight: float = 0.05  # Reduced weight for speech queries in auto mode
 
     def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
         """Validate and redistribute multi-dense channel weights.

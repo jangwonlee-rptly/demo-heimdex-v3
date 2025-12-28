@@ -23,6 +23,9 @@ from ..domain.search.fusion import (
 from ..adapters.database import db
 from ..adapters.openai_client import openai_client
 from ..adapters.opensearch_client import opensearch_client
+from ..adapters.clip_client import get_clip_client, is_clip_available, ClipClientError
+from ..domain.search.rerank import rerank_with_clip
+from ..domain.visual_router import get_visual_intent_router
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +121,7 @@ def _run_multi_dense_search(
     user_id: UUID,
     video_id: Optional[UUID],
     query: str,
+    query_embedding_clip: Optional[list[float]] = None,
 ) -> tuple[dict[str, list[Candidate]], dict[str, int]]:
     """Run multi-channel dense + lexical search in parallel with timeouts.
 
@@ -126,10 +130,11 @@ def _run_multi_dense_search(
     If a channel times out or fails, it's treated as empty (graceful degradation).
 
     Args:
-        query_embedding: The query embedding vector.
+        query_embedding: OpenAI text query embedding (1536d).
         user_id: User ID for tenant scoping.
         video_id: Optional video ID filter.
         query: Original query text for BM25.
+        query_embedding_clip: Optional CLIP text query embedding (512d) for visual channel.
 
     Returns:
         tuple: (channel_candidates dict, timing_ms dict)
@@ -154,9 +159,14 @@ def _run_multi_dense_search(
         return ("transcript", candidates, elapsed)
 
     def run_visual():
+        # Use CLIP embedding if available, otherwise skip visual channel
+        if query_embedding_clip is None:
+            logger.debug("Visual channel skipped: no CLIP embedding")
+            return ("visual", [], 0)
+
         start = time.time()
-        results = db.search_scenes_visual_embedding(
-            query_embedding=query_embedding,
+        results = db.search_scenes_visual_clip_embedding(
+            query_embedding=query_embedding_clip,  # Use CLIP embedding (512d)
             user_id=user_id,
             video_id=video_id,
             match_count=settings.candidate_k_visual,
@@ -397,16 +407,61 @@ async def search_scenes(
                 detail="Not authorized to access this video",
             )
 
-    # Generate embedding for query
-    query_embedding = None
+    # Generate embeddings for query
+    query_embedding = None  # OpenAI embedding (1536d) for transcript/summary
+    query_embedding_clip = None  # CLIP embedding (512d) for visual
+    clip_embedding_ms = 0
     embedding_failed = False
+
+    # OpenAI embedding (always needed for transcript/summary)
     try:
         embed_start = time.time()
         query_embedding = openai_client.create_embedding(request.query)
         embedding_ms = int((time.time() - embed_start) * 1000)
     except Exception as e:
-        logger.error(f"Failed to create embedding: {e}")
+        logger.error(f"Failed to create OpenAI embedding: {e}")
         embedding_failed = True
+
+    # Determine visual mode (recall/rerank/auto/skip)
+    visual_mode = settings.visual_mode
+    visual_intent_result = None
+    clip_enabled = is_clip_available() and settings.weight_visual > 0
+
+    if visual_mode == "auto" and clip_enabled:
+        # Use visual intent router to decide
+        router = get_visual_intent_router()
+        visual_intent_result = router.analyze(request.query)
+        visual_mode = visual_intent_result.suggested_mode
+
+        logger.info(
+            f"Visual intent router: mode={visual_mode}, "
+            f"confidence={visual_intent_result.confidence:.2f}, "
+            f"reason={visual_intent_result.explanation}"
+        )
+
+    # Generate CLIP text embedding if needed
+    if clip_enabled and visual_mode in ("recall", "rerank"):
+        try:
+            clip_start = time.time()
+            clip_client = get_clip_client()
+            query_embedding_clip = clip_client.create_text_embedding(
+                request.query,
+                normalize=True,
+            )
+            clip_embedding_ms = int((time.time() - clip_start) * 1000)
+
+            logger.info(
+                f"CLIP text embedding generated: dim={len(query_embedding_clip)}, "
+                f"elapsed_ms={clip_embedding_ms}"
+            )
+        except ClipClientError as e:
+            logger.warning(f"CLIP text embedding failed: {e}, visual mode disabled")
+            query_embedding_clip = None
+            visual_mode = "skip"  # Degrade gracefully
+        except Exception as e:
+            logger.error(f"Unexpected CLIP error: {e}", exc_info=True)
+            query_embedding_clip = None
+            visual_mode = "skip"
 
     # Determine search strategy
     use_multi_dense = (
@@ -444,11 +499,15 @@ async def search_scenes(
             )
 
         # Run parallel multi-channel retrieval
+        # Pass CLIP embedding for visual channel (recall mode) or None (rerank mode)
+        clip_for_retrieval = query_embedding_clip if visual_mode == "recall" else None
+
         channel_candidates, multi_dense_timings = _run_multi_dense_search(
             query_embedding,
             user_id,
             request.video_id,
             request.query,
+            query_embedding_clip=clip_for_retrieval,
         )
 
         # Check if we got any results at all
@@ -501,6 +560,59 @@ async def search_scenes(
                 actual_score_type = ScoreType.MULTI_DENSE_MINMAX_MEAN
 
             fusion_ms = int((time.time() - fusion_start) * 1000)
+
+            # CLIP Rerank mode: Apply CLIP visual reranking to fused results
+            rerank_ms = 0
+            if visual_mode == "rerank" and query_embedding_clip is not None and fused_results:
+                rerank_start = time.time()
+
+                # Get candidate pool for reranking
+                candidate_pool = fused_results[:settings.rerank_candidate_pool_size]
+                candidate_scene_ids = [c.scene_id for c in candidate_pool]
+
+                logger.info(
+                    f"CLIP rerank: Scoring {len(candidate_scene_ids)} candidates "
+                    f"from top {settings.rerank_candidate_pool_size} results"
+                )
+
+                # Batch score candidates with CLIP
+                clip_scores = db.batch_score_scenes_clip(
+                    scene_ids=candidate_scene_ids,
+                    query_embedding=query_embedding_clip,
+                    user_id=user_id,
+                )
+
+                # Apply reranking
+                rerank_result = rerank_with_clip(
+                    base_candidates=candidate_pool,
+                    clip_scores=clip_scores,
+                    clip_weight=settings.rerank_clip_weight,
+                    min_score_range=settings.rerank_min_score_range,
+                    eps=settings.fusion_minmax_eps,
+                )
+
+                # Replace fused results with reranked results
+                # Keep any results beyond the candidate pool unchanged
+                fused_results = (
+                    rerank_result.reranked_candidates
+                    + fused_results[settings.rerank_candidate_pool_size:]
+                )
+
+                # Update score type
+                if not rerank_result.clip_skipped:
+                    actual_score_type = ScoreType.RERANK_CLIP
+
+                rerank_ms = int((time.time() - rerank_start) * 1000)
+
+                logger.info(
+                    f"CLIP rerank complete: scored={rerank_result.candidates_scored}, "
+                    f"skipped={rerank_result.clip_skipped}, "
+                    f"reason={rerank_result.skip_reason}, "
+                    f"clip_weight={rerank_result.clip_weight_used}, "
+                    f"elapsed_ms={rerank_ms}"
+                )
+            else:
+                rerank_ms = 0
 
     elif use_hybrid:
         # Run both retrievals concurrently
@@ -624,10 +736,23 @@ async def search_scenes(
             for ch in ["transcript", "visual", "summary", "lexical"]
             if ch in multi_dense_timings
         )
+
+        # Build CLIP info string
+        clip_info = ""
+        if clip_embedding_ms > 0 or 'rerank_ms' in locals():
+            clip_parts = []
+            if clip_embedding_ms > 0:
+                clip_parts.append(f"clip_embed={clip_embedding_ms}ms")
+            if 'rerank_ms' in locals() and rerank_ms > 0:
+                clip_parts.append(f"clip_rerank={rerank_ms}ms")
+            if visual_mode:
+                clip_parts.append(f"visual_mode={visual_mode}")
+            clip_info = ", " + ", ".join(clip_parts) if clip_parts else ""
+
         logger.info(
             f"Search completed: mode={search_mode}, fusion={actual_score_type.value}, "
             f"results={len(scene_responses)}, latency={latency_ms}ms "
-            f"(embed={embedding_ms}ms, channels=[{channel_info}], "
+            f"(embed={embedding_ms}ms{clip_info}, channels=[{channel_info}], "
             f"fusion={fusion_ms}ms, hydrate={hydrate_ms}ms)"
         )
     else:
