@@ -1,5 +1,17 @@
 'use client';
 
+/**
+ * Search Page.
+ *
+ * Provides semantic search interface for finding video scenes.
+ * Features include:
+ * - Natural language search query input
+ * - Adjustable search weights and preferences
+ * - Video file filtering
+ * - Highlight reel builder (selection tray)
+ * - Video player for previewing results
+ */
+
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';

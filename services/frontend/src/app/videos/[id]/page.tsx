@@ -1,5 +1,16 @@
 'use client';
 
+/**
+ * Video Details Page.
+ *
+ * Displays detailed information about a specific video, including:
+ * - Metadata (duration, resolution, EXIF)
+ * - Full transcript and summary
+ * - Scene breakdown with visual descriptions
+ * - Video player with scene seeking
+ * - Controls for reprocessing and exporting scenes
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';

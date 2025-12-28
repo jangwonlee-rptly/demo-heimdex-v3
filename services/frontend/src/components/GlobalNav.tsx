@@ -6,6 +6,14 @@ import { supabase } from '@/lib/supabase';
 import { useLanguage } from '@/lib/i18n';
 import LanguageToggle from '@/components/LanguageToggle';
 
+/**
+ * Global navigation component.
+ *
+ * Handles authentication state, responsive navigation links, and layout.
+ * Shows different content based on auth state and current route.
+ *
+ * @returns {JSX.Element | null} Rendered navigation bar or null for onboarding page.
+ */
 export default function GlobalNav() {
   const router = useRouter();
   const pathname = usePathname();

@@ -116,7 +116,7 @@ class TestVisualIntentRouter:
         queries_with_quotes = [
             '"hello world" in speech',
             "he said 'goodbye'",
-            "the line "we have a dream"",
+            'the line "we have a dream"',
         ]
 
         for query in queries_with_quotes:

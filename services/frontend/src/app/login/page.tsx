@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * Login Page.
+ *
+ * Handles user authentication (Sign In / Sign Up) via Supabase Auth.
+ */
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';

@@ -179,6 +179,12 @@ npm install
 npm run dev
 ```
 
+### Code Standards
+
+- **Python**: Follows Google Python Style Guide for docstrings. All public functions and classes must be documented.
+- **TypeScript**: Uses standard JSDoc for components and utility functions.
+- **Testing**: Python tests use `pytest`, Frontend tests use `jest`/`playwright`.
+
 ## Project Structure
 
 ```

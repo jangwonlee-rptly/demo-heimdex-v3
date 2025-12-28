@@ -1,5 +1,12 @@
 'use client';
 
+/**
+ * Dashboard Page.
+ *
+ * Displays user's videos, statistics, and processing status.
+ * Provides controls for video management (view, process, reprocess).
+ */
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
