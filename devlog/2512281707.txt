@@ -1,0 +1,110 @@
+[2025-12-28 17:07] Fixed deployment errors for user-customizable search weights feature
+File: devlog/2512281707.txt
+
+== What we worked on ==
+- Debugging and fixing multiple deployment errors in the API service after implementing
+  the user-customizable search weights feature
+- Three consecutive import/module errors that prevented the API container from starting
+- Ensuring the preferences API endpoints work correctly with the existing codebase patterns
+
+== Changes made ==
+- services/api/src/routes/preferences.py: Fixed multiple import issues
+  * Changed auth import from `..adapters.auth` to `..auth.middleware`
+  * Changed database import from `Database, get_db` to singleton `db` instance
+  * Removed dependency injection pattern (`db: Database = Depends(get_db)`) from all endpoints
+  * Now uses global `db` instance directly, matching other route files
+
+- services/api/src/domain/models.py: Updated UserProfile model
+  * Added `search_preferences: Optional[dict] = None` parameter to __init__
+  * Added docstring documentation for the new field
+  * Added `self.search_preferences = search_preferences` assignment
+  * This allows UserProfile to accept the new database column without errors
+
+== Problems encountered ==
+
+- Problem 1: ModuleNotFoundError: No module named 'src.adapters.auth'
+  * Error occurred when API container tried to import preferences.py
+  * Stacktrace showed: "from ..adapters.auth import get_current_user"
+  * Container crashed on startup, unable to load the application
+
+- Problem 2: ImportError: cannot import name 'get_db' from 'src.adapters.database'
+  * After fixing auth import, new error appeared
+  * preferences.py was trying to import `get_db` function that doesn't exist
+  * Still using dependency injection pattern that doesn't match codebase
+
+- Problem 3: TypeError: UserProfile.__init__() got an unexpected keyword argument 'search_preferences'
+  * After fixing imports, API started but crashed on first profile request
+  * Database returned `search_preferences` column from our migration
+  * UserProfile model wasn't updated to accept this new field
+  * Error in get_user_profile() when instantiating UserProfile from DB row
+
+== How we tried to solve it ==
+
+- Attempt 1 (Auth import): Initially tried to inspect the repo structure
+  * Used `find services/api/src -name "*.py"` to locate auth modules
+  * Found auth module at `src/auth/middleware.py` (not in adapters/)
+  * Read auth/middleware.py to confirm get_current_user and User are exported
+
+- Attempt 2 (Database pattern): Inspected how other routes use database
+  * Used `head -30 services/api/src/routes/videos.py` to check import patterns
+  * Discovered codebase uses singleton pattern: `from ..adapters.database import db`
+  * Used `tail -30 services/api/src/adapters/database.py` to confirm global instance
+  * Found: `db = Database(settings.supabase_url, settings.supabase_service_role_key)`
+
+- Attempt 3 (UserProfile model): Read domain/models.py to understand structure
+  * Checked UserProfile class definition (lines 41-83)
+  * Compared with scene_detector_preferences field (similar JSONB pattern)
+  * Identified missing parameter and assignment
+
+== How we solved it / Current status ==
+
+✅ SOLVED - All three errors fixed:
+
+1. Auth import fixed:
+   - Root cause: Incorrect module path assumption
+   - Fix: Changed import to `from ..auth.middleware import get_current_user, User`
+   - Also imported User directly from auth instead of domain.schemas
+
+2. Database pattern fixed:
+   - Root cause: Mismatch between FastAPI dependency injection pattern and actual codebase pattern
+   - Fix: Changed to use global singleton `db` instance
+   - Removed all `db: Database = Depends(get_db)` parameters from endpoint functions
+   - Matches pattern used in videos.py, search.py, and other route files
+
+3. UserProfile model fixed:
+   - Root cause: Database schema updated but model not updated
+   - Fix: Added search_preferences field to UserProfile.__init__()
+   - Added parameter: `search_preferences: Optional[dict] = None`
+   - Added docstring: "User's saved search preferences (weights, fusion_method, etc.)"
+   - Added assignment: `self.search_preferences = search_preferences`
+   - Now accepts the JSONB column from database without errors
+
+The API service now starts successfully and can handle profile requests with the new
+search_preferences field.
+
+== Next steps / TODOs ==
+
+- [ ] Run the database migrations (021_add_search_preferences.sql, 022_add_search_metadata.sql)
+      to apply the schema changes to production database
+- [ ] Test the complete preferences API workflow:
+      * GET /v1/preferences/search (retrieve saved preferences)
+      * PUT /v1/preferences/search (save new preferences)
+      * DELETE /v1/preferences/search (reset to defaults)
+- [ ] Test search endpoint with channel_weights parameter to verify weight resolution works
+- [ ] Implement frontend SearchWeightControls component
+- [ ] Add frontend integration with preferences API
+- [ ] Write comprehensive backend tests for weight resolution and preferences endpoints
+- [ ] Create user documentation for the new search customization features
+
+== Related files from earlier implementation ==
+
+Core backend implementation (completed in previous session):
+- services/api/src/domain/search/weights.py: Weight resolution with 3-tier precedence
+- services/api/src/domain/schemas.py: SearchRequest/SearchResponse with channel_weights
+- services/api/src/domain/search/fusion.py: Flat-score detection, metadata tracking
+- services/api/src/routes/search.py: Weight resolution wired into search endpoint
+- services/api/src/adapters/database.py: Preference CRUD methods, metadata logging
+- services/api/src/config.py: Feature flags and guardrails
+- services/api/src/main.py: Preferences router registration
+- infra/migrations/021_add_search_preferences.sql: user_profiles.search_preferences column
+- infra/migrations/022_add_search_metadata.sql: search_queries.search_metadata column

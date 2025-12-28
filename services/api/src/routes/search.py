@@ -569,14 +569,15 @@ async def search_scenes(
 
             # Use channel-specific naming for dense channels
             # Map internal channel names to fusion function keys
+            # Only include channels that have non-zero weights
             fusion_channels = {}
-            if "transcript" in channel_candidates:
+            if "transcript" in channel_candidates and "dense_transcript" in active_weights_fusion:
                 fusion_channels["dense_transcript"] = channel_candidates["transcript"]
-            if "visual" in channel_candidates:
+            if "visual" in channel_candidates and "dense_visual" in active_weights_fusion:
                 fusion_channels["dense_visual"] = channel_candidates["visual"]
-            if "summary" in channel_candidates:
+            if "summary" in channel_candidates and "dense_summary" in active_weights_fusion:
                 fusion_channels["dense_summary"] = channel_candidates["summary"]
-            if "lexical" in channel_candidates:
+            if "lexical" in channel_candidates and "lexical" in active_weights_fusion:
                 fusion_channels["lexical"] = channel_candidates["lexical"]
 
             # Use resolved weights (active_weights_fusion already has fusion keys)
