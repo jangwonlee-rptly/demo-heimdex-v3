@@ -327,15 +327,15 @@ def resolve_weights(
     )
 
 
-def get_default_weights() -> dict[str, float]:
+def get_default_weights(settings) -> dict[str, float]:
     """Get default channel weights (user keys).
+
+    Args:
+        settings: Application settings instance
 
     Returns:
         Default weights matching system config
     """
-    # Import here to avoid circular dependency
-    from ...config import settings
-
     return {
         "transcript": settings.weight_transcript,
         "visual": settings.weight_visual,

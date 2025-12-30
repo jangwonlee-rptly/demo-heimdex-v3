@@ -519,7 +519,7 @@ async def search_scenes(
             weight_resolution = resolve_weights(
                 request_weights=request.channel_weights,
                 saved_weights=saved_prefs_weights,
-                default_weights=get_default_weights(),
+                default_weights=get_default_weights(settings),
                 use_saved_preferences=request.use_saved_preferences,
                 visual_mode=visual_mode,
                 enable_guardrails=True,
@@ -613,6 +613,7 @@ async def search_scenes(
                 fused_results, fusion_metadata = multi_channel_minmax_fuse(
                     channel_candidates=fusion_channels,
                     channel_weights=fusion_weights,
+                    settings=settings,
                     eps=settings.fusion_minmax_eps,
                     top_k=request.limit,
                     include_debug=settings.search_debug,

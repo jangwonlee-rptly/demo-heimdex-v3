@@ -597,6 +597,7 @@ class FusionMetadata:
 def multi_channel_minmax_fuse(
     channel_candidates: dict[str, list[Candidate]],
     channel_weights: dict[str, float],
+    settings,
     eps: float = 1e-9,
     top_k: int = 10,
     include_debug: bool = False,
@@ -680,7 +681,6 @@ def multi_channel_minmax_fuse(
     flat_channels = []  # Channels with flat score distributions (uninformative)
 
     # Get percentile clipping config (if needed)
-    from ...config import settings
     percentile_clip_enabled = getattr(settings, "fusion_percentile_clip_enabled", False)
     percentile_clip_lo = getattr(settings, "fusion_percentile_clip_lo", 0.05)
     percentile_clip_hi = getattr(settings, "fusion_percentile_clip_hi", 0.95)
