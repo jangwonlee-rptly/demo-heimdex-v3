@@ -5,8 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.middleware import require_admin, User
-from ..adapters.database import db
-from ..adapters.queue import task_queue
+from ..dependencies import get_db, get_queue
+from ..adapters.database import Database
+from ..adapters.queue import TaskQueue
 from ..domain.models import VideoStatus
 from ..domain.admin_schemas import (
     AdminOverviewResponse,
@@ -37,7 +38,10 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 
 @router.get("/overview", response_model=AdminOverviewResponse)
-async def get_overview(admin: User = Depends(require_admin)):
+async def get_overview(
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
     """
     Get admin dashboard overview metrics.
 
@@ -63,7 +67,8 @@ async def get_overview(admin: User = Depends(require_admin)):
 async def get_throughput_timeseries(
     range: str = Query("30d", description="Time range (e.g., '30d')"),
     bucket: str = Query("day", description="Time bucket (only 'day' supported in Phase 1)"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get video processing throughput time series.
@@ -106,7 +111,8 @@ async def get_throughput_timeseries(
 async def get_search_timeseries(
     range: str = Query("30d", description="Time range (e.g., '30d')"),
     bucket: str = Query("day", description="Time bucket (only 'day' supported in Phase 1)"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get search volume and latency time series.
@@ -149,7 +155,8 @@ async def get_users_list(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(50, ge=1, le=100, description="Items per page (max 100)"),
     sort: str = Query("last_activity", description="Sort column: last_activity, hours_ready, videos_ready, searches_7d"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get paginated list of users with usage metrics.
@@ -206,7 +213,8 @@ async def get_users_list(
 @router.get("/users/{user_id}", response_model=UserDetailResponse)
 async def get_user_detail(
     user_id: str,
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get detailed user information with recent videos and searches.
@@ -263,7 +271,8 @@ async def get_user_detail(
 @router.get("/performance/latency", response_model=ProcessingLatencyResponse)
 async def get_processing_latency(
     range: str = Query("30d", description="Time range (e.g., '7d', '30d')"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get processing latency percentiles and queue time (Phase 2).
@@ -300,7 +309,8 @@ async def get_processing_latency(
 @router.get("/performance/rtf", response_model=RTFDistributionResponse)
 async def get_rtf_distribution(
     range: str = Query("30d", description="Time range (e.g., '7d', '30d')"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get RTF (Real-Time Factor) distribution (Phase 2).
@@ -337,7 +347,8 @@ async def get_rtf_distribution(
 @router.get("/performance/queue", response_model=QueueAnalysisResponse)
 async def get_queue_analysis(
     range: str = Query("30d", description="Time range (e.g., '7d', '30d')"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get queue vs processing time analysis (Phase 2).
@@ -372,7 +383,8 @@ async def get_queue_analysis(
 @router.get("/failures/by-stage", response_model=FailuresByStageResponse)
 async def get_failures_by_stage(
     range: str = Query("30d", description="Time range (e.g., '7d', '30d')"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get failures grouped by processing stage (Phase 2).
@@ -408,7 +420,8 @@ async def get_failures_by_stage(
 @router.get("/timeseries/throughput-v2", response_model=EnhancedThroughputTimeSeriesResponse)
 async def get_throughput_timeseries_v2(
     range: str = Query("30d", description="Time range (e.g., '7d', '30d')"),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
 ):
     """
     Get enhanced throughput time series with Phase 2 metrics.
@@ -461,7 +474,9 @@ async def get_throughput_timeseries_v2(
 
 @router.post("/reprocess-all", response_model=ReprocessAllResponse, status_code=202)
 async def reprocess_all_videos(
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
+    task_queue: TaskQueue = Depends(get_queue),
 ):
     """
     Reprocess all videos in the system.
@@ -505,7 +520,7 @@ async def reprocess_all_videos(
                 )
 
                 # Enqueue processing job
-                task_queue.enqueue_video_processing(video.id)
+                task_queue.enqueue_video_processing(video.id, db=db)
                 videos_queued += 1
 
             except Exception as e:

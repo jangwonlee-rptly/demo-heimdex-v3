@@ -31,12 +31,13 @@ def export_scene_as_short(scene_id: str, export_id: str) -> None:
     Raises:
         Exception: Any processing error (logged and saved to export record)
     """
-    # Lazy import to avoid requiring worker dependencies in API service
-    # When API calls .send(), this function body never executes
-    # When Worker executes the job, this imports and runs successfully
-    from src.adapters.database import db
-    from src.adapters.supabase import storage
-    from src.adapters.ffmpeg import ffmpeg
+    # Get worker context for dependency injection
+    from src.tasks import get_worker_context
+
+    ctx = get_worker_context()
+    db = ctx.db
+    storage = ctx.storage
+    ffmpeg = ctx.ffmpeg
 
     logger.info(f"Starting export {export_id} for scene {scene_id}")
 

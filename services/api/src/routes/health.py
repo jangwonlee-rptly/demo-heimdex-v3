@@ -2,13 +2,14 @@
 import logging
 import time
 from datetime import datetime
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, Depends
 from fastapi.responses import JSONResponse
 
 from ..domain.schemas import HealthResponse, DetailedHealthResponse, DependencyHealth
-from ..adapters.database import db
-from ..adapters.queue import task_queue
-from ..adapters.supabase import storage
+from ..dependencies import get_db, get_queue, get_storage
+from ..adapters.database import Database
+from ..adapters.queue import TaskQueue
+from ..adapters.supabase import SupabaseStorage
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,11 @@ async def health_check():
 
 
 @router.get("/health/ready", response_model=DetailedHealthResponse)
-async def readiness_check():
+async def readiness_check(
+    db: Database = Depends(get_db),
+    task_queue: TaskQueue = Depends(get_queue),
+    storage: SupabaseStorage = Depends(get_storage),
+):
     """
     Detailed readiness check with dependency validation.
 

@@ -7,7 +7,10 @@ from fastapi import APIRouter, status, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth import get_current_user, User
-from ..adapters.database import db
+from ..dependencies import get_db, get_queue, get_storage
+from ..adapters.database import Database
+from ..adapters.queue import TaskQueue
+from ..adapters.supabase import SupabaseStorage
 from ..domain.models import HighlightJobStatus
 from ..exceptions import (
     SceneNotFoundException,
@@ -123,6 +126,8 @@ class HighlightExportJobResponse(BaseModel):
 async def create_highlight_export(
     request: HighlightExportRequest,
     user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    task_queue: TaskQueue = Depends(get_queue),
 ):
     """
     Create a new highlight reel export job.
@@ -241,8 +246,7 @@ async def create_highlight_export(
     )
 
     # Enqueue worker task
-    from ..adapters.queue import task_queue
-    task_queue.enqueue_highlight_export(job_id=job.id)
+    task_queue.enqueue_highlight_export(job_id=job.id, db=db)
 
     return HighlightExportEnqueueResponse(
         job_id=str(job.id),
@@ -254,6 +258,8 @@ async def create_highlight_export(
 async def get_highlight_job_status(
     job_id: UUID,
     user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage),
 ):
     """
     Get the status of a highlight export job.
@@ -292,8 +298,6 @@ async def get_highlight_job_status(
     # Build output response with signed URL if completed
     output = None
     if job.status == HighlightJobStatus.DONE and job.output:
-        from ..adapters.supabase import storage
-
         mp4_url = None
         if job.output.get("storage_path"):
             # Generate presigned URL valid for 1 hour

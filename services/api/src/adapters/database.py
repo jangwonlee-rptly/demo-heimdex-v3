@@ -5,7 +5,6 @@ from typing import Optional
 from uuid import UUID
 from supabase import create_client, Client
 
-from ..config import settings
 from ..domain.models import (
     UserProfile,
     Video,
@@ -1463,5 +1462,7 @@ class Database:
         )
 
 
-# Global database instance
-db = Database(settings.supabase_url, settings.supabase_service_role_key)
+# DEPRECATED: Global instance removed for Phase 1 refactor.
+# Use dependency injection instead via get_db() from dependencies.py
+# This remains as None to prevent import-time Supabase client creation.
+db: Database = None  # type: ignore

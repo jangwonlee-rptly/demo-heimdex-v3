@@ -3,21 +3,22 @@ import logging
 from uuid import UUID, uuid4
 from supabase import create_client, Client
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
 class SupabaseStorage:
     """Supabase storage client wrapper."""
 
-    def __init__(self):
-        """Initialize the Supabase storage client."""
-        self.client: Client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-        )
-        self.bucket_name = "videos"
+    def __init__(self, supabase_url: str, supabase_key: str, bucket_name: str = "videos"):
+        """Initialize the Supabase storage client.
+
+        Args:
+            supabase_url: Supabase project URL
+            supabase_key: Supabase service role key for authentication
+            bucket_name: Name of the storage bucket (default: "videos")
+        """
+        self.client: Client = create_client(supabase_url, supabase_key)
+        self.bucket_name = bucket_name
 
     def create_upload_url(self, user_id: UUID, file_extension: str = "mp4") -> tuple[str, str]:
         """
@@ -113,5 +114,6 @@ class SupabaseStorage:
         return self.get_public_url(storage_path)
 
 
-# Global storage instance
-storage = SupabaseStorage()
+# DEPRECATED: Global instance removed for Phase 1 refactor.
+# Use dependency injection instead via get_storage() from dependencies.py
+storage: SupabaseStorage = None  # type: ignore

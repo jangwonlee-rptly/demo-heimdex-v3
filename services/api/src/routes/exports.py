@@ -6,7 +6,10 @@ from fastapi import APIRouter, status, Depends
 from pydantic import BaseModel, Field
 
 from ..auth import get_current_user, User
-from ..adapters.database import db
+from ..dependencies import get_db, get_queue, get_storage
+from ..adapters.database import Database
+from ..adapters.queue import TaskQueue
+from ..adapters.supabase import SupabaseStorage
 from ..domain.models import AspectRatioStrategy, OutputQuality, ExportStatus
 from ..exceptions import (
     SceneNotFoundException,
@@ -72,6 +75,8 @@ async def create_scene_export(
     scene_id: UUID,
     request: CreateExportRequest,
     user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    task_queue: TaskQueue = Depends(get_queue),
 ):
     """
     Create a new YouTube Shorts export for a scene.
@@ -164,8 +169,7 @@ async def create_scene_export(
     )
 
     # Enqueue worker task to process export
-    from ..adapters.queue import task_queue
-    task_queue.enqueue_scene_export(scene_id=scene_id, export_id=export.id)
+    task_queue.enqueue_scene_export(scene_id=scene_id, export_id=export.id, db=db)
 
     return ExportResponse(
         export_id=str(export.id),
@@ -183,6 +187,8 @@ async def create_scene_export(
 async def get_export_status(
     export_id: UUID,
     user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage),
 ):
     """
     Get export status and download URL.
@@ -219,7 +225,6 @@ async def get_export_status(
     # Generate presigned download URL if export is completed
     download_url = None
     if export.status == ExportStatus.COMPLETED and export.storage_path:
-        from ..adapters.supabase import storage
         # Generate presigned URL valid for 1 hour
         download_url = storage.get_presigned_url(export.storage_path, expires_in=3600)
 

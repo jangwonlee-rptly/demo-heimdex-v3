@@ -8,7 +8,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import get_current_user, User
-from ..config import settings
+from ..dependencies import get_db, get_openai, get_opensearch, get_clip, get_settings
+from ..adapters.database import Database
+from ..adapters.openai_client import OpenAIClient
+from ..adapters.opensearch_client import OpenSearchClient
+from ..adapters.clip_client import ClipClient, ClipClientError
+from ..config import Settings
 from ..domain.schemas import SearchRequest, SearchResponse, VideoSceneResponse
 from ..domain.search.fusion import (
     fuse,
@@ -20,10 +25,6 @@ from ..domain.search.fusion import (
     FusedCandidate,
     ScoreType,
 )
-from ..adapters.database import db
-from ..adapters.openai_client import openai_client
-from ..adapters.opensearch_client import opensearch_client
-from ..adapters.clip_client import get_clip_client, is_clip_available, ClipClientError
 from ..domain.search.rerank import rerank_with_clip
 from ..domain.visual_router import get_visual_intent_router
 
@@ -56,6 +57,7 @@ def _run_dense_search(
     video_id: Optional[UUID],
     limit: int,
     threshold: float,
+    db: Database,
 ) -> tuple[list[Candidate], int]:
     """Run dense vector search and return candidates with timing.
 
@@ -88,6 +90,7 @@ def _run_lexical_search(
     user_id: UUID,
     video_id: Optional[UUID],
     limit: int,
+    opensearch_client: OpenSearchClient,
 ) -> tuple[list[Candidate], int]:
     """Run BM25 lexical search and return candidates with timing.
 
@@ -121,6 +124,9 @@ def _run_multi_dense_search(
     user_id: UUID,
     video_id: Optional[UUID],
     query: str,
+    db: Database,
+    opensearch_client: OpenSearchClient,
+    settings: Settings,
     query_embedding_clip: Optional[list[float]] = None,
 ) -> tuple[dict[str, list[Candidate]], dict[str, int]]:
     """Run multi-channel dense + lexical search in parallel with timeouts.
@@ -243,6 +249,7 @@ def _run_multi_dense_search(
 
 def _hydrate_scenes(
     fused_results: list[FusedCandidate],
+    db: Database,
     include_debug: bool = False,
 ) -> tuple[list[VideoSceneResponse], int]:
     """Fetch full scene data for fused results.
@@ -332,6 +339,11 @@ def _hydrate_scenes(
 async def search_scenes(
     request: SearchRequest,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    openai_client: OpenAIClient = Depends(get_openai),
+    opensearch_client: OpenSearchClient = Depends(get_opensearch),
+    clip_client: Optional[ClipClient] = Depends(get_clip),
+    settings: Settings = Depends(get_settings),
 ):
     """
     Search for video scenes using natural language.
@@ -425,7 +437,7 @@ async def search_scenes(
     # Determine visual mode (recall/rerank/auto/skip)
     visual_mode = settings.visual_mode
     visual_intent_result = None
-    clip_enabled = is_clip_available() and settings.weight_visual > 0
+    clip_enabled = (clip_client is not None) and settings.weight_visual > 0
 
     if visual_mode == "auto" and clip_enabled:
         # Use visual intent router to decide
@@ -443,7 +455,6 @@ async def search_scenes(
     if clip_enabled and visual_mode in ("recall", "rerank"):
         try:
             clip_start = time.time()
-            clip_client = get_clip_client()
             query_embedding_clip = clip_client.create_text_embedding(
                 request.query,
                 normalize=True,
@@ -556,6 +567,9 @@ async def search_scenes(
             user_id,
             request.video_id,
             request.query,
+            db,
+            opensearch_client,
+            settings,
             query_embedding_clip=clip_for_retrieval,
         )
 
@@ -674,6 +688,7 @@ async def search_scenes(
                     request.video_id,
                     settings.candidate_k_dense,
                     request.threshold,
+                    db,
                 ): "dense",
                 executor.submit(
                     _run_lexical_search,
@@ -681,6 +696,7 @@ async def search_scenes(
                     user_id,
                     request.video_id,
                     settings.candidate_k_lexical,
+                    opensearch_client,
                 ): "lexical",
             }
 
@@ -719,6 +735,7 @@ async def search_scenes(
             user_id,
             request.video_id,
             request.limit,
+            opensearch_client,
         )
         fused_results = lexical_only_fusion(
             lexical_candidates,
@@ -737,6 +754,7 @@ async def search_scenes(
             request.video_id,
             request.limit,
             request.threshold,
+            db,
         )
         fused_results = dense_only_fusion(
             dense_candidates,
@@ -756,6 +774,7 @@ async def search_scenes(
     # Hydrate scenes with debug info if enabled
     scene_responses, hydrate_ms = _hydrate_scenes(
         fused_results,
+        db,
         include_debug=settings.search_debug,
     )
 

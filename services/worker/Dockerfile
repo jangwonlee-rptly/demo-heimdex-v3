@@ -54,5 +54,5 @@ RUN mkdir -p /tmp/heimdex /tmp/clip_cache
 # Set Python path (includes both /app for src/ and libs/)
 ENV PYTHONPATH=/app
 
-# Run Dramatiq worker
-CMD ["dramatiq", "src.tasks", "-p", "1", "-t", "1"]
+# Run worker via __main__.py which bootstraps context before starting Dramatiq
+CMD ["python", "-m", "src"]

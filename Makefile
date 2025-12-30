@@ -43,33 +43,34 @@ clean: ## Stop services and remove volumes
 	docker compose down -v
 	rm -rf services/api/htmlcov services/worker/htmlcov
 
-# Test commands
+# Test commands (use container paths: /app/tests/)
 test: ## Run API tests (default)
-	./scripts/test.sh api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v
 
 test-api: ## Run API tests
-	./scripts/test.sh api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v
 
 test-worker: ## Run worker tests
-	./scripts/test.sh worker
+	docker-compose -f docker-compose.test.yml run --rm worker pytest tests/ -v
 
 test-all: ## Run all tests
-	./scripts/test.sh all
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v && \
+	docker-compose -f docker-compose.test.yml run --rm worker pytest tests/ -v
 
 test-coverage: ## Run tests with HTML coverage report
-	./scripts/test.sh --coverage api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v --cov=src --cov-report=html
 
 test-unit: ## Run only unit tests
-	./scripts/test.sh --unit api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v -m unit
 
 test-integration: ## Run only integration tests
-	./scripts/test.sh --integration api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -v -m integration
 
 test-shell: ## Open shell in test container for debugging
-	./scripts/test.sh --shell api
+	docker-compose -f docker-compose.test.yml run --rm api /bin/bash
 
 test-verbose: ## Run tests with verbose output
-	./scripts/test.sh --verbose api
+	docker-compose -f docker-compose.test.yml run --rm api pytest tests/ -vv
 
 # Development workflow shortcuts
 dev: up ## Start development environment

@@ -4,13 +4,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import get_current_user, User
+from ..dependencies import get_db
+from ..adapters.database import Database
 from ..domain.schemas import (
     UserProfileCreate,
     UserProfileUpdate,
     UserProfileResponse,
     UserInfoResponse,
 )
-from ..adapters.database import db
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,10 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/me/profile", response_model=UserProfileResponse | None)
-async def get_user_profile(current_user: User = Depends(get_current_user)):
+async def get_user_profile(
+    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
     """
     Get the current user's profile.
 
@@ -69,6 +73,7 @@ async def get_user_profile(current_user: User = Depends(get_current_user)):
 async def create_or_update_user_profile(
     profile_data: UserProfileCreate,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ):
     """
     Create or update the current user's profile.

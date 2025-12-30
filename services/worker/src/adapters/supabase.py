@@ -4,21 +4,24 @@ from pathlib import Path
 from uuid import UUID
 from supabase import create_client, Client
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
 class SupabaseStorage:
     """Supabase storage client wrapper."""
 
-    def __init__(self):
-        """Initialize the Supabase storage client."""
+    def __init__(self, supabase_url: str, supabase_key: str):
+        """Initialize the Supabase storage client.
+
+        Args:
+            supabase_url: Supabase project URL
+            supabase_key: Supabase service role key
+        """
         # Ensure storage URL has trailing slash to prevent warnings
-        storage_url = settings.supabase_url.rstrip("/") + "/"
+        storage_url = supabase_url.rstrip("/") + "/"
         self.client: Client = create_client(
             storage_url,
-            settings.supabase_service_role_key,
+            supabase_key,
         )
         self.bucket_name = "videos"
         self.storage_url = storage_url  # Base URL for constructing public URLs

@@ -10,8 +10,6 @@ from opensearchpy.exceptions import (
     RequestError,
 )
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 # Index mapping for scene documents
@@ -98,18 +96,27 @@ SCENE_INDEX_MAPPING = {
 class OpenSearchClient:
     """OpenSearch client for BM25 lexical search."""
 
-    def __init__(self):
-        """Initialize the OpenSearch client."""
+    def __init__(self, url: str, timeout_s: float = 1.0, index_name: str = "scene_docs"):
+        """Initialize the OpenSearch client.
+
+        Args:
+            url: OpenSearch server URL (e.g., "http://opensearch:9200")
+            timeout_s: Request timeout in seconds
+            index_name: Name of the scene index
+        """
         self._client: Optional[OpenSearch] = None
         self._available: Optional[bool] = None
+        self._url = url
+        self._timeout_s = timeout_s
+        self._index_name = index_name
 
     @property
     def client(self) -> OpenSearch:
         """Lazily initialize and return the OpenSearch client."""
         if self._client is None:
             self._client = OpenSearch(
-                hosts=[settings.opensearch_url],
-                timeout=settings.opensearch_timeout_s,
+                hosts=[self._url],
+                timeout=self._timeout_s,
                 max_retries=1,
                 retry_on_timeout=False,
             )
@@ -171,7 +178,7 @@ class OpenSearchClient:
         Returns:
             bool: True if index exists or was created, False on error.
         """
-        index_name = settings.opensearch_index_scenes
+        index_name = self._index_name
 
         # Log plugin availability (non-fatal check)
         try:
@@ -220,7 +227,7 @@ class OpenSearchClient:
             logger.warning("OpenSearch not available, skipping BM25 search")
             return []
 
-        index_name = settings.opensearch_index_scenes
+        index_name = self._index_name
 
         # Build filter conditions
         filter_conditions = [{"term": {"owner_id": owner_id}}]
@@ -306,7 +313,7 @@ class OpenSearchClient:
             return None
 
         try:
-            index_name = settings.opensearch_index_scenes
+            index_name = self._index_name
             stats = self.client.indices.stats(index=index_name)
             return {
                 "doc_count": stats["_all"]["primaries"]["docs"]["count"],
@@ -317,5 +324,6 @@ class OpenSearchClient:
             return None
 
 
-# Global OpenSearch client instance
-opensearch_client = OpenSearchClient()
+# DEPRECATED: Global instance removed for Phase 1 refactor.
+# Use dependency injection instead via get_opensearch() from dependencies.py
+opensearch_client: OpenSearchClient = None  # type: ignore

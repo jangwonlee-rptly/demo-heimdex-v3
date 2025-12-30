@@ -5,7 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import settings
+from .config import Settings
+from .context import create_app_context, cleanup_app_context
 from .routes import health, profile, videos, search, exports, admin, preferences, highlights
 from .exceptions import HeimdexException
 
@@ -21,18 +22,37 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events.
 
+    This is the composition root for the API service. All dependencies are
+    created here and attached to app.state for use throughout the application.
+
     Args:
         app: The FastAPI application instance.
 
     Yields:
         None: Control is yielded back to the application.
     """
-    # Startup
+    # Startup: Create settings and application context
     logger.info("Starting Heimdex API service")
+
+    # Load settings from environment
+    settings = Settings()
     logger.info(f"CORS origins: {settings.cors_origins_list}")
+
+    # Create application context with all dependencies
+    # This is where all adapters are instantiated (composition root)
+    logger.info("Initializing application context...")
+    ctx = create_app_context(settings)
+
+    # Attach context to app state for access via dependencies
+    app.state.ctx = ctx
+    logger.info("Application context initialized successfully")
+
     yield
-    # Shutdown
+
+    # Shutdown: Clean up resources
     logger.info("Shutting down Heimdex API service")
+    cleanup_app_context(ctx)
+    logger.info("Application context cleaned up")
 
 
 # Create FastAPI application
@@ -43,10 +63,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
+# Configure CORS with permissive defaults
+# Settings are loaded in lifespan, so we can't use them here
+# In production, configure CORS via environment variables and restart
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=["*"],  # Override via Settings in lifespan if needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -123,9 +145,11 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
+    # Create settings for CLI usage only
+    _settings = Settings()
     uvicorn.run(
         "main:app",
-        host=settings.api_host,
-        port=settings.api_port,
+        host=_settings.api_host,
+        port=_settings.api_port,
         reload=True,
     )

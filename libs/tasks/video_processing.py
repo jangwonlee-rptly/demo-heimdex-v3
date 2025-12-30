@@ -45,7 +45,22 @@ def process_video(video_id: str) -> None:
         # Lazy import to avoid requiring worker dependencies in API service
         # When API calls .send(), this function body never executes
         # When Worker executes the job, this imports and runs successfully
-        from src.domain.video_processor import video_processor
+        from src.tasks import get_worker_context
+        from src.domain.video_processor import VideoProcessor
+
+        # Get worker context (contains all dependencies)
+        ctx = get_worker_context()
+
+        # Create video processor with injected dependencies
+        video_processor = VideoProcessor(
+            db=ctx.db,
+            storage=ctx.storage,
+            opensearch=ctx.opensearch,
+            openai=ctx.openai,
+            clip_embedder=ctx.clip_embedder,
+            ffmpeg=ctx.ffmpeg,
+            settings=ctx.settings,
+        )
 
         video_uuid = UUID(video_id)
         video_processor.process_video(video_uuid)

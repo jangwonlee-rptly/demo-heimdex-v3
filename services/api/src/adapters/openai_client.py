@@ -2,17 +2,19 @@
 import logging
 from openai import OpenAI
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
     """OpenAI API client wrapper."""
 
-    def __init__(self):
-        """Initialize the OpenAI client."""
-        self.client = OpenAI(api_key=settings.openai_api_key)
+    def __init__(self, api_key: str):
+        """Initialize the OpenAI client.
+
+        Args:
+            api_key: OpenAI API key for authentication
+        """
+        self.client = OpenAI(api_key=api_key)
         self.embedding_model = "text-embedding-3-small"
         self.embedding_dimensions = 1536
 
@@ -34,5 +36,6 @@ class OpenAIClient:
         return response.data[0].embedding
 
 
-# Global OpenAI client instance
-openai_client = OpenAIClient()
+# DEPRECATED: Global instance removed for Phase 1 refactor.
+# Use dependency injection instead via get_openai() from dependencies.py
+openai_client: OpenAIClient = None  # type: ignore

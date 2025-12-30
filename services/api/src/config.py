@@ -198,5 +198,8 @@ class Settings(BaseSettings):
         return [uid.strip() for uid in self.admin_user_ids.split(",") if uid.strip()]
 
 
-# Global settings instance
-settings = Settings()
+# DEPRECATED: Module-level settings instance removed for Phase 1 refactor.
+# Settings are now created at app startup (main.py lifespan) and injected via dependencies.
+# This remains as None to prevent import-time side effects.
+# Use get_settings() dependency injection in routes instead.
+settings: Settings = None  # type: ignore

@@ -5,6 +5,10 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from ..auth import get_current_user, User
+from ..dependencies import get_db, get_storage, get_queue
+from ..adapters.database import Database
+from ..adapters.supabase import SupabaseStorage
+from ..adapters.queue import TaskQueue
 from ..domain.schemas import (
     VideoUploadUrlResponse,
     VideoUploadedRequest,
@@ -15,9 +19,6 @@ from ..domain.schemas import (
     VideoSceneResponse,
 )
 from ..domain.models import VideoStatus
-from ..adapters.database import db
-from ..adapters.supabase import storage
-from ..adapters.queue import task_queue
 from ..exceptions import (
     VideoNotFoundException,
     ForbiddenException,
@@ -95,6 +96,7 @@ async def create_upload_url(
     file_extension: str = Query("mp4", description="File extension (e.g., mp4, mov)"),
     filename: str = Query(..., description="Original filename"),
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ):
     """
     Create a video record and return storage path for client-side upload.
@@ -106,6 +108,7 @@ async def create_upload_url(
         file_extension: The file extension of the video (default: "mp4").
         filename: The original filename of the video.
         current_user: The authenticated user (injected).
+        db: Database adapter (injected).
 
     Returns:
         VideoUploadUrlResponse: Contains the video ID and storage path.
@@ -162,6 +165,8 @@ async def mark_video_uploaded(
     video_id: UUID,
     request: VideoUploadedRequest,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    queue: TaskQueue = Depends(get_queue),
 ):
     """
     Mark a video as uploaded and enqueue it for processing.
@@ -201,7 +206,7 @@ async def mark_video_uploaded(
             )
 
         # Enqueue processing job
-        task_queue.enqueue_video_processing(video_id)
+        queue.enqueue_video_processing(video_id, db=db)
 
         logger.info(f"Enqueued processing for video {video_id}")
 
@@ -225,6 +230,8 @@ async def mark_video_uploaded(
 async def trigger_video_processing(
     video_id: UUID,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    queue: TaskQueue = Depends(get_queue),
 ):
     """
     Manually trigger processing for a pending video.
@@ -262,7 +269,7 @@ async def trigger_video_processing(
             )
 
         # Enqueue processing job
-        task_queue.enqueue_video_processing(video_id)
+        queue.enqueue_video_processing(video_id, db=db)
 
         logger.info(f"Manually triggered processing for video {video_id}")
 
@@ -287,6 +294,8 @@ async def reprocess_video(
     video_id: UUID,
     request: VideoReprocessRequest,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    queue: TaskQueue = Depends(get_queue),
 ):
     """
     Reprocess a video with optional language override.
@@ -352,7 +361,7 @@ async def reprocess_video(
         )
 
         # Enqueue processing job
-        task_queue.enqueue_video_processing(video_id)
+        queue.enqueue_video_processing(video_id, db=db)
 
         logger.info(f"Enqueued reprocessing for video {video_id}")
 
@@ -375,7 +384,10 @@ async def reprocess_video(
 
 
 @router.get("/videos", response_model=VideoListResponse)
-async def list_videos(current_user: User = Depends(get_current_user)):
+async def list_videos(
+    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
     """List all videos for the current user.
 
     Args:
@@ -424,6 +436,7 @@ async def list_videos(current_user: User = Depends(get_current_user)):
 async def get_video(
     video_id: UUID,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ):
     """Get details for a specific video.
 
@@ -485,6 +498,7 @@ async def get_video(
 async def get_video_details(
     video_id: UUID,
     current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ):
     """
     Get detailed information for a specific video, including all scenes.

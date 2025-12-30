@@ -10,11 +10,7 @@ from uuid import UUID
 
 from .scene_detector import scene_detector, DetectorPreferences
 from .sidecar_builder import sidecar_builder
-from ..adapters.database import db, VideoStatus
-from ..adapters.supabase import storage
-from ..adapters.ffmpeg import ffmpeg
-from ..adapters.openai_client import openai_client
-from ..config import settings
+from ..adapters.database import VideoStatus
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +18,30 @@ logger = logging.getLogger(__name__)
 class VideoProcessor:
     """Orchestrates the complete video processing pipeline."""
 
-    # API rate limiting semaphore (configurable via settings)
-    _api_semaphore = Semaphore(settings.max_api_concurrency)
+    def __init__(self, db, storage, opensearch, openai, clip_embedder, ffmpeg, settings):
+        """Initialize VideoProcessor with injected dependencies.
 
-    @staticmethod
+        Args:
+            db: Database adapter
+            storage: Supabase storage adapter
+            opensearch: OpenSearch client (optional)
+            openai: OpenAI client
+            clip_embedder: CLIP embedder (optional)
+            ffmpeg: FFmpeg adapter
+            settings: Settings object
+        """
+        self.db = db
+        self.storage = storage
+        self.opensearch = opensearch
+        self.openai = openai
+        self.clip_embedder = clip_embedder
+        self.ffmpeg = ffmpeg
+        self.settings = settings
+        # API rate limiting semaphore (configurable via settings)
+        self._api_semaphore = Semaphore(settings.max_api_concurrency)
+
     def _process_single_scene(
+        self,
         scene,
         video_path: Path,
         full_transcript: str,
@@ -62,7 +77,7 @@ class VideoProcessor:
             logger.info(f"Processing scene {scene.index + 1}/{total_scenes}")
 
             # Acquire semaphore to limit concurrent API calls
-            with VideoProcessor._api_semaphore:
+            with self._api_semaphore:
                 # Build sidecar with user's preferred language
                 sidecar = sidecar_builder.build_sidecar(
                     scene=scene,
@@ -78,7 +93,7 @@ class VideoProcessor:
                 )
 
             # Save to database (outside semaphore to reduce lock time)
-            scene_id = db.create_scene(
+            scene_id = self.db.create_scene(
                 video_id=video_id,
                 index=sidecar.index,
                 start_s=sidecar.start_s,
@@ -116,8 +131,7 @@ class VideoProcessor:
             logger.error(f"Failed to process scene {scene.index}: {e}", exc_info=True)
             return (False, str(e), scene.index)
 
-    @staticmethod
-    def process_video(video_id: UUID) -> None:
+    def process_video(self, video_id: UUID) -> None:
         """
         Process a video through the complete pipeline.
 
@@ -146,16 +160,16 @@ class VideoProcessor:
 
         # Phase 2: Record processing start time
         processing_started_at = datetime.utcnow()
-        db.update_video_processing_start(video_id, processing_started_at)
+        self.db.update_video_processing_start(video_id, processing_started_at)
 
         # Create working directory
-        work_dir = Path(settings.temp_dir) / str(video_id)
+        work_dir = Path(self.settings.temp_dir) / str(video_id)
         work_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             # Step 1: Fetch video record
             logger.info("Fetching video record from database")
-            db.update_video_processing_stage(video_id, "downloading")
+            self.db.update_video_processing_stage(video_id, "downloading")
             video = db.get_video(video_id)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
@@ -182,16 +196,16 @@ class VideoProcessor:
             detector_preferences = DetectorPreferences.from_dict(detector_prefs_raw)
 
             # Update status to PROCESSING
-            db.update_video_status(video_id, VideoStatus.PROCESSING)
+            self.db.update_video_status(video_id, VideoStatus.PROCESSING)
 
             # Step 2: Download video file
             logger.info(f"Downloading video from storage: {storage_path}")
             video_path = work_dir / "video.mp4"
-            storage.download_file(storage_path, video_path)
+            self.storage.download_file(storage_path, video_path)
 
             # Step 3: Extract metadata
             logger.info("Extracting video metadata")
-            db.update_video_processing_stage(video_id, "metadata")
+            self.db.update_video_processing_stage(video_id, "metadata")
             try:
                 metadata = ffmpeg.probe_video(video_path)
                 logger.info(
@@ -228,7 +242,7 @@ class VideoProcessor:
                     if camera_make or camera_model:
                         logger.info(f"EXIF Camera: {camera_make} {camera_model}")
 
-                db.update_video_metadata(
+                self.db.update_video_metadata(
                     video_id=video_id,
                     duration_s=metadata.duration_s,
                     frame_rate=metadata.frame_rate,
@@ -251,7 +265,7 @@ class VideoProcessor:
 
             # Step 4: Detect scenes using best-of-all-detectors approach
             logger.info("Detecting scenes using multi-detector approach")
-            db.update_video_processing_stage(video_id, "scene_detection")
+            self.db.update_video_processing_stage(video_id, "scene_detection")
             scenes, detection_result = scene_detector.detect_scenes_with_preferences(
                 video_path,
                 video_duration_s=metadata.duration_s,
@@ -266,7 +280,7 @@ class VideoProcessor:
 
             # Step 5: Extract audio and transcribe (with caching for idempotency)
             logger.info("Checking for cached transcript")
-            db.update_video_processing_stage(video_id, "transcription")
+            self.db.update_video_processing_stage(video_id, "transcription")
             full_transcript, transcript_segments = db.get_cached_transcript(video_id)
 
             if full_transcript:
@@ -288,11 +302,11 @@ class VideoProcessor:
                 if ffmpeg.has_audio_stream(video_path):
                     logger.info("Extracting and transcribing audio (this may take a while...)")
                     audio_path = work_dir / "audio.mp3"
-                    ffmpeg.extract_audio(video_path, audio_path)
+                    self.ffmpeg.extract_audio(video_path, audio_path)
 
                     # Pass transcript_language to Whisper if set (from reprocess request)
                     # Use quality-aware transcription to filter out music/noise
-                    transcription_result = openai_client.transcribe_audio_with_quality(
+                    transcription_result = self.openai.transcribe_audio_with_quality(
                         audio_path,
                         language=transcript_language,
                     )
@@ -314,13 +328,13 @@ class VideoProcessor:
 
                     # Save transcript and segments as checkpoint for future retries
                     # (empty string/None if no speech detected)
-                    db.save_transcript(video_id, full_transcript, transcript_segments)
+                    self.db.save_transcript(video_id, full_transcript, transcript_segments)
                 else:
                     logger.warning("No audio stream found, skipping transcription")
 
             # Step 6: Process each scene in parallel (skip already processed scenes for idempotency)
             logger.info(f"Processing {len(scenes)} scenes in parallel")
-            db.update_video_processing_stage(video_id, "scene_processing")
+            self.db.update_video_processing_stage(video_id, "scene_processing")
 
             # Get set of scene indices that have already been processed
             existing_scene_indices = db.get_existing_scene_indices(video_id)
@@ -339,7 +353,7 @@ class VideoProcessor:
 
             # Process scenes in parallel using ThreadPoolExecutor
             if scenes_to_process:
-                max_workers = min(settings.max_scene_workers, len(scenes_to_process))
+                max_workers = min(self.settings.max_scene_workers, len(scenes_to_process))
                 logger.info(f"Using {max_workers} parallel workers for scene processing")
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -398,7 +412,7 @@ class VideoProcessor:
                         thumbnail_storage_path,
                         content_type="image/jpeg",
                     )
-                    db.update_video_metadata(video_id=video_id, thumbnail_url=thumbnail_url)
+                    self.db.update_video_metadata(video_id=video_id, thumbnail_url=thumbnail_url)
 
             # Step 8: Generate video-level summary from scene descriptions (v2)
             logger.info("Generating video-level summary from scene descriptions")
@@ -407,14 +421,14 @@ class VideoProcessor:
 
                 if scene_descriptions:
                     logger.info(f"Found {len(scene_descriptions)} scene descriptions for video summary")
-                    video_summary = openai_client.summarize_video_from_scenes(
+                    video_summary = self.openai.summarize_video_from_scenes(
                         scene_descriptions,
                         transcript_language=language,
                     )
 
                     if video_summary:
                         logger.info(f"Generated video summary: {video_summary[:100]}...")
-                        db.update_video_metadata(
+                        self.db.update_video_metadata(
                             video_id=video_id,
                             video_summary=video_summary,
                             has_rich_semantics=True,
@@ -422,26 +436,26 @@ class VideoProcessor:
                     else:
                         logger.warning("Failed to generate video summary")
                         # Still mark as having rich semantics even if summary failed
-                        db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
+                        self.db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
                 else:
                     logger.warning("No scene descriptions found for video summary")
                     # Mark as having rich semantics even without summary (scenes have tags)
-                    db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
+                    self.db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
 
             except Exception as e:
                 logger.error(f"Failed to generate video summary: {e}", exc_info=True)
                 # Continue processing - summary generation failure shouldn't fail the entire job
                 # Still mark as having rich semantics (scenes have the new fields)
-                db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
+                self.db.update_video_metadata(video_id=video_id, has_rich_semantics=True)
 
             # Mark as READY
-            db.update_video_processing_stage(video_id, "finalizing")
-            db.update_video_status(video_id, VideoStatus.READY)
+            self.db.update_video_processing_stage(video_id, "finalizing")
+            self.db.update_video_status(video_id, VideoStatus.READY)
 
             # Phase 2: Record completion time and duration
             processing_finished_at = datetime.utcnow()
             processing_duration_ms = int((processing_finished_at - processing_started_at).total_seconds() * 1000)
-            db.update_video_processing_finish(
+            self.db.update_video_processing_finish(
                 video_id,
                 processing_finished_at,
                 processing_duration_ms,
@@ -456,7 +470,7 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"Video processing failed for video_id={video_id}: {e}", exc_info=True)
             # Mark as FAILED with error message
-            db.update_video_status(
+            self.db.update_video_status(
                 video_id,
                 VideoStatus.FAILED,
                 error_message=str(e)[:500],  # Truncate error message
@@ -465,7 +479,7 @@ class VideoProcessor:
             # Phase 2: Record failure time and duration
             processing_finished_at = datetime.utcnow()
             processing_duration_ms = int((processing_finished_at - processing_started_at).total_seconds() * 1000)
-            db.update_video_processing_finish(
+            self.db.update_video_processing_finish(
                 video_id,
                 processing_finished_at,
                 processing_duration_ms,

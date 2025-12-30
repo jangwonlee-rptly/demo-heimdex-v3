@@ -254,45 +254,6 @@ class ClipClient:
         self.close()
 
 
-# Global CLIP client instance (lazy-initialized)
-_clip_client: Optional[ClipClient] = None
-
-
-def get_clip_client() -> ClipClient:
-    """Get or create the global CLIP client instance.
-
-    Returns:
-        ClipClient: Singleton CLIP client
-
-    Raises:
-        ClipClientError: If CLIP is not configured
-    """
-    global _clip_client
-
-    if _clip_client is None:
-        if not settings.clip_runpod_url or not settings.clip_runpod_secret:
-            raise ClipClientError(
-                "CLIP client not configured: missing CLIP_RUNPOD_URL or CLIP_RUNPOD_SECRET"
-            )
-
-        _clip_client = ClipClient(
-            base_url=settings.clip_runpod_url,
-            secret_key=settings.clip_runpod_secret,
-            timeout_s=settings.clip_text_embedding_timeout_s,
-            max_retries=settings.clip_text_embedding_max_retries,
-        )
-
-    return _clip_client
-
-
-def is_clip_available() -> bool:
-    """Check if CLIP client is available and configured.
-
-    Returns:
-        bool: True if CLIP is configured and available
-    """
-    try:
-        get_clip_client()
-        return True
-    except ClipClientError:
-        return False
+# DEPRECATED: Module-level lazy singleton removed for Phase 1 refactor.
+# CLIP client instances are now created at app startup via AppContext.
+# Use dependency injection via get_clip() from dependencies.py instead.
