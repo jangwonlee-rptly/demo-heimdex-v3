@@ -360,7 +360,7 @@ class VideoProcessor:
                     # Submit all scene processing tasks
                     future_to_scene = {
                         executor.submit(
-                            VideoProcessor._process_single_scene,
+                            self._process_single_scene,
                             scene,
                             video_path,
                             full_transcript,
