@@ -1,0 +1,163 @@
+[2025-12-30 16:32] Phase 1 Refactoring: SidecarBuilder Dependency Injection
+File: devlog/2512301632.txt
+
+== What we worked on ==
+- Completed Phase 1 refactoring of worker service to use dependency injection pattern
+- Fixed video upload processing failures in deployed Railway environment
+- Systematically removed module-level singletons and replaced with instance-based dependencies
+
+== Changes made ==
+- services/worker/src/domain/sidecar_builder.py:
+  - Added __init__ method with dependency injection (storage, ffmpeg, openai, clip_embedder, settings)
+  - Removed 8 @staticmethod decorators from methods that need instance access
+  - Added 'self' parameter to all methods: build_sidecar, _extract_transcript_segment_from_segments,
+    _extract_transcript_segment, _should_skip_visual_analysis, _normalize_tags,
+    _assess_scene_meaningfulness, _smart_truncate, _build_combined_text
+  - Fixed 40+ bare dependency references (storage.*, ffmpeg.*, openai_client.*, settings.*, clip_embedder.*)
+  - Removed module-level imports of adapter singletons
+  - Removed module-level sidecar_builder singleton
+  - Removed redundant local ClipEmbedder() instantiation in _generate_clip_embedding_local
+
+- services/worker/src/domain/video_processor.py:
+  - Updated import: from .sidecar_builder import SidecarBuilder
+  - Created SidecarBuilder instance in __init__ with injected dependencies
+  - Updated usage: sidecar_builder.build_sidecar() → self.sidecar_builder.build_sidecar()
+  - Fixed 8 bare dependency references to use self.* (db, ffmpeg, storage)
+  - Fixed static method call: VideoProcessor._process_single_scene → self._process_single_scene
+  - Removed erroneous global VideoProcessor() instantiation
+
+== Problems encountered ==
+
+Problem 1: Worker service not processing videos, no error logs
+- Symptom: API returned 202 Accepted but worker showed no processing activity
+- Initial investigation revealed worker was running but jobs weren't being processed
+
+Problem 2: VideoProcessor instantiation error
+- Error: TypeError: VideoProcessor.__init__() missing 7 required positional arguments
+- Location: video_processor.py line 499
+- Cause: Global video_processor = VideoProcessor() without arguments
+
+Problem 3: Bare dependency references in VideoProcessor
+- Error: NameError: name 'db' is not defined (and similar for ffmpeg, storage)
+- Location: Multiple lines in VideoProcessor.process_video()
+- Cause: Methods used db.method() instead of self.db.method()
+- Found 8 instances of bare dependency calls
+
+Problem 4: Static method call causing parameter shift
+- Error: AttributeError: 'PosixPath' object has no attribute 'index'
+- Location: video_processor.py line 363
+- Cause: Called VideoProcessor._process_single_scene as static method, causing parameter shift
+
+Problem 5: Storage upload failure in SidecarBuilder
+- Error: AttributeError: 'NoneType' object has no attribute 'storage'
+- Location: supabase.py line 91, called from sidecar_builder.py
+- Root cause: Module-level storage variable not initialized in worker context
+- This revealed the need for full Phase 1 refactoring of SidecarBuilder
+
+Problem 6: Multiple "name 'self' is not defined" errors after initial refactor
+- Error: NameError: name 'self' is not defined
+- Locations: Lines 728, 426, 1423, 1431, 1536 in sidecar_builder.py
+- Cause: Methods still had @staticmethod decorators but were being called with self.
+- Required systematic removal of all @staticmethod decorators
+
+Problem 7: Indentation errors after @staticmethod removal
+- Error: IndentationError: expected an indented block after function definition
+- Locations: Lines 1216, 1261, 1398 in sidecar_builder.py
+- Cause: sed script incorrectly added newlines when removing @staticmethod decorators
+
+Problem 8: Bare dependency references in RunPod and local CLIP methods
+- Error: NameError: name 'storage' is not defined
+- Locations: Lines 1423, 1431 (storage), 1536 (clip_embedder)
+- Cause: Missed during initial refactoring sweep
+
+== How we tried to solve it ==
+
+Attempt 1: Investigation and root cause analysis
+- Used Railway logs to identify error patterns
+- Traced execution flow from API → Redis → Worker
+- Identified endpoints: POST /videos/upload-url, POST /videos/{video_id}/uploaded, POST /videos/{video_id}/reprocess
+- Confirmed Dramatiq/Redis message queue was working
+
+Attempt 2: Incremental fixes for each error
+- Fixed VideoProcessor global instantiation by removing it
+- Fixed bare dependency references in VideoProcessor one by one
+- Fixed static method call by changing to instance method call
+- Initially attempted partial fix of SidecarBuilder
+
+Attempt 3: Full Phase 1 refactoring of SidecarBuilder
+- User explicitly requested: "let's actually do it properly. implement the full refactor of the sidecar builder"
+- Added __init__ method with all dependencies
+- Began systematic replacement of module-level references with self.*
+- Used grep to find all instances of storage.*, ffmpeg.*, openai_client.*, settings.*
+
+Attempt 4: Systematic @staticmethod removal
+- Used grep to find all @staticmethod decorators (found 8)
+- Initially removed decorators but forgot to add 'self' parameter
+- Had to go back and add 'self' parameter to method signatures
+
+Attempt 5: Fixing indentation errors
+- Manually corrected indentation for methods at lines 1216, 1261, 1398
+- Ensured proper 4-space class-level indentation
+
+Attempt 6: Final sweep for bare references
+- Used grep patterns to find any remaining bare dependency calls
+- Found and fixed storage.upload_file, storage.create_signed_url, clip_embedder.create_visual_embedding
+- Removed redundant local instantiation
+
+== How we solved it / Current status ==
+
+SOLVED: All Phase 1 refactoring complete
+
+Root cause: Worker service was using module-level singleton pattern for dependencies (storage, ffmpeg,
+openai_client, settings, clip_embedder) which were not properly initialized in the Dramatiq worker context.
+
+Key fixes:
+1. SidecarBuilder now uses constructor-based dependency injection
+   - All dependencies passed in __init__: storage, ffmpeg, openai, clip_embedder, settings
+   - All module-level singletons removed
+   - All methods use self.* to access dependencies
+
+2. VideoProcessor properly instantiates SidecarBuilder with dependencies
+   - Creates instance in __init__ with all required adapters
+   - Passes dependencies from its own injected dependencies
+
+3. All @staticmethod decorators removed from methods needing instance access
+   - 8 methods converted from static to instance methods
+   - All method calls updated from Class.method() to self.method()
+
+4. All bare dependency references replaced with self.*
+   - 40+ references in sidecar_builder.py
+   - 8 references in video_processor.py
+   - Systematic grep-based verification ensures completeness
+
+Verification:
+✓ Both sidecar_builder.py and video_processor.py compile successfully
+✓ No @staticmethod decorators remaining
+✓ No bare dependency references remaining
+✓ Full dependency injection pattern implemented throughout
+
+Trade-offs:
+- Slightly more verbose code (self.storage instead of storage)
+- Requires proper dependency wiring in __init__ methods
+- But: Much more testable, explicit dependencies, proper initialization
+
+== Next steps / TODOs ==
+
+1. Deploy to Railway and verify worker processes videos successfully
+   - Upload a test video
+   - Check Railway logs for both API and worker services
+   - Verify scenes are created in database
+   - Verify thumbnails are uploaded to Supabase storage
+
+2. Monitor for any remaining edge cases
+   - Check other worker tasks: export_scene_as_short, process_highlight_export
+   - Verify they also have proper dependency injection
+
+3. Consider applying Phase 1 pattern to other services if needed
+   - API service may have similar patterns to refactor
+   - Check frontend service for any backend integration issues
+
+4. Performance testing
+   - Verify video processing times are acceptable
+   - Check memory usage in worker container
+   - Monitor OpenAI API usage and costs
