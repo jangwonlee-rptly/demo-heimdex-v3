@@ -6,7 +6,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from pydantic import BaseModel
 
-from ..config import settings
+from ..config import Settings
+from ..dependencies import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,14 @@ class User(BaseModel):
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    settings: Settings = Depends(get_settings),
 ) -> User:
     """
     Verify Supabase JWT and extract user information.
 
     Args:
         credentials: HTTP Bearer token from request header
+        settings: Application settings (injected)
 
     Returns:
         User: User object with user_id and email
@@ -70,7 +73,10 @@ def get_current_user(
         )
 
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
+def require_admin(
+    user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> User:
     """
     Require admin privileges for endpoint access.
 
@@ -78,6 +84,7 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 
     Args:
         user: Authenticated user from JWT (via get_current_user dependency)
+        settings: Application settings (injected)
 
     Returns:
         User: The authenticated admin user
