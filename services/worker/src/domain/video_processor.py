@@ -299,7 +299,7 @@ class VideoProcessor:
                 full_transcript = ""
                 transcript_segments = None
 
-                if ffmpeg.has_audio_stream(video_path):
+                if self.ffmpeg.has_audio_stream(video_path):
                     logger.info("Extracting and transcribing audio (this may take a while...)")
                     audio_path = work_dir / "audio.mp3"
                     self.ffmpeg.extract_audio(video_path, audio_path)
