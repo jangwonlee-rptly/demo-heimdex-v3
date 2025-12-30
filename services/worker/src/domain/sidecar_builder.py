@@ -1420,7 +1420,7 @@ class SidecarBuilder:
         try:
             # Step 1: Upload thumbnail to storage (if not already uploaded)
             logger.debug(f"Scene {scene_index}: Uploading thumbnail to {thumbnail_storage_path}")
-            public_url = storage.upload_file(
+            public_url = self.storage.upload_file(
                 Path(best_frame_path),
                 thumbnail_storage_path,
                 content_type="image/jpeg",
@@ -1428,7 +1428,7 @@ class SidecarBuilder:
 
             # Step 2: Generate signed URL for RunPod (short-lived, more secure than public URL)
             logger.debug(f"Scene {scene_index}: Creating signed URL for RunPod access")
-            signed_url = storage.create_signed_url(
+            signed_url = self.storage.create_signed_url(
                 thumbnail_storage_path,
                 expires_in=300,  # 5 minutes - enough for RunPod to download
             )
@@ -1529,11 +1529,10 @@ class SidecarBuilder:
             Tuple of (embedding_list, metadata_dict)
         """
         try:
-            clip_embedder = ClipEmbedder()
             best_frame_quality = {
                 "quality_score": frame_quality_score,
             }
-            embedding_visual_clip, clip_metadata_obj = clip_embedder.create_visual_embedding(
+            embedding_visual_clip, clip_metadata_obj = self.clip_embedder.create_visual_embedding(
                 image_path=Path(best_frame_path),
                 quality_info=best_frame_quality,
                 timeout_s=self.settings.clip_timeout_s,
