@@ -170,7 +170,7 @@ class VideoProcessor:
             # Step 1: Fetch video record
             logger.info("Fetching video record from database")
             self.db.update_video_processing_stage(video_id, "downloading")
-            video = db.get_video(video_id)
+            video = self.db.get_video(video_id)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
 
@@ -187,7 +187,7 @@ class VideoProcessor:
                 logger.info("Using auto-detect for transcript language")
 
             # Fetch user's preferred language and scene detector preferences
-            user_profile = db.get_user_profile(owner_id)
+            user_profile = self.db.get_user_profile(owner_id)
             language = user_profile.get("preferred_language", "ko") if user_profile else "ko"
             logger.info(f"Processing video with output language: {language}")
 
@@ -207,7 +207,7 @@ class VideoProcessor:
             logger.info("Extracting video metadata")
             self.db.update_video_processing_stage(video_id, "metadata")
             try:
-                metadata = ffmpeg.probe_video(video_path)
+                metadata = self.ffmpeg.probe_video(video_path)
                 logger.info(
                     f"Extracted metadata: duration={metadata.duration_s:.2f}s, "
                     f"resolution={metadata.width}x{metadata.height}, "
@@ -281,7 +281,7 @@ class VideoProcessor:
             # Step 5: Extract audio and transcribe (with caching for idempotency)
             logger.info("Checking for cached transcript")
             self.db.update_video_processing_stage(video_id, "transcription")
-            full_transcript, transcript_segments = db.get_cached_transcript(video_id)
+            full_transcript, transcript_segments = self.db.get_cached_transcript(video_id)
 
             if full_transcript:
                 if transcript_segments:
@@ -337,7 +337,7 @@ class VideoProcessor:
             self.db.update_video_processing_stage(video_id, "scene_processing")
 
             # Get set of scene indices that have already been processed
-            existing_scene_indices = db.get_existing_scene_indices(video_id)
+            existing_scene_indices = self.db.get_existing_scene_indices(video_id)
             if existing_scene_indices:
                 logger.info(f"Found {len(existing_scene_indices)} already processed scenes, skipping them")
 
@@ -407,7 +407,7 @@ class VideoProcessor:
                 thumbnail_path = work_dir / f"scene_{first_scene.index}_frame_0.jpg"
                 if thumbnail_path.exists():
                     thumbnail_storage_path = f"{owner_id}/{video_id}/thumbnail.jpg"
-                    thumbnail_url = storage.upload_file(
+                    thumbnail_url = self.storage.upload_file(
                         thumbnail_path,
                         thumbnail_storage_path,
                         content_type="image/jpeg",
@@ -417,7 +417,7 @@ class VideoProcessor:
             # Step 8: Generate video-level summary from scene descriptions (v2)
             logger.info("Generating video-level summary from scene descriptions")
             try:
-                scene_descriptions = db.get_scene_descriptions(video_id)
+                scene_descriptions = self.db.get_scene_descriptions(video_id)
 
                 if scene_descriptions:
                     logger.info(f"Found {len(scene_descriptions)} scene descriptions for video summary")
