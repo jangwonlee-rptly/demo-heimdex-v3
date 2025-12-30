@@ -24,14 +24,16 @@ logger = logging.getLogger(__name__)
 class Database:
     """Database connection and query handler using Supabase client."""
 
-    def __init__(self, supabase_url: str, supabase_key: str):
+    def __init__(self, supabase_url: str, supabase_key: str, search_debug: bool = False):
         """Initialize the database client.
 
         Args:
             supabase_url: The URL of the Supabase instance.
             supabase_key: The API key for accessing Supabase.
+            search_debug: Whether to enable debug logging for search queries.
         """
         self.client: Client = create_client(supabase_url, supabase_key)
+        self.search_debug = search_debug
 
     # User Profile operations
     def get_user_profile(self, user_id: UUID) -> Optional[UserProfile]:
@@ -466,7 +468,7 @@ class Database:
             for rank, row in enumerate(response.data, start=1):
                 results.append((str(row["id"]), rank, float(row["similarity"])))
 
-            if settings.search_debug and results:
+            if self.search_debug and results:
                 logger.info(f"Transcript search: {len(results)} results, top score={results[0][2]:.4f}")
             else:
                 logger.debug(f"Transcript search: {len(results)} results")
@@ -513,7 +515,7 @@ class Database:
             for rank, row in enumerate(response.data, start=1):
                 results.append((str(row["id"]), rank, float(row["similarity"])))
 
-            if settings.search_debug and results:
+            if self.search_debug and results:
                 logger.info(f"Visual search: {len(results)} results, top score={results[0][2]:.4f}")
             else:
                 logger.debug(f"Visual search: {len(results)} results")
@@ -560,7 +562,7 @@ class Database:
             for rank, row in enumerate(response.data, start=1):
                 results.append((str(row["id"]), rank, float(row["similarity"])))
 
-            if settings.search_debug and results:
+            if self.search_debug and results:
                 logger.info(f"Summary search: {len(results)} results, top score={results[0][2]:.4f}")
             else:
                 logger.debug(f"Summary search: {len(results)} results")
@@ -619,7 +621,7 @@ class Database:
             for rank, row in enumerate(response.data, start=1):
                 results.append((str(row["id"]), rank, float(row["similarity"])))
 
-            if settings.search_debug and results:
+            if self.search_debug and results:
                 logger.info(
                     f"CLIP visual search: {len(results)} results, "
                     f"top score={results[0][2]:.4f}, threshold={threshold}"
@@ -682,7 +684,7 @@ class Database:
                 similarity = float(row["similarity"])
                 scores[scene_id] = similarity
 
-            if settings.search_debug:
+            if self.search_debug:
                 score_values = list(scores.values())
                 if score_values:
                     logger.info(

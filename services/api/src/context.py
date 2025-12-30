@@ -61,6 +61,7 @@ def create_app_context(settings: Settings) -> AppContext:
     db = Database(
         supabase_url=settings.supabase_url,
         supabase_key=settings.supabase_service_role_key,
+        search_debug=settings.search_debug,
     )
 
     # Create storage adapter
