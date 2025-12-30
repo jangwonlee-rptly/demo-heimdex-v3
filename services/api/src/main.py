@@ -17,6 +17,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load settings at module level for CORS configuration
+# This is safe because Settings() only reads environment variables (no I/O)
+_app_settings = Settings()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,8 +38,8 @@ async def lifespan(app: FastAPI):
     # Startup: Create settings and application context
     logger.info("Starting Heimdex API service")
 
-    # Load settings from environment
-    settings = Settings()
+    # Use the already-loaded settings
+    settings = _app_settings
     logger.info(f"CORS origins: {settings.cors_origins_list}")
 
     # Create application context with all dependencies
@@ -63,12 +67,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS with permissive defaults
-# Settings are loaded in lifespan, so we can't use them here
-# In production, configure CORS via environment variables and restart
+# Configure CORS using settings from environment
+# Settings() only reads env vars (no I/O), so safe to load at module level
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Override via Settings in lifespan if needed
+    allow_origins=_app_settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,11 +148,10 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    # Create settings for CLI usage only
-    _settings = Settings()
+    # Use module-level settings for CLI
     uvicorn.run(
         "main:app",
-        host=_settings.api_host,
-        port=_settings.api_port,
+        host=_app_settings.api_host,
+        port=_app_settings.api_port,
         reload=True,
     )
