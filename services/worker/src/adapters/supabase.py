@@ -10,13 +10,21 @@ logger = logging.getLogger(__name__)
 class SupabaseStorage:
     """Supabase storage client wrapper."""
 
-    def __init__(self, supabase_url: str, supabase_key: str):
+    def __init__(self, supabase_url: str = None, supabase_key: str = None):
         """Initialize the Supabase storage client.
 
         Args:
-            supabase_url: Supabase project URL
-            supabase_key: Supabase service role key
+            supabase_url: Supabase project URL (optional for legacy global instance)
+            supabase_key: Supabase service role key (optional for legacy global instance)
         """
+        # For legacy module-level instance, defer initialization
+        # TODO: Remove this after completing Phase 1 refactor for worker
+        if supabase_url is None or supabase_key is None:
+            self.client = None
+            self.bucket_name = "videos"
+            self.storage_url = None
+            return
+
         # Ensure storage URL has trailing slash to prevent warnings
         storage_url = supabase_url.rstrip("/") + "/"
         self.client: Client = create_client(
