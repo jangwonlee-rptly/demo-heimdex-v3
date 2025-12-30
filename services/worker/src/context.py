@@ -79,7 +79,9 @@ def create_worker_context(settings: Settings) -> WorkerContext:
         opensearch = OpenSearchClient()
 
     # Create OpenAI client
-    openai = OpenAIClient(api_key=settings.openai_api_key)
+    # Note: Worker's OpenAIClient uses legacy pattern with no-arg constructor
+    # TODO: Refactor to accept api_key parameter like API service
+    openai = OpenAIClient()
 
     # Create CLIP embedder (optional, lazy-loads model on first use)
     clip_embedder: Optional[ClipEmbedder] = None
