@@ -265,8 +265,7 @@ class SidecarBuilder:
         self.clip_embedder = clip_embedder
         self.settings = settings
 
-    @staticmethod
-    def _normalize_tags(entities: list[str], actions: list[str]) -> list[str]:
+    def _normalize_tags(self, entities: list[str], actions: list[str]) -> list[str]:
         """
         Normalize and combine entities and actions into tags.
 
@@ -311,8 +310,8 @@ class SidecarBuilder:
 
         return deduplicated
 
-    @staticmethod
     def _assess_scene_meaningfulness(
+        self,
         transcript_segment: str,
         visual_description: str,
         visual_entities: list[str],
@@ -400,8 +399,8 @@ class SidecarBuilder:
         # No visual signal at all, return empty
         return ""
 
-    @staticmethod
     def _should_skip_visual_analysis(
+        self,
         scene_duration_s: float,
         transcript_length: int,
         has_meaningful_transcript: bool,
@@ -1311,8 +1310,7 @@ class SidecarBuilder:
         # Join with simple separator
         return " ".join(parts)
 
-    @staticmethod
-    def _smart_truncate(text: str, max_length: int) -> str:
+    def _smart_truncate(self, text: str, max_length: int) -> str:
         """
         Truncate text intelligently at sentence or word boundary.
 
@@ -1342,8 +1340,8 @@ class SidecarBuilder:
 
         return truncated + "..."
 
-    @staticmethod
     def _build_combined_text(
+        self,
         visual_summary: str,
         transcript: str,
         language: str = "ko",
