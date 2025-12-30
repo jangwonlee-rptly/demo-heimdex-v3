@@ -25,12 +25,8 @@ from uuid import UUID
 
 from .scene_detector import Scene
 from .frame_quality import frame_quality_checker
-from ..adapters.openai_client import openai_client
 from ..adapters.clip_embedder import ClipEmbedder
 from ..adapters import clip_inference
-from ..adapters.ffmpeg import ffmpeg
-from ..adapters.supabase import storage
-from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +249,22 @@ class ProcessingStats:
 class SidecarBuilder:
     """Builds scene sidecars with transcripts, visuals, and embeddings."""
 
+    def __init__(self, storage, ffmpeg, openai, clip_embedder, settings):
+        """Initialize SidecarBuilder with injected dependencies.
+
+        Args:
+            storage: Supabase storage adapter
+            ffmpeg: FFmpeg adapter
+            openai: OpenAI client
+            clip_embedder: CLIP embedder (optional)
+            settings: Settings object
+        """
+        self.storage = storage
+        self.ffmpeg = ffmpeg
+        self.openai = openai
+        self.clip_embedder = clip_embedder
+        self.settings = settings
+
     @staticmethod
     def _normalize_tags(entities: list[str], actions: list[str]) -> list[str]:
         """
@@ -411,24 +423,24 @@ class SidecarBuilder:
             Tuple of (should_skip: bool, reason: Optional[str])
         """
         # Global disable check
-        if not settings.visual_semantics_enabled:
+        if not self.settings.visual_semantics_enabled:
             return True, "visual_semantics_disabled"
 
         # If no transcript, we need visual analysis for search signal
-        if settings.visual_semantics_force_on_no_transcript and not has_meaningful_transcript:
+        if self.settings.visual_semantics_force_on_no_transcript and not has_meaningful_transcript:
             return False, None
 
         # Short scene with rich transcript - transcript is sufficient
-        is_short_scene = scene_duration_s < settings.visual_semantics_min_duration_s
-        has_rich_transcript = transcript_length >= settings.visual_semantics_transcript_threshold
+        is_short_scene = scene_duration_s < self.settings.visual_semantics_min_duration_s
+        has_rich_transcript = transcript_length >= self.settings.visual_semantics_transcript_threshold
 
         if is_short_scene and has_rich_transcript:
-            return True, f"short_scene_rich_transcript (duration={scene_duration_s:.1f}s < {settings.visual_semantics_min_duration_s}s, transcript={transcript_length} chars)"
+            return True, f"short_scene_rich_transcript (duration={scene_duration_s:.1f}s < {self.settings.visual_semantics_min_duration_s}s, transcript={transcript_length} chars)"
 
         return False, None
 
-    @staticmethod
     def _create_scene_embedding(
+        self,
         text: str,
         scene_index: int,
     ) -> tuple[list[float], EmbeddingMetadata]:
@@ -451,12 +463,12 @@ class SidecarBuilder:
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
         # Generate embedding
-        embedding = openai_client.create_embedding(text)
+        embedding = self.openai.create_embedding(text)
 
         # Create metadata for tracking
         metadata = EmbeddingMetadata(
-            model=settings.embedding_model,
-            dimensions=settings.embedding_dimensions,
+            model=self.settings.embedding_model,
+            dimensions=self.settings.embedding_dimensions,
             input_text_hash=text_hash,
             input_text_length=len(text),
         )
@@ -468,8 +480,8 @@ class SidecarBuilder:
 
         return embedding, metadata
 
-    @staticmethod
     def _create_embedding_with_retry(
+        self,
         text: str,
         channel_name: str,
         scene_index: int,
@@ -508,7 +520,7 @@ class SidecarBuilder:
         text = text.strip()
 
         if max_retries is None:
-            max_retries = settings.embedding_max_retries
+            max_retries = self.settings.embedding_max_retries
 
         # Compute hash for cache lookup
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
@@ -517,12 +529,12 @@ class SidecarBuilder:
         for attempt in range(max_retries):
             try:
                 # Generate embedding
-                embedding = openai_client.create_embedding(text)
+                embedding = self.openai.create_embedding(text)
 
                 # Create metadata
                 metadata = EmbeddingMetadata(
-                    model=settings.embedding_model,
-                    dimensions=settings.embedding_dimensions,
+                    model=self.settings.embedding_model,
+                    dimensions=self.settings.embedding_dimensions,
                     input_text_hash=text_hash,
                     input_text_length=len(text),
                     created_at=datetime.utcnow().isoformat() + "Z",
@@ -538,7 +550,7 @@ class SidecarBuilder:
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    delay = settings.embedding_retry_delay_s * (2 ** attempt)
+                    delay = self.settings.embedding_retry_delay_s * (2 ** attempt)
                     logger.warning(
                         f"Scene {scene_index} {channel_name} embedding failed "
                         f"(attempt {attempt + 1}/{max_retries}): {e}. "
@@ -554,8 +566,9 @@ class SidecarBuilder:
 
         return None, None
 
-    @staticmethod
+    
     def _create_multi_channel_embeddings(
+        self,
         transcript_segment: str,
         visual_description: str,
         tags: list[str],
@@ -596,12 +609,12 @@ class SidecarBuilder:
 
         # Channel 1: Transcript
         transcript_text = (transcript_segment or "").strip()
-        if len(transcript_text) > settings.embedding_transcript_max_length:
-            transcript_text = SidecarBuilder._smart_truncate(
-                transcript_text, settings.embedding_transcript_max_length
+        if len(transcript_text) > self.settings.embedding_transcript_max_length:
+            transcript_text = self._smart_truncate(
+                transcript_text, self.settings.embedding_transcript_max_length
             )
 
-        emb_transcript, meta_transcript = SidecarBuilder._create_embedding_with_retry(
+        emb_transcript, meta_transcript = self._create_embedding_with_retry(
             transcript_text, "transcript", scene_index, language
         )
         if meta_transcript:
@@ -612,7 +625,7 @@ class SidecarBuilder:
         if visual_description and visual_description.strip():
             visual_parts.append(visual_description.strip())
 
-        if settings.embedding_visual_include_tags and tags:
+        if self.settings.embedding_visual_include_tags and tags:
             # Deduplicate tags and join
             unique_tags = list(dict.fromkeys(tags))  # Preserve order, remove dupes
             tags_text = " ".join(unique_tags)
@@ -620,12 +633,12 @@ class SidecarBuilder:
                 visual_parts.append(tags_text)
 
         visual_text = " ".join(visual_parts)
-        if len(visual_text) > settings.embedding_visual_max_length:
-            visual_text = SidecarBuilder._smart_truncate(
-                visual_text, settings.embedding_visual_max_length
+        if len(visual_text) > self.settings.embedding_visual_max_length:
+            visual_text = self._smart_truncate(
+                visual_text, self.settings.embedding_visual_max_length
             )
 
-        emb_visual, meta_visual = SidecarBuilder._create_embedding_with_retry(
+        emb_visual, meta_visual = self._create_embedding_with_retry(
             visual_text, "visual", scene_index, language
         )
         if meta_visual:
@@ -633,14 +646,14 @@ class SidecarBuilder:
 
         # Channel 3: Summary (optional, currently disabled by default)
         emb_summary = None
-        if settings.embedding_summary_enabled and summary and summary.strip():
+        if self.settings.embedding_summary_enabled and summary and summary.strip():
             summary_text = summary.strip()
-            if len(summary_text) > settings.embedding_summary_max_length:
-                summary_text = SidecarBuilder._smart_truncate(
-                    summary_text, settings.embedding_summary_max_length
+            if len(summary_text) > self.settings.embedding_summary_max_length:
+                summary_text = self._smart_truncate(
+                    summary_text, self.settings.embedding_summary_max_length
                 )
 
-            emb_summary, meta_summary = SidecarBuilder._create_embedding_with_retry(
+            emb_summary, meta_summary = self._create_embedding_with_retry(
                 summary_text, "summary", scene_index, language
             )
             if meta_summary:
@@ -702,7 +715,7 @@ class SidecarBuilder:
             logger.debug(
                 f"Using timestamp-aligned transcript extraction for scene {scene.index}"
             )
-            transcript_segment = SidecarBuilder._extract_transcript_segment_from_segments(
+            transcript_segment = self._extract_transcript_segment_from_segments(
                 segments=transcript_segments,
                 scene_start_s=scene.start_s,
                 scene_end_s=scene.end_s,
@@ -712,7 +725,7 @@ class SidecarBuilder:
             logger.debug(
                 f"Falling back to proportional transcript extraction for scene {scene.index}"
             )
-            transcript_segment = SidecarBuilder._extract_transcript_segment(
+            transcript_segment = self._extract_transcript_segment(
                 full_transcript, scene, video_duration_s
             )
         stats.transcript_length = len(transcript_segment) if transcript_segment else 0
@@ -737,7 +750,7 @@ class SidecarBuilder:
         visual_clip_metadata = None
 
         # Determine if we should skip visual analysis (cost optimization)
-        should_skip_visuals, skip_reason = SidecarBuilder._should_skip_visual_analysis(
+        should_skip_visuals, skip_reason = self._should_skip_visual_analysis(
             scene_duration,
             stats.transcript_length,
             has_meaningful_transcript,
@@ -752,7 +765,7 @@ class SidecarBuilder:
         # Process visual semantics if not skipped
         if not should_skip_visuals:
             # Extract keyframes
-            keyframe_paths = SidecarBuilder._extract_keyframes(
+            keyframe_paths = self._extract_keyframes(
                 video_path, scene, work_dir
             )
             stats.keyframes_extracted = len(keyframe_paths)
@@ -766,7 +779,7 @@ class SidecarBuilder:
                     # Try frames in order of quality until we get meaningful content
                     max_attempts = min(
                         len(ranked_frames),
-                        settings.visual_semantics_max_frame_retries
+                        self.settings.visual_semantics_max_frame_retries
                     )
                     best_frame_path = ranked_frames[0][0]  # Keep best for thumbnail
 
@@ -776,38 +789,38 @@ class SidecarBuilder:
                     )
 
                     # Generate CLIP visual embedding from best frame (if enabled)
-                    if settings.clip_enabled and best_frame_path:
+                    if self.settings.clip_enabled and best_frame_path:
                         logger.info(
                             f"Scene {scene.index}: Generating CLIP embedding from best frame "
-                            f"(backend={settings.clip_inference_backend})"
+                            f"(backend={self.settings.clip_inference_backend})"
                         )
                         try:
                             # Route to appropriate backend
-                            if settings.clip_inference_backend in ("runpod", "runpod_pod", "runpod_serverless"):
+                            if self.settings.clip_inference_backend in ("runpod", "runpod_pod", "runpod_serverless"):
                                 # RunPod GPU backend: upload thumbnail first, then call endpoint
-                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_runpod(
+                                embedding_visual_clip, visual_clip_metadata = self._generate_clip_embedding_runpod(
                                     best_frame_path=best_frame_path,
                                     thumbnail_storage_path=thumbnail_storage_path,
                                     scene_index=scene.index,
                                     frame_quality_score=ranked_frames[0][1],
                                 )
-                            elif settings.clip_inference_backend == "local":
+                            elif self.settings.clip_inference_backend == "local":
                                 # Local CPU backend: existing ClipEmbedder
-                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_local(
+                                embedding_visual_clip, visual_clip_metadata = self._generate_clip_embedding_local(
                                     best_frame_path=best_frame_path,
                                     scene_index=scene.index,
                                     frame_quality_score=ranked_frames[0][1],
                                 )
-                            elif settings.clip_inference_backend == "off":
+                            elif self.settings.clip_inference_backend == "off":
                                 logger.info(f"Scene {scene.index}: CLIP inference disabled (backend=off)")
                                 embedding_visual_clip = None
                                 visual_clip_metadata = None
                             else:
                                 logger.warning(
-                                    f"Scene {scene.index}: Unknown CLIP backend '{settings.clip_inference_backend}', "
+                                    f"Scene {scene.index}: Unknown CLIP backend '{self.settings.clip_inference_backend}', "
                                     f"falling back to local"
                                 )
-                                embedding_visual_clip, visual_clip_metadata = SidecarBuilder._generate_clip_embedding_local(
+                                embedding_visual_clip, visual_clip_metadata = self._generate_clip_embedding_local(
                                     best_frame_path=best_frame_path,
                                     scene_index=scene.index,
                                     frame_quality_score=ranked_frames[0][1],
@@ -831,7 +844,7 @@ class SidecarBuilder:
                             # Continue processing - CLIP failure should not break pipeline
                             visual_clip_metadata = {
                                 "error": str(e),
-                                "backend": settings.clip_inference_backend,
+                                "backend": self.settings.clip_inference_backend,
                             }
 
                     visual_result = None
@@ -846,7 +859,7 @@ class SidecarBuilder:
 
                         # Call optimized visual analysis (single frame, strict JSON)
                         # NOTE: Not passing transcript - visual analysis is now completely independent
-                        visual_result = openai_client.analyze_scene_visuals_optimized(
+                        visual_result = self.openai.analyze_scene_visuals_optimized(
                             frame_path,
                             language=language,
                         )
@@ -863,7 +876,7 @@ class SidecarBuilder:
                             )
 
                             # If retry is disabled or this is the last frame, stop
-                            if not settings.visual_semantics_retry_on_no_content or attempt >= max_attempts - 1:
+                            if not self.settings.visual_semantics_retry_on_no_content or attempt >= max_attempts - 1:
                                 logger.info(
                                     f"Scene {scene.index}: No more frames to try"
                                 )
@@ -878,16 +891,16 @@ class SidecarBuilder:
                             logger.info(f"Visual description: {visual_description[:100]}...")
 
                         # Extract entities and actions (v2)
-                        if settings.visual_semantics_include_entities:
+                        if self.settings.visual_semantics_include_entities:
                             visual_entities = visual_result.get("main_entities", [])
                             logger.info(f"Extracted {len(visual_entities)} entities")
 
-                        if settings.visual_semantics_include_actions:
+                        if self.settings.visual_semantics_include_actions:
                             visual_actions = visual_result.get("actions", [])
                             logger.info(f"Extracted {len(visual_actions)} actions")
 
                         # Normalize tags from entities and actions
-                        tags = SidecarBuilder._normalize_tags(visual_entities, visual_actions)
+                        tags = self._normalize_tags(visual_entities, visual_actions)
                         logger.info(f"Normalized to {len(tags)} tags: {tags[:5]}")
 
                         # Build visual summary for backward compatibility
@@ -922,7 +935,7 @@ class SidecarBuilder:
                 # Upload thumbnail (use best frame if available, otherwise first)
                 thumbnail_frame = best_frame_path or keyframe_paths[0]
                 # thumbnail_storage_path already defined above (line 773)
-                thumbnail_url = storage.upload_file(
+                thumbnail_url = self.storage.upload_file(
                     thumbnail_frame,
                     thumbnail_storage_path,
                     content_type="image/jpeg",
@@ -932,7 +945,7 @@ class SidecarBuilder:
                 stats.visual_analysis_skipped_reason = "no_keyframes"
         else:
             # Still extract thumbnail even if skipping visual analysis
-            keyframe_paths = SidecarBuilder._extract_keyframes(
+            keyframe_paths = self._extract_keyframes(
                 video_path, scene, work_dir
             )
             stats.keyframes_extracted = len(keyframe_paths)
@@ -941,7 +954,7 @@ class SidecarBuilder:
                 thumbnail_storage_path = (
                     f"{owner_id}/{video_id}/thumbnails/scene_{scene.index}.jpg"
                 )
-                thumbnail_url = storage.upload_file(
+                thumbnail_url = self.storage.upload_file(
                     thumbnail_frame,
                     thumbnail_storage_path,
                     content_type="image/jpeg",
@@ -950,7 +963,7 @@ class SidecarBuilder:
         # Assess scene meaningfulness and enhance visual description if needed
         # This ensures scenes with ANY visual signal get meaningful descriptions
         has_informative_frame = best_frame_path is not None
-        enhanced_visual_description = SidecarBuilder._assess_scene_meaningfulness(
+        enhanced_visual_description = self._assess_scene_meaningfulness(
             transcript_segment=transcript_segment,
             visual_description=visual_description or "",
             visual_entities=visual_entities,
@@ -969,7 +982,7 @@ class SidecarBuilder:
                 visual_summary = enhanced_visual_description
 
         # Build search-optimized text (transcript-first for better semantic matching)
-        search_text = SidecarBuilder._build_search_text(
+        search_text = self._build_search_text(
             transcript_segment,
             visual_description or visual_summary,
             language=language,
@@ -977,7 +990,7 @@ class SidecarBuilder:
         stats.search_text_length = len(search_text)
 
         # Build combined text for backward compatibility (includes metadata)
-        combined_text = SidecarBuilder._build_combined_text(
+        combined_text = self._build_combined_text(
             visual_summary, transcript_segment, language=language, video_filename=video_filename
         )
         stats.combined_text_length = len(combined_text)
@@ -1006,7 +1019,7 @@ class SidecarBuilder:
             combined_text = search_text
 
         # Generate embedding using the search-optimized text (legacy single embedding)
-        embedding, embedding_metadata = SidecarBuilder._create_scene_embedding(
+        embedding, embedding_metadata = self._create_scene_embedding(
             search_text, scene.index
         )
 
@@ -1017,14 +1030,14 @@ class SidecarBuilder:
         multi_embedding_metadata = None
         embedding_version_value = None
 
-        if settings.multi_embedding_enabled:
+        if self.settings.multi_embedding_enabled:
             logger.info(f"Scene {scene.index}: Generating multi-channel embeddings")
             (
                 embedding_transcript,
                 embedding_visual,
                 embedding_summary,
                 multi_embedding_metadata,
-            ) = SidecarBuilder._create_multi_channel_embeddings(
+            ) = self._create_multi_channel_embeddings(
                 transcript_segment=transcript_segment,
                 visual_description=visual_description or "",
                 tags=tags,
@@ -1037,7 +1050,7 @@ class SidecarBuilder:
             if multi_embedding_metadata and embedding_metadata:
                 multi_embedding_metadata.legacy = embedding_metadata
 
-            embedding_version_value = settings.embedding_version
+            embedding_version_value = self.settings.embedding_version
 
             logger.info(
                 f"Scene {scene.index} multi-embeddings: "
@@ -1070,7 +1083,7 @@ class SidecarBuilder:
             visual_actions=visual_actions,
             tags=tags,
             # v2 fields
-            sidecar_version=settings.sidecar_schema_version,
+            sidecar_version=self.settings.sidecar_schema_version,
             search_text=search_text,
             embedding_metadata=embedding_metadata,
             needs_reprocess=False,
@@ -1200,8 +1213,8 @@ class SidecarBuilder:
 
         return segment
 
-    @staticmethod
     def _extract_keyframes(
+        self,
         video_path: Path,
         scene: Scene,
         work_dir: Path,
@@ -1222,7 +1235,7 @@ class SidecarBuilder:
 
         # Determine number of keyframes to extract
         num_keyframes = min(
-            settings.max_keyframes_per_scene,
+            self.settings.max_keyframes_per_scene,
             max(1, int(scene_duration / 2)),  # At least one every 2 seconds
         )
 
@@ -1237,7 +1250,7 @@ class SidecarBuilder:
             # Extract frame
             frame_path = work_dir / f"scene_{scene.index}_frame_{i}.jpg"
             try:
-                ffmpeg.extract_frame(video_path, timestamp, frame_path)
+                self.ffmpeg.extract_frame(video_path, timestamp, frame_path)
                 keyframe_paths.append(frame_path)
             except Exception as e:
                 logger.warning(f"Failed to extract frame at {timestamp}s: {e}")
@@ -1245,8 +1258,8 @@ class SidecarBuilder:
         logger.info(f"Extracted {len(keyframe_paths)} keyframes for scene {scene.index}")
         return keyframe_paths
 
-    @staticmethod
     def _build_search_text(
+        self,
         transcript: str,
         visual_description: str,
         language: str = "ko",
@@ -1269,11 +1282,11 @@ class SidecarBuilder:
             Search-optimized text for embedding
         """
         parts = []
-        max_length = settings.search_text_max_length
+        max_length = self.settings.search_text_max_length
 
         # Calculate target lengths based on weight
         # Transcript gets more space since it typically has higher signal
-        transcript_target = int(max_length * settings.search_text_transcript_weight)
+        transcript_target = int(max_length * self.settings.search_text_transcript_weight)
         visual_target = max_length - transcript_target
 
         # Add transcript first (primary search signal)
@@ -1281,7 +1294,7 @@ class SidecarBuilder:
             truncated_transcript = transcript.strip()
             if len(truncated_transcript) > transcript_target:
                 # Smart truncation: try to end at sentence boundary
-                truncated_transcript = SidecarBuilder._smart_truncate(
+                truncated_transcript = self._smart_truncate(
                     truncated_transcript, transcript_target
                 )
             parts.append(truncated_transcript)
@@ -1290,7 +1303,7 @@ class SidecarBuilder:
         if visual_description and visual_description.strip():
             truncated_visual = visual_description.strip()
             if len(truncated_visual) > visual_target:
-                truncated_visual = SidecarBuilder._smart_truncate(
+                truncated_visual = self._smart_truncate(
                     truncated_visual, visual_target
                 )
             parts.append(truncated_visual)
@@ -1376,14 +1389,14 @@ class SidecarBuilder:
         combined = " | ".join(parts)
 
         # Truncate if too long (embedding models have limits)
-        max_length = settings.search_text_max_length
+        max_length = self.settings.search_text_max_length
         if len(combined) > max_length:
             combined = combined[:max_length] + "..."
 
         return combined
 
-    @staticmethod
     def _generate_clip_embedding_runpod(
+        self,
         best_frame_path: str,
         thumbnail_storage_path: str,
         scene_index: int,
@@ -1426,7 +1439,7 @@ class SidecarBuilder:
             request_id = f"scene-{scene_index}"
             logger.info(
                 f"🎬 Scene {scene_index}: Calling RunPod GPU for CLIP embedding "
-                f"(backend={settings.clip_inference_backend})"
+                f"(backend={self.settings.clip_inference_backend})"
             )
 
             result = clip_inference.embed_image_url(
@@ -1500,8 +1513,8 @@ class SidecarBuilder:
                 "inference_time_ms": 0,
             }
 
-    @staticmethod
     def _generate_clip_embedding_local(
+        self,
         best_frame_path: str,
         scene_index: int,
         frame_quality_score: float,
@@ -1525,7 +1538,7 @@ class SidecarBuilder:
             embedding_visual_clip, clip_metadata_obj = clip_embedder.create_visual_embedding(
                 image_path=Path(best_frame_path),
                 quality_info=best_frame_quality,
-                timeout_s=settings.clip_timeout_s,
+                timeout_s=self.settings.clip_timeout_s,
             )
 
             if clip_metadata_obj:
@@ -1546,5 +1559,5 @@ class SidecarBuilder:
             }
 
 
-# Global sidecar builder instance
-sidecar_builder = SidecarBuilder()
+# SidecarBuilder instances should be created with injected dependencies
+# No module-level singleton - use dependency injection instead

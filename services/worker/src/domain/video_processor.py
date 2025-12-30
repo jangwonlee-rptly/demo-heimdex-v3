@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import UUID
 
 from .scene_detector import scene_detector, DetectorPreferences
-from .sidecar_builder import sidecar_builder
+from .sidecar_builder import SidecarBuilder
 from ..adapters.database import VideoStatus
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,14 @@ class VideoProcessor:
         self.settings = settings
         # API rate limiting semaphore (configurable via settings)
         self._api_semaphore = Semaphore(settings.max_api_concurrency)
+        # Create SidecarBuilder with injected dependencies
+        self.sidecar_builder = SidecarBuilder(
+            storage=storage,
+            ffmpeg=ffmpeg,
+            openai=openai,
+            clip_embedder=clip_embedder,
+            settings=settings,
+        )
 
     def _process_single_scene(
         self,
@@ -79,7 +87,7 @@ class VideoProcessor:
             # Acquire semaphore to limit concurrent API calls
             with self._api_semaphore:
                 # Build sidecar with user's preferred language
-                sidecar = sidecar_builder.build_sidecar(
+                sidecar = self.sidecar_builder.build_sidecar(
                     scene=scene,
                     video_path=video_path,
                     full_transcript=full_transcript,
