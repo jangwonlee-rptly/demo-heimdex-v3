@@ -72,13 +72,11 @@ def create_worker_context(settings: Settings) -> WorkerContext:
     )
 
     # Create OpenSearch client (optional)
+    # Note: Worker's OpenSearchClient uses legacy pattern with no-arg constructor
+    # TODO: Refactor to accept constructor parameters like API service
     opensearch: Optional[OpenSearchClient] = None
     if settings.opensearch_url:
-        opensearch = OpenSearchClient(
-            url=settings.opensearch_url,
-            timeout_s=settings.opensearch_timeout_s,
-            index_name=settings.opensearch_index_scenes,
-        )
+        opensearch = OpenSearchClient()
 
     # Create OpenAI client
     openai = OpenAIClient(api_key=settings.openai_api_key)
