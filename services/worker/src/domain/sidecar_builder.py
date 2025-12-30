@@ -661,8 +661,8 @@ class SidecarBuilder:
 
         return emb_transcript, emb_visual, emb_summary, multi_metadata
 
-    @staticmethod
     def build_sidecar(
+        self,
         scene: Scene,
         video_path: Path,
         full_transcript: str,
@@ -1099,8 +1099,8 @@ class SidecarBuilder:
             visual_clip_metadata=visual_clip_metadata,
         )
 
-    @staticmethod
     def _extract_transcript_segment_from_segments(
+        self,
         segments: list,
         scene_start_s: float,
         scene_end_s: float,
@@ -1170,8 +1170,8 @@ class SidecarBuilder:
 
         return text
 
-    @staticmethod
     def _extract_transcript_segment(
+        self,
         full_transcript: str,
         scene: Scene,
         total_duration_s: float,
