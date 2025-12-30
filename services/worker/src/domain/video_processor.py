@@ -493,7 +493,3 @@ class VideoProcessor:
             if work_dir.exists():
                 logger.info(f"Cleaning up working directory: {work_dir}")
                 shutil.rmtree(work_dir, ignore_errors=True)
-
-
-# Global video processor instance
-video_processor = VideoProcessor()
