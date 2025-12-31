@@ -276,6 +276,7 @@ class VideoProcessor:
             self.db.update_video_processing_stage(video_id, "scene_detection")
             scenes, detection_result = scene_detector.detect_scenes_with_preferences(
                 video_path,
+                self.settings,
                 video_duration_s=metadata.duration_s,
                 fps=metadata.frame_rate,
                 preferences=detector_preferences,

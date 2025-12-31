@@ -1,33 +1,58 @@
 # Development Log
 
-## 2025-12-31: Phase 1.5 Emergency Hotfix - ClipEmbedder Import Safety
+## 2025-12-31: Phase 1.5 Emergency Hotfix - Missing DI for ClipEmbedder & SceneDetector
 
 ### Problem
-After deploying Phase 1.5, the worker container crashed on startup with:
+After deploying Phase 1.5, the worker container crashed on startup, then crashed again during video processing:
+
+**Crash 1 - ClipEmbedder:**
 ```
 AttributeError: 'NoneType' object has no attribute 'clip_enabled'
   File "/app/src/adapters/clip_embedder.py", line 116, in __init__
     f"ClipEmbedder singleton created (enabled={settings.clip_enabled})"
 ```
 
-The ClipEmbedder was still using the global `settings` import and was not updated in the initial Phase 1.5 hotfix.
+**Crash 2 - SceneDetector (after ClipEmbedder fix):**
+```
+AttributeError: 'NoneType' object has no attribute 'scene_min_len_seconds'
+  File "/app/src/domain/scene_detector.py", line 378, in detect_scenes_best
+    min_scene_len = settings.scene_min_len_seconds
+```
+
+Two modules were missed in the initial Phase 1.5 hotfix and were still using global `settings`.
 
 ### Root Cause
-`services/worker/src/adapters/clip_embedder.py` had:
+**ClipEmbedder** (`services/worker/src/adapters/clip_embedder.py`):
 - Line 31: `from ..config import settings` (global import)
 - Line 116: Accessed `settings.clip_enabled` at initialization
 - 20+ references to `settings.*` throughout the file
 - No DI-friendly constructor
 
-When `context.py` tried to create `ClipEmbedder()` at line 91, it failed because the global `settings` was `None` after Phase 1.5 refactor.
+**SceneDetector** (`services/worker/src/domain/scene_detector.py`):
+- Line 23: `from ..config import settings` (global import)
+- Line 378, 464: Accessed `settings.scene_min_len_seconds` in active methods
+- 15+ references to `settings.*` in active code paths
+- Static methods didn't accept settings parameter
+
+When the worker processed videos, these modules tried to access the global `settings` (now `None` after Phase 1.5).
 
 ### Solution
-Refactored ClipEmbedder to use constructor-based dependency injection:
+Refactored both ClipEmbedder and SceneDetector to use dependency injection:
+
+**ClipEmbedder** - Constructor-based DI:
 1. Removed global `from ..config import settings` import
 2. Added `settings` parameter to `__init__` and `__new__` (singleton pattern requires both)
 3. Replaced all 20+ occurrences of `settings.*` with `self._settings.*`
 4. Updated `context.py` to pass settings: `ClipEmbedder(settings=settings)`
-5. Made settings parameter required (no backward compatibility fallback)
+5. Made settings parameter required (raises ValueError if None)
+
+**SceneDetector** - Parameter-based DI:
+1. Added `settings` parameter to active static methods:
+   - `detect_scenes_best(video_path, settings, ...)`
+   - `detect_scenes_with_preferences(video_path, settings, ...)`
+2. Updated internal call in `detect_scenes_with_preferences` to pass settings
+3. Updated `video_processor.py` to pass `self.settings` when calling scene detection
+4. Left backwards-compatible methods (`detect_scenes`, `get_scene_detector`) unchanged (not in active code path)
 
 ### Changes Made
 
@@ -75,28 +100,89 @@ clip_embedder = ClipEmbedder()
 clip_embedder = ClipEmbedder(settings=settings)
 ```
 
-### Verification
-```bash
-# No global settings imports remaining
-rg "from.*config import settings" services/worker/src/adapters/
-# → Only lazy-loads inside functions (acceptable)
+**4. SceneDetector Methods** (`services/worker/src/domain/scene_detector.py`)
+```python
+# Before:
+@staticmethod
+def detect_scenes_best(
+    video_path: Path,
+    video_duration_s: Optional[float] = None,
+    ...
+):
+    min_scene_len = settings.scene_min_len_seconds  # Global access
 
-# Python syntax check
-python3 -c "from src.adapters.clip_embedder import ClipEmbedder"
-# → Module imports successfully
+# After:
+@staticmethod
+def detect_scenes_best(
+    video_path: Path,
+    settings,  # NEW: settings parameter
+    video_duration_s: Optional[float] = None,
+    ...
+):
+    min_scene_len = settings.scene_min_len_seconds  # Parameter access
 ```
 
+**5. VideoProcessor** (`services/worker/src/domain/video_processor.py:277`)
+```python
+# Before:
+scenes, detection_result = scene_detector.detect_scenes_with_preferences(
+    video_path,
+    video_duration_s=metadata.duration_s,
+    ...
+)
+
+# After:
+scenes, detection_result = scene_detector.detect_scenes_with_preferences(
+    video_path,
+    self.settings,  # Pass settings from VideoProcessor
+    video_duration_s=metadata.duration_s,
+    ...
+)
+```
+
+### Verification
+
+**Import Safety Check:**
+```bash
+# Check for runtime-only settings usage (acceptable)
+grep -rn "from.*config import settings" services/worker/src/
+# → Only in backwards-compatible methods and inside functions (runtime-only)
+
+# Verify no module-level settings access
+python3 -c "
+import re
+for f in ['src/domain/frame_quality.py', 'src/domain/scene_detector.py']:
+    lines = open(f).readlines()
+    for i, line in enumerate(lines, 1):
+        if 'settings.' in line and line[0] not in ' \t#':
+            print(f'{f}:{i}: {line.rstrip()}')
+"
+# → No output (all settings access is inside functions)
+```
+
+**Runtime Test:**
+Worker starts successfully and processes videos without crashing.
+
+### Files Changed
+1. `services/worker/src/adapters/clip_embedder.py` - Added settings parameter to constructor
+2. `services/worker/src/context.py` - Pass settings to ClipEmbedder
+3. `services/worker/src/domain/scene_detector.py` - Added settings parameter to static methods
+4. `services/worker/src/domain/video_processor.py` - Pass settings when calling scene detection
+5. `docs/DEVLOG.md` - This documentation
+
 ### Deployment
-This fix must be deployed immediately to restore worker functionality:
+Deploy immediately to restore worker functionality:
 ```bash
 git add services/worker/src/adapters/clip_embedder.py \
         services/worker/src/context.py \
+        services/worker/src/domain/scene_detector.py \
+        services/worker/src/domain/video_processor.py \
         docs/DEVLOG.md
-git commit -m "hotfix: ClipEmbedder DI for Phase 1.5 import safety"
+git commit -m "hotfix: ClipEmbedder & SceneDetector DI for Phase 1.5"
 git push
 ```
 
-Worker will now start successfully with proper DI throughout all adapters.
+Worker now starts and processes videos successfully with proper DI.
 
 ### Related
 - Phase 1.5 Hotfix (original): Worker Import Safety & DI Consistency

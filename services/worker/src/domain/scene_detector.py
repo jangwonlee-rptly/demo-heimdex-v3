@@ -355,6 +355,7 @@ class SceneDetector:
     @staticmethod
     def detect_scenes_best(
         video_path: Path,
+        settings,
         video_duration_s: Optional[float] = None,
         fps: Optional[float] = None,
         preferences: Optional[DetectorPreferences] = None,
@@ -367,6 +368,7 @@ class SceneDetector:
 
         Args:
             video_path: Path to video file
+            settings: Settings object with scene detection configuration
             video_duration_s: Optional video duration in seconds
             fps: Optional video frame rate
             preferences: Optional user-specific detector preferences
@@ -433,6 +435,7 @@ class SceneDetector:
     @staticmethod
     def detect_scenes_with_preferences(
         video_path: Path,
+        settings,
         video_duration_s: Optional[float] = None,
         fps: Optional[float] = None,
         preferences: Optional[DetectorPreferences] = None,
@@ -443,6 +446,7 @@ class SceneDetector:
 
         Args:
             video_path: Path to video file
+            settings: Settings object with scene detection configuration
             video_duration_s: Optional video duration in seconds
             fps: Optional video frame rate
             preferences: Optional user-specific detector preferences
@@ -454,6 +458,7 @@ class SceneDetector:
         if use_best:
             return SceneDetector.detect_scenes_best(
                 video_path=video_path,
+                settings=settings,
                 video_duration_s=video_duration_s,
                 fps=fps,
                 preferences=preferences,
