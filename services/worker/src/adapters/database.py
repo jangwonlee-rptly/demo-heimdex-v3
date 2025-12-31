@@ -6,8 +6,6 @@ from typing import Optional
 from uuid import UUID
 from supabase import create_client, Client
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 # Cache for video owner_id lookups (cleared per video processing job)
@@ -26,14 +24,21 @@ class VideoStatus:
 class Database:
     """Database connection and query handler using Supabase client."""
 
-    def __init__(self, supabase_url: str, supabase_key: str):
+    def __init__(
+        self,
+        supabase_url: str,
+        supabase_key: str,
+        opensearch: Optional["OpenSearchClient"] = None,
+    ):
         """Initialize the database client.
 
         Args:
             supabase_url: The URL of the Supabase instance.
             supabase_key: The API key for accessing Supabase.
+            opensearch: Optional OpenSearch client for scene indexing.
         """
         self.client: Client = create_client(supabase_url, supabase_key)
+        self.opensearch = opensearch
 
     def get_user_profile(self, user_id: UUID) -> Optional[dict]:
         """Get user profile by user_id.
@@ -426,9 +431,11 @@ class Database:
         This is a non-blocking operation - failures are logged but don't
         affect the main scene creation flow.
         """
-        try:
-            from .opensearch_client import opensearch_client
+        # Skip if OpenSearch not configured
+        if self.opensearch is None:
+            return
 
+        try:
             # Get owner_id if not provided
             if owner_id is None:
                 owner_id = self.get_owner_id_for_video(video_id)
@@ -436,8 +443,8 @@ class Database:
                     logger.warning(f"Could not find owner_id for video {video_id}, skipping OpenSearch indexing")
                     return
 
-            # Upsert to OpenSearch
-            opensearch_client.upsert_scene_doc(
+            # Upsert to OpenSearch using injected client
+            self.opensearch.upsert_scene_doc(
                 scene_id=str(scene_id),
                 video_id=str(video_id),
                 owner_id=owner_id,
@@ -538,11 +545,11 @@ class Database:
         self.client.table("video_scenes").delete().eq("video_id", str(video_id)).execute()
 
         # Delete from OpenSearch (non-blocking on failure)
-        try:
-            from .opensearch_client import opensearch_client
-            opensearch_client.delete_scenes_for_video(str(video_id))
-        except Exception as e:
-            logger.warning(f"Failed to delete scenes for video {video_id} from OpenSearch: {e}")
+        if self.opensearch is not None:
+            try:
+                self.opensearch.delete_scenes_for_video(str(video_id))
+            except Exception as e:
+                logger.warning(f"Failed to delete scenes for video {video_id} from OpenSearch: {e}")
 
     def get_scene_by_id(self, scene_id: UUID) -> Optional[dict]:
         """Get a scene by its ID.
@@ -799,5 +806,6 @@ class Database:
         return response.data[0] if response.data else {}
 
 
-# Global database instance
-db = Database(settings.supabase_url, settings.supabase_service_role_key)
+# No global database instance - Database should be created via dependency injection
+# in create_worker_context() with explicit configuration parameters
+db: Optional[Database] = None

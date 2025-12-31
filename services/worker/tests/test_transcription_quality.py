@@ -199,23 +199,13 @@ class TestOpenAIClientAssessQuality:
     @pytest.fixture
     def client(self):
         """Create a mock OpenAI client."""
+        from src.config import Settings
         with patch("src.adapters.openai_client.OpenAI"):
-            # Mock settings
-            with patch("src.adapters.openai_client.settings") as mock_settings:
-                mock_settings.transcription_min_chars_for_speech = 40
-                mock_settings.transcription_min_speech_char_ratio = 0.3
-                mock_settings.transcription_max_no_speech_prob = 0.8
-                mock_settings.transcription_min_speech_segments_ratio = 0.3
-                mock_settings.transcription_music_markers = [
-                    "♪",
-                    "♫",
-                    "[Music]",
-                    "[music]",
-                ]
-                mock_settings.transcription_banned_phrases = []
-                mock_settings.openai_api_key = "test-key"
-                client = OpenAIClient()
-                yield client
+            # Create mock settings for transcription quality configuration
+            mock_settings = Settings()
+            # Create client with test API key and settings (DI pattern)
+            client = OpenAIClient(api_key="test-key", settings=mock_settings)
+            yield client
 
     def test_short_music_only(self, client):
         """Pure music notes should be rejected."""

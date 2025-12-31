@@ -142,5 +142,6 @@ class Settings(BaseSettings):
     embedding_hmac_secret: str = ""  # Shared secret for HMAC authentication (required for RunPod backends)
 
 
-# Global settings instance
-settings = Settings()
+# No global settings instance - settings should be created at runtime in bootstrap()
+# This ensures import safety (no env var access at import time)
+settings: Optional[Settings] = None

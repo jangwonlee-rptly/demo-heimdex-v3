@@ -90,6 +90,54 @@ def test_get_worker_context_fails_before_bootstrap():
             get_worker_context()
 
 
+def test_import_config_no_settings_instance():
+    """Test that importing config.py doesn't instantiate Settings."""
+    from src import config
+
+    # Settings class should exist
+    assert hasattr(config, 'Settings')
+
+    # Global settings should be None (not instantiated)
+    assert hasattr(config, 'settings')
+    assert config.settings is None, "Global settings should be None after Phase 1 refactor"
+
+
+def test_import_database_no_global_db():
+    """Test that importing database.py doesn't create global db instance."""
+    from src.adapters import database
+
+    # Database class should exist
+    assert hasattr(database, 'Database')
+
+    # Global db should be None
+    assert hasattr(database, 'db')
+    assert database.db is None, "Global db should be None after Phase 1 refactor"
+
+
+def test_import_opensearch_no_global_client():
+    """Test that importing opensearch_client.py doesn't create global instance."""
+    from src.adapters import opensearch_client
+
+    # OpenSearchClient class should exist
+    assert hasattr(opensearch_client, 'OpenSearchClient')
+
+    # Global opensearch_client should be None
+    assert hasattr(opensearch_client, 'opensearch_client')
+    assert opensearch_client.opensearch_client is None, "Global opensearch_client should be None after Phase 1 refactor"
+
+
+def test_import_openai_no_global_client():
+    """Test that importing openai_client.py doesn't create global instance."""
+    from src.adapters import openai_client
+
+    # OpenAIClient class should exist
+    assert hasattr(openai_client, 'OpenAIClient')
+
+    # Global openai_client should be None
+    assert hasattr(openai_client, 'openai_client')
+    assert openai_client.openai_client is None, "Global openai_client should be None after Phase 1 refactor"
+
+
 def test_import_context_module_no_side_effects():
     """Test that importing context.py doesn't create adapters."""
     # context.py should only define functions and dataclasses

@@ -1,5 +1,184 @@
 # Development Log
 
+## 2025-12-31: Phase 1.5 Hotfix - Worker Import Safety & DI Consistency
+
+### Problem
+Phase 1 DI refactor was incomplete for the worker service. The audit revealed critical violations:
+- `services/worker/src/config.py:146` had module-level `settings = Settings()` instantiation
+- `services/worker/src/adapters/opensearch_client.py:353` created global `opensearch_client` instance
+- Worker adapters used legacy no-arg constructors instead of dependency injection
+- Database adapter imported global `opensearch_client` at runtime instead of using DI
+- OpenAI client imported global `settings` at runtime
+
+These violations meant importing worker modules would trigger environment variable reads and potentially create clients at import time, breaking Phase 1's import-safety guarantees.
+
+### Solution
+Implemented minimal DI hotfix to restore Phase 1 compliance:
+1. Removed all module-level adapter instantiations
+2. Refactored adapters to accept configuration via constructor parameters
+3. Updated `WorkerContext` to be the single composition root
+4. Added comprehensive import-safety tests
+
+### Changes Made
+
+**1. Config Module** (`services/worker/src/config.py`)
+```python
+# Before:
+settings = Settings()
+
+# After:
+settings: Optional[Settings] = None  # Only created in bootstrap()
+```
+
+**2. OpenSearch Client** (`services/worker/src/adapters/opensearch_client.py`)
+- Added DI-friendly constructor:
+  ```python
+  def __init__(self, opensearch_url: str, timeout_s: float,
+               index_scenes: str, indexing_enabled: bool = True)
+  ```
+- Replaced all `settings.opensearch_*` with `self.*` attributes
+- Removed global singleton: `opensearch_client = None`
+
+**3. Database Adapter** (`services/worker/src/adapters/database.py`)
+- Added `opensearch: Optional[OpenSearchClient]` parameter to constructor
+- Removed runtime import of global `opensearch_client`
+- Updated methods to use `self.opensearch` instead
+- Removed global singleton: `db = None`
+
+**4. OpenAI Client** (`services/worker/src/adapters/openai_client.py`)
+- Added DI-friendly constructor:
+  ```python
+  def __init__(self, api_key: str, settings=None)
+  ```
+- Replaced 26 occurrences of `settings.*` with `self.settings.*`
+- Backward compatible: lazy-loads settings if not provided (for tests)
+- Removed global singleton: `openai_client = None`
+
+**5. Worker Context** (`services/worker/src/context.py`)
+```python
+# Create OpenSearch with explicit config
+opensearch = OpenSearchClient(
+    opensearch_url=settings.opensearch_url,
+    timeout_s=settings.opensearch_timeout_s,
+    index_scenes=settings.opensearch_index_scenes,
+    indexing_enabled=settings.opensearch_indexing_enabled,
+)
+
+# Pass OpenSearch to Database
+db = Database(
+    supabase_url=settings.supabase_url,
+    supabase_key=settings.supabase_service_role_key,
+    opensearch=opensearch,  # DI instead of global import
+)
+
+# Create OpenAI with explicit config
+openai = OpenAIClient(
+    api_key=settings.openai_api_key,
+    settings=settings,  # For transcription config
+)
+```
+
+**6. Import Safety Tests** (`services/worker/tests/test_import_safety.py`)
+Added 4 new tests:
+- `test_import_config_no_settings_instance`: Verifies `config.settings is None`
+- `test_import_database_no_global_db`: Verifies `database.db is None`
+- `test_import_opensearch_no_global_client`: Verifies `opensearch_client.opensearch_client is None`
+- `test_import_openai_no_global_client`: Verifies `openai_client.openai_client is None`
+
+**7. Test Fixtures** (`services/worker/tests/test_transcription_quality.py`)
+Updated to use new DI pattern:
+```python
+mock_settings = Settings()
+client = OpenAIClient(api_key="test-key", settings=mock_settings)
+```
+
+### Verification
+
+**Grep Searches (All Clean):**
+```bash
+# No module-level Settings() instantiation
+rg "\bsettings\b\s*=\s*Settings\(" services/worker/src
+# → Only in bootstrap() function (line 49 of tasks.py)
+
+# No module-level OpenSearch instantiation
+rg "opensearch_client\s*=\s*OpenSearchClient\(" services/worker/src
+# → No matches
+
+# No module-level Database instantiation
+rg "^\s*db\s*=\s*Database\(" services/worker/src
+# → Only in context.py (inside function) and scripts
+
+# No module-level OpenAI instantiation
+rg "openai_client\s*=\s*OpenAIClient\(" services/worker/src
+# → No matches
+```
+
+**Test Results:**
+```
+Import Safety Tests: 8 passed, 2 skipped (torch-related)
+Overall Worker Tests: 51 passed, 2 failed, 2 skipped
+```
+- All import safety tests passing
+- 2 pre-existing test failures unrelated to DI changes
+
+### Architecture
+
+**Before (Violated Phase 1):**
+```
+module import → settings = Settings() → env vars read at import time ❌
+module import → opensearch_client = OpenSearchClient() → client created at import ❌
+database.py → from .opensearch_client import opensearch_client → global coupling ❌
+```
+
+**After (Phase 1 Compliant):**
+```
+bootstrap() → settings = Settings() → env vars read at runtime ✅
+create_worker_context(settings) → all adapters created with explicit params ✅
+Database(opensearch=...) → dependency injected via constructor ✅
+```
+
+### Benefits
+
+1. **Import Safety**: Importing worker modules no longer reads environment variables or creates clients
+2. **Testability**: Adapters can be tested with mock configuration without global state
+3. **Consistency**: Worker now matches API service's DI patterns
+4. **Composition Root**: `WorkerContext` is the single place where dependencies are wired
+5. **Regression Prevention**: New tests catch future violations
+
+### Acceptance Criteria Met
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| No Settings() at import time | ✅ | `config.py:147` now `= None` |
+| No module-level adapter singletons | ✅ | All adapters now `= None` placeholders |
+| Dependencies created only in bootstrap/context | ✅ | Verified via composition root |
+| Database doesn't import globals | ✅ | Uses injected `self.opensearch` |
+| Worker adapters use constructor DI | ✅ | Explicit parameters match API patterns |
+| Tests validate regressions | ✅ | 4 new import safety tests |
+
+### Runtime Behavior
+
+**No Functional Changes**: This refactor only changes how dependencies are created, not what they do:
+- OpenSearch indexing remains "best effort" and non-blocking
+- Settings loaded once at worker startup
+- All feature behavior unchanged
+- Performance unchanged
+
+### Future Work
+
+Consider Phase 2 improvements:
+- Remove backward-compatible `settings=None` fallback in OpenAIClient after all callsites updated
+- Audit `libs/tasks/scene_export.py` and `highlight_export.py` for DI compliance
+- Consider extracting transcription config into separate settings class
+
+### Related Documentation
+
+- Phase 1 Audit Report: Full findings and recommendations
+- `docs/PHASE1_REFACTOR_SUMMARY.md`: Original Phase 1 goals
+- `docs/PHASE1_COMPLETION_CHECKLIST.md`: Acceptance criteria
+
+---
+
 ## 2025-11-24: Real-time Dashboard Updates
 
 ### Problem

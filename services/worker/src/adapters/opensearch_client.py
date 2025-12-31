@@ -10,8 +10,6 @@ from opensearchpy.exceptions import (
     RequestError,
 )
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 # Index mapping for scene documents (must match API's mapping)
@@ -98,8 +96,25 @@ SCENE_INDEX_MAPPING = {
 class OpenSearchClient:
     """OpenSearch client for scene document indexing."""
 
-    def __init__(self):
-        """Initialize the OpenSearch client."""
+    def __init__(
+        self,
+        opensearch_url: str,
+        timeout_s: float,
+        index_scenes: str,
+        indexing_enabled: bool = True,
+    ):
+        """Initialize the OpenSearch client with explicit configuration.
+
+        Args:
+            opensearch_url: OpenSearch server URL (e.g., "http://opensearch:9200")
+            timeout_s: Request timeout in seconds
+            index_scenes: Index name for scene documents
+            indexing_enabled: Whether indexing is enabled (feature flag)
+        """
+        self.opensearch_url = opensearch_url
+        self.timeout_s = timeout_s
+        self.index_scenes = index_scenes
+        self.indexing_enabled = indexing_enabled
         self._client: Optional[OpenSearch] = None
 
     @property
@@ -107,8 +122,8 @@ class OpenSearchClient:
         """Lazily initialize and return the OpenSearch client."""
         if self._client is None:
             self._client = OpenSearch(
-                hosts=[settings.opensearch_url],
-                timeout=settings.opensearch_timeout_s,
+                hosts=[self.opensearch_url],
+                timeout=self.timeout_s,
                 max_retries=2,
                 retry_on_timeout=True,
             )
@@ -132,7 +147,7 @@ class OpenSearchClient:
         Returns:
             bool: True if index exists or was created, False on error.
         """
-        index_name = settings.opensearch_index_scenes
+        index_name = self.index_scenes
         try:
             if not self.client.indices.exists(index=index_name):
                 logger.info(f"Creating OpenSearch index: {index_name}")
@@ -190,11 +205,11 @@ class OpenSearchClient:
         Returns:
             bool: True if upsert succeeded, False otherwise.
         """
-        if not settings.opensearch_indexing_enabled:
+        if not self.indexing_enabled:
             logger.debug("OpenSearch indexing disabled, skipping upsert")
             return True
 
-        index_name = settings.opensearch_index_scenes
+        index_name = self.index_scenes
 
         # Build document
         doc = {
@@ -239,10 +254,10 @@ class OpenSearchClient:
         Returns:
             bool: True if deleted or not found, False on error.
         """
-        if not settings.opensearch_indexing_enabled:
+        if not self.indexing_enabled:
             return True
 
-        index_name = settings.opensearch_index_scenes
+        index_name = self.index_scenes
 
         try:
             self.client.delete(
@@ -270,10 +285,10 @@ class OpenSearchClient:
         Returns:
             bool: True if deletion succeeded, False otherwise.
         """
-        if not settings.opensearch_indexing_enabled:
+        if not self.indexing_enabled:
             return True
 
-        index_name = settings.opensearch_index_scenes
+        index_name = self.index_scenes
 
         try:
             self.client.delete_by_query(
@@ -303,10 +318,10 @@ class OpenSearchClient:
         Returns:
             tuple[int, int]: (success_count, error_count)
         """
-        if not settings.opensearch_indexing_enabled or not docs:
+        if not self.indexing_enabled or not docs:
             return (len(docs), 0) if docs else (0, 0)
 
-        index_name = settings.opensearch_index_scenes
+        index_name = self.index_scenes
         actions = []
 
         for doc in docs:
@@ -349,5 +364,6 @@ class OpenSearchClient:
             return (0, len(docs))
 
 
-# Global OpenSearch client instance
-opensearch_client = OpenSearchClient()
+# No global instance - OpenSearchClient should be created via dependency injection
+# in create_worker_context() with explicit configuration parameters
+opensearch_client: Optional[OpenSearchClient] = None

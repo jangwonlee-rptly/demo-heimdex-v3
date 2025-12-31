@@ -59,12 +59,6 @@ def create_worker_context(settings: Settings) -> WorkerContext:
     from .adapters.clip_embedder import ClipEmbedder
     from .adapters.ffmpeg import FFmpegAdapter
 
-    # Create database adapter
-    db = Database(
-        supabase_url=settings.supabase_url,
-        supabase_key=settings.supabase_service_role_key,
-    )
-
     # Create storage adapter
     storage = SupabaseStorage(
         supabase_url=settings.supabase_url,
@@ -72,16 +66,24 @@ def create_worker_context(settings: Settings) -> WorkerContext:
     )
 
     # Create OpenSearch client (optional)
-    # Note: Worker's OpenSearchClient uses legacy pattern with no-arg constructor
-    # TODO: Refactor to accept constructor parameters like API service
     opensearch: Optional[OpenSearchClient] = None
     if settings.opensearch_url:
-        opensearch = OpenSearchClient()
+        opensearch = OpenSearchClient(
+            opensearch_url=settings.opensearch_url,
+            timeout_s=settings.opensearch_timeout_s,
+            index_scenes=settings.opensearch_index_scenes,
+            indexing_enabled=settings.opensearch_indexing_enabled,
+        )
 
-    # Create OpenAI client
-    # Note: Worker's OpenAIClient uses legacy pattern with no-arg constructor
-    # TODO: Refactor to accept api_key parameter like API service
-    openai = OpenAIClient()
+    # Create database adapter with OpenSearch dependency
+    db = Database(
+        supabase_url=settings.supabase_url,
+        supabase_key=settings.supabase_service_role_key,
+        opensearch=opensearch,
+    )
+
+    # Create OpenAI client with settings for transcription configuration
+    openai = OpenAIClient(api_key=settings.openai_api_key, settings=settings)
 
     # Create CLIP embedder (optional, lazy-loads model on first use)
     clip_embedder: Optional[ClipEmbedder] = None

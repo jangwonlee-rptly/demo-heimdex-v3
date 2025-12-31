@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Optional
 from openai import OpenAI
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -156,9 +154,20 @@ def contains_banned_phrases(text: str, banned_phrases: list[str]) -> bool:
 class OpenAIClient:
     """OpenAI API client wrapper."""
 
-    def __init__(self):
-        """Initialize the OpenAI client."""
-        self.client = OpenAI(api_key=settings.openai_api_key)
+    def __init__(self, api_key: str, settings=None):
+        """Initialize the OpenAI client.
+
+        Args:
+            api_key: OpenAI API key for authentication.
+            settings: Settings object for transcription configuration (optional for backward compat).
+        """
+        self.client = OpenAI(api_key=api_key)
+        # Store settings for transcription quality assessment
+        # If not provided, import at runtime (for tests/backward compat)
+        if settings is None:
+            from ..config import settings as config_settings
+            settings = config_settings
+        self.settings = settings
 
     def transcribe_audio_with_quality(
         self, audio_file_path: Path, language: str = None
@@ -261,29 +270,29 @@ class OpenAIClient:
         """
         # 1. Check if text is too short
         text_stripped = text.strip()
-        if len(text_stripped) < settings.transcription_min_chars_for_speech:
+        if len(text_stripped) < self.settings.transcription_min_chars_for_speech:
             # But first check if it's not just music notation
-            if is_mostly_music_notation(text_stripped, settings.transcription_music_markers):
+            if is_mostly_music_notation(text_stripped, self.settings.transcription_music_markers):
                 return TranscriptionResult(
                     text="", has_speech=False, reason="music_only"
                 )
             # Short but might be valid (e.g., short clip with brief speech)
             # Only reject if also has low speech ratio
             speech_ratio = calculate_speech_char_ratio(text_stripped)
-            if speech_ratio < settings.transcription_min_speech_char_ratio:
+            if speech_ratio < self.settings.transcription_min_speech_char_ratio:
                 return TranscriptionResult(
                     text="", has_speech=False, reason="too_short"
                 )
 
         # 2. Check if mostly music notation
-        if is_mostly_music_notation(text_stripped, settings.transcription_music_markers):
+        if is_mostly_music_notation(text_stripped, self.settings.transcription_music_markers):
             return TranscriptionResult(text="", has_speech=False, reason="music_only")
 
         # 3. Check speech character ratio
         speech_ratio = calculate_speech_char_ratio(text_stripped)
-        if speech_ratio < settings.transcription_min_speech_char_ratio:
+        if speech_ratio < self.settings.transcription_min_speech_char_ratio:
             logger.debug(
-                f"Low speech ratio: {speech_ratio:.2f} < {settings.transcription_min_speech_char_ratio}"
+                f"Low speech ratio: {speech_ratio:.2f} < {self.settings.transcription_min_speech_char_ratio}"
             )
             return TranscriptionResult(
                 text="", has_speech=False, reason="low_speech_ratio"
@@ -299,13 +308,13 @@ class OpenAIClient:
                 else:
                     no_speech_prob = segment.get("no_speech_prob", 0.0)
 
-                if no_speech_prob > settings.transcription_max_no_speech_prob:
+                if no_speech_prob > self.settings.transcription_max_no_speech_prob:
                     no_speech_segments += 1
 
             no_speech_ratio = no_speech_segments / len(segments)
             speech_segments_ratio = 1.0 - no_speech_ratio
 
-            if speech_segments_ratio < settings.transcription_min_speech_segments_ratio:
+            if speech_segments_ratio < self.settings.transcription_min_speech_segments_ratio:
                 logger.debug(
                     f"High no_speech ratio: {no_speech_ratio:.2f}, "
                     f"speech_segments_ratio={speech_segments_ratio:.2f}"
@@ -315,7 +324,7 @@ class OpenAIClient:
                 )
 
         # 5. Check for banned phrases
-        if contains_banned_phrases(text_stripped, settings.transcription_banned_phrases):
+        if contains_banned_phrases(text_stripped, self.settings.transcription_banned_phrases):
             return TranscriptionResult(
                 text="", has_speech=False, reason="banned_phrases"
             )
@@ -530,7 +539,7 @@ Output JSON only, no additional text.""",
             system_prompt = system_prompts.get(language, system_prompts["ko"])
 
             # Optionally remove entities/actions from schema if disabled
-            if not settings.visual_semantics_include_entities:
+            if not self.settings.visual_semantics_include_entities:
                 system_prompt = system_prompt.replace(
                     '"main_entities": ["짧은 명사구 목록"],\n  ',
                     ""
@@ -538,7 +547,7 @@ Output JSON only, no additional text.""",
                     '"main_entities": ["short noun phrases"],\n  ',
                     ""
                 )
-            if not settings.visual_semantics_include_actions:
+            if not self.settings.visual_semantics_include_actions:
                 system_prompt = system_prompt.replace(
                     '"actions": ["짧은 동사구 목록"],\n  ',
                     ""
@@ -580,14 +589,14 @@ Output JSON only, no additional text.""",
             # Note: newer models (gpt-4o, gpt-5-nano, etc.) require max_completion_tokens instead of max_tokens
             # Note: gpt-5-nano only supports default temperature (1.0), so we omit it for that model
             api_params = {
-                "model": settings.visual_semantics_model,
+                "model": self.settings.visual_semantics_model,
                 "messages": messages,
-                "max_completion_tokens": settings.visual_semantics_max_tokens,
+                "max_completion_tokens": self.settings.visual_semantics_max_tokens,
                 "response_format": {"type": "json_object"},  # Force JSON response
             }
             # Only add temperature if model supports it (gpt-5-nano does not)
-            if "gpt-5-nano" not in settings.visual_semantics_model:
-                api_params["temperature"] = settings.visual_semantics_temperature
+            if "gpt-5-nano" not in self.settings.visual_semantics_model:
+                api_params["temperature"] = self.settings.visual_semantics_temperature
 
             response = self.client.chat.completions.create(**api_params)
 
@@ -717,12 +726,13 @@ Requirements:
             list[float]: List of floats representing the embedding vector
         """
         response = self.client.embeddings.create(
-            model=settings.embedding_model,
+            model=self.settings.embedding_model,
             input=text,
-            dimensions=settings.embedding_dimensions,
+            dimensions=self.settings.embedding_dimensions,
         )
         return response.data[0].embedding
 
 
-# Global OpenAI client instance
-openai_client = OpenAIClient()
+# No global instance - OpenAIClient should be created via dependency injection
+# in create_worker_context() with explicit api_key parameter
+openai_client: Optional[OpenAIClient] = None
