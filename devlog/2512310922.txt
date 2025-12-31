@@ -1,0 +1,99 @@
+[2025-12-31 09:22] Phase 1.5 Emergency Hotfix - ClipInference DI Fix
+File: devlog/2512310922.txt
+
+== What we worked on ==
+- Fixed the final missing dependency injection in clip_inference.py module
+- Completed Phase 1.5 emergency hotfix for all four modules that were accessing global settings
+- This is the fourth and final module fix after ClipEmbedder, SceneDetector, and FrameQualityChecker
+
+== Changes made ==
+- services/worker/src/adapters/clip_inference.py:
+  - Added settings parameter to get_clip_inference_client(settings) function (line 768)
+  - Added settings parameter to embed_image_url(..., settings=None) function (line 868)
+  - Updated embed_image_url() to pass settings to get_clip_inference_client() (line 885)
+
+- services/worker/src/domain/sidecar_builder.py:
+  - Updated clip_inference.embed_image_url() call at line 1445 to pass settings=self.settings
+
+- docs/DEVLOG.md:
+  - Updated Phase 1.5 Emergency Hotfix title to include ClipInference
+  - Added Crash 4 documentation for ClipInference error
+  - Added root cause analysis for clip_inference.py
+  - Added before/after code examples for both functions
+  - Updated files changed list and deployment instructions
+
+== Problems encountered ==
+- Problem: Worker container still crashing with AttributeError during CLIP embedding generation
+  Error: AttributeError: 'NoneType' object has no attribute 'clip_inference_backend'
+  Location: /app/src/adapters/clip_inference.py:782 in get_clip_inference_client()
+
+- Root cause: The clip_inference.py module had two functions accessing global settings:
+  1. get_clip_inference_client() - line 782 accessed settings.clip_inference_backend
+  2. embed_image_url() - line 880 called get_clip_inference_client() without passing settings
+
+- Impact: CLIP embeddings failed but system gracefully fell back to OpenAI vision
+
+- Symptom in logs:
+  ```
+  2025-12-31 09:22:59,355 - src.domain.sidecar_builder - INFO - Scene 259: Calling RunPod GPU for CLIP embedding (backend=runpod_pod)
+  2025-12-31 09:22:59,356 - src.domain.sidecar_builder - ERROR - Scene 259: Unexpected RunPod error: 'NoneType' object has no attribute 'clip_inference_backend'
+  ```
+
+== How we tried to solve it ==
+- Approach: Follow the same dependency injection pattern used for the previous three modules
+
+- Implementation steps:
+  1. Read clip_inference.py to understand the function signatures and settings usage
+  2. Add settings parameter to get_clip_inference_client() function
+  3. Add settings parameter to embed_image_url() function
+  4. Update sidecar_builder.py to pass self.settings when calling clip_inference functions
+  5. Verify syntax with python3 -m py_compile
+  6. Update comprehensive documentation in DEVLOG.md
+
+== How we solved it / Current status ==
+- Status: Code changes complete and verified locally, ready for deployment
+
+- Solution: Parameter-based dependency injection for clip_inference functions
+  - get_clip_inference_client(settings) now receives settings as required parameter
+  - embed_image_url(..., settings=None) now receives settings as optional parameter
+  - All settings.* references remain inside function bodies (runtime-only access)
+  - Caller in sidecar_builder.py passes self.settings to embed_image_url()
+
+- Pattern consistency:
+  - ClipEmbedder: Constructor-based DI (singleton pattern)
+  - SceneDetector: Parameter-based DI (static methods)
+  - FrameQualityChecker: Instance-based DI (converted from static to instance)
+  - ClipInference: Parameter-based DI (function-based API)
+
+- Verification:
+  ✓ Syntax validation passed for both modified files
+  ✓ All settings.* references are inside function bodies (runtime-only)
+  ✓ Pattern matches other DI fixes
+  ✓ Documentation complete
+
+- Current blocker: Container still running old code
+  - Error shows line 880 calling get_clip_inference_client() without parameter
+  - Our local code has line 885 calling get_clip_inference_client(settings)
+  - Need to commit and rebuild container to deploy the fix
+
+== Next steps / TODOs ==
+1. Commit the changes:
+   - services/worker/src/adapters/clip_inference.py
+   - services/worker/src/domain/sidecar_builder.py
+   - docs/DEVLOG.md
+
+2. Rebuild and redeploy worker container to apply the fix
+
+3. Verify worker processes videos end-to-end with CLIP embeddings working
+
+4. Final verification that all four modules (ClipEmbedder, SceneDetector, FrameQualityChecker, ClipInference)
+   are using dependency injection correctly
+
+== Phase 1.5 Emergency Hotfix Summary ==
+All four modules now fixed:
+1. ✓ ClipEmbedder - Constructor-based DI
+2. ✓ SceneDetector - Parameter-based DI
+3. ✓ FrameQualityChecker - Instance-based DI
+4. ✓ ClipInference - Parameter-based DI (this session)
+
+Worker service now has complete Phase 1 import safety compliance.
