@@ -1,6 +1,6 @@
 # Development Log
 
-## 2025-12-31: Phase 1.5 Emergency Hotfix - Missing DI for ClipEmbedder, SceneDetector & FrameQualityChecker
+## 2025-12-31: Phase 1.5 Emergency Hotfix - Missing DI for ClipEmbedder, SceneDetector, FrameQualityChecker & ClipInference
 
 ### Problem
 After deploying Phase 1.5, the worker container crashed repeatedly as modules tried to access the global `settings` (now `None`):
@@ -23,7 +23,13 @@ AttributeError: 'NoneType' object has no attribute 'visual_brightness_threshold'
   File "/app/src/domain/frame_quality.py", line 70, in check_frame
 ```
 
-Three modules were missed in the initial Phase 1.5 hotfix and were still using global `settings`.
+**Crash 4 - ClipInference:**
+```
+AttributeError: 'NoneType' object has no attribute 'clip_inference_backend'
+  File "/app/src/adapters/clip_inference.py", line 782, in get_clip_inference_client
+```
+
+Four modules were missed in the initial Phase 1.5 hotfix and were still using global `settings`.
 
 ### Root Cause
 **ClipEmbedder** (`services/worker/src/adapters/clip_embedder.py`):
@@ -44,10 +50,18 @@ Three modules were missed in the initial Phase 1.5 hotfix and were still using g
 - Line 70, 74, 85, 89: Accessed `settings.visual_brightness_threshold` and `settings.visual_blur_threshold`
 - Used by SidecarBuilder during scene processing
 
+**ClipInference** (`services/worker/src/adapters/clip_inference.py`):
+- Line 53: `from src.config import settings` (global import)
+- Line 782: `get_clip_inference_client()` accessed `settings.clip_inference_backend`
+- Line 788, 794, 803, 811: Multiple settings accesses in client creation
+- Line 880: `embed_image_url()` called `get_clip_inference_client()` without passing settings
+- Line 884, 891: Accessed `settings.clip_inference_backend` and `settings.clip_model_name`
+- Used by SidecarBuilder for CLIP embedding generation (line 1445)
+
 When the worker processed videos, these modules tried to access the global `settings` (now `None` after Phase 1.5).
 
 ### Solution
-Refactored all three modules to use dependency injection:
+Refactored all four modules to use dependency injection:
 
 **ClipEmbedder** - Constructor-based DI:
 1. Removed global `from ..config import settings` import
@@ -208,6 +222,49 @@ class SidecarBuilder:
     ranked_frames = self.frame_quality_checker.rank_frames_by_quality(keyframe_paths)  # Instance
 ```
 
+**8. ClipInference Functions** (`services/worker/src/adapters/clip_inference.py`)
+```python
+# Before:
+def get_clip_inference_client():
+    backend = settings.clip_inference_backend  # Global access
+    # ... 100+ lines using settings.*
+
+def embed_image_url(image_url: str, request_id: Optional[str] = None) -> Dict[str, Any]:
+    client = get_clip_inference_client()  # No settings parameter
+    # ...
+    model=settings.clip_model_name  # Global access
+
+# After:
+def get_clip_inference_client(settings):  # NEW: settings parameter
+    backend = settings.clip_inference_backend  # Parameter access
+    # ... same logic, now using parameter
+
+def embed_image_url(
+    image_url: str,
+    request_id: Optional[str] = None,
+    settings = None,  # NEW: settings parameter
+) -> Dict[str, Any]:
+    client = get_clip_inference_client(settings)  # Pass settings
+    # ...
+    model=settings.clip_model_name  # Parameter access
+```
+
+**9. SidecarBuilder CLIP Call** (`services/worker/src/domain/sidecar_builder.py:1445`)
+```python
+# Before:
+result = clip_inference.embed_image_url(
+    image_url=signed_url,
+    request_id=request_id,
+)
+
+# After:
+result = clip_inference.embed_image_url(
+    image_url=signed_url,
+    request_id=request_id,
+    settings=self.settings,  # Pass settings
+)
+```
+
 ### Verification
 
 **Import Safety Check:**
@@ -236,25 +293,27 @@ Worker starts successfully and processes videos without crashing.
 2. `services/worker/src/context.py` - Pass settings to ClipEmbedder
 3. `services/worker/src/domain/scene_detector.py` - Added settings parameter to static methods
 4. `services/worker/src/domain/video_processor.py` - Pass settings when calling scene detection
-5. **`services/worker/src/domain/frame_quality.py`** - Converted to instance-based class with settings
-6. **`services/worker/src/domain/sidecar_builder.py`** - Create FrameQualityChecker instance with settings
-7. `docs/DEVLOG.md` - This documentation
+5. `services/worker/src/domain/frame_quality.py` - Converted to instance-based class with settings
+6. **`services/worker/src/adapters/clip_inference.py`** - Added settings parameter to functions
+7. **`services/worker/src/domain/sidecar_builder.py`** - Create FrameQualityChecker instance & pass settings to CLIP inference
+8. `docs/DEVLOG.md` - This documentation
 
 ### Deployment
 Deploy immediately to restore worker functionality:
 ```bash
 git add services/worker/src/adapters/clip_embedder.py \
+        services/worker/src/adapters/clip_inference.py \
         services/worker/src/context.py \
         services/worker/src/domain/scene_detector.py \
         services/worker/src/domain/video_processor.py \
         services/worker/src/domain/frame_quality.py \
         services/worker/src/domain/sidecar_builder.py \
         docs/DEVLOG.md
-git commit -m "hotfix: Complete Phase 1.5 DI (ClipEmbedder, SceneDetector, FrameQualityChecker)"
+git commit -m "hotfix: Complete Phase 1.5 DI (ClipEmbedder, SceneDetector, FrameQualityChecker, ClipInference)"
 git push
 ```
 
-Worker now starts and processes videos end-to-end successfully with proper DI throughout.
+Worker now starts and processes videos end-to-end successfully with proper DI throughout, including CLIP embeddings.
 
 ### Related
 - Phase 1.5 Hotfix (original): Worker Import Safety & DI Consistency

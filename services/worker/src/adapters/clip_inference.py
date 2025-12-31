@@ -765,11 +765,14 @@ _runpod_pod_client: Optional[RunPodPodClipClient] = None
 _runpod_serverless_client: Optional[RunPodServerlessClipClient] = None
 
 
-def get_clip_inference_client():
+def get_clip_inference_client(settings):
     """
     Get or create the global CLIP client instance based on configured backend.
 
     Returns None if no backend is configured.
+
+    Args:
+        settings: Settings object with CLIP configuration
 
     Returns:
         RunPodPodClipClient, RunPodServerlessClipClient, or None
@@ -862,6 +865,7 @@ def get_clip_inference_client():
 def embed_image_url(
     image_url: str,
     request_id: Optional[str] = None,
+    settings = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to generate CLIP embedding from image URL.
@@ -869,6 +873,7 @@ def embed_image_url(
     Args:
         image_url: Publicly accessible image URL
         request_id: Optional request identifier
+        settings: Settings object with CLIP configuration
 
     Returns:
         Dict with embedding and metadata
@@ -877,7 +882,7 @@ def embed_image_url(
         ValueError: If RunPod backend not configured
         ClipInferenceError: If inference fails
     """
-    client = get_clip_inference_client()
+    client = get_clip_inference_client(settings)
 
     if client is None:
         raise ValueError(

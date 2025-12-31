@@ -1445,6 +1445,7 @@ class SidecarBuilder:
             result = clip_inference.embed_image_url(
                 image_url=signed_url,
                 request_id=request_id,
+                settings=self.settings,
             )
 
             # Step 4: Extract embedding and metadata
