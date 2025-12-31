@@ -28,8 +28,6 @@ from typing import Optional
 
 from PIL import Image
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -101,19 +99,36 @@ class ClipEmbedder:
     _device = None
     _embed_dim = None
     _initialized = False
+    _settings = None  # Store settings injected via constructor
 
-    def __new__(cls):
-        """Singleton pattern: return same instance."""
+    def __new__(cls, settings=None):
+        """Singleton pattern: return same instance.
+
+        Args:
+            settings: Ignored in __new__, but accepted for compatibility with __init__
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
-        """Initialize (only once due to singleton)."""
+    def __init__(self, settings=None):
+        """Initialize with dependency-injected settings.
+
+        Args:
+            settings: Settings instance (required for DI pattern).
+                     Must be provided when creating the embedder.
+        """
         if not self._initialized:
             self._initialized = True
+            # Store settings - must be provided via DI
+            if settings is None:
+                raise ValueError(
+                    "ClipEmbedder requires settings to be provided via constructor. "
+                    "Pass Settings instance when creating: ClipEmbedder(settings=settings)"
+                )
+            self._settings = settings
             logger.info(
-                f"ClipEmbedder singleton created (enabled={settings.clip_enabled})"
+                f"ClipEmbedder singleton created (enabled={self._settings.clip_enabled})"
             )
 
     def _ensure_model_loaded(self) -> bool:
@@ -128,7 +143,7 @@ class ClipEmbedder:
         if self._model is not None:
             return True
 
-        if not settings.clip_enabled:
+        if not self._settings.clip_enabled:
             logger.info("CLIP embeddings disabled via CLIP_ENABLED=false")
             return False
 
@@ -139,30 +154,30 @@ class ClipEmbedder:
             start_time = time.time()
 
             # Determine device
-            if settings.clip_device == "cuda" and torch.cuda.is_available():
+            if self._settings.clip_device == "cuda" and torch.cuda.is_available():
                 self._device = torch.device("cuda")
             else:
                 self._device = torch.device("cpu")
 
             # Set CPU threads if on CPU (prevent thrashing)
             if self._device.type == "cpu":
-                num_threads = getattr(settings, "clip_cpu_threads", None)
+                num_threads = getattr(self._settings, "clip_cpu_threads", None)
                 if num_threads:
                     torch.set_num_threads(num_threads)
                     logger.info(f"Set torch CPU threads to {num_threads}")
 
             logger.info(
-                f"Loading CLIP model: {settings.clip_model_name} "
-                f"(pretrained={settings.clip_pretrained}, device={self._device})"
+                f"Loading CLIP model: {self._settings.clip_model_name} "
+                f"(pretrained={self._settings.clip_pretrained}, device={self._device})"
             )
 
             # Load model with cache directory
-            cache_dir = Path(settings.clip_cache_dir)
+            cache_dir = Path(self._settings.clip_cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
             model, _, preprocess = open_clip.create_model_and_transforms(
-                model_name=settings.clip_model_name,
-                pretrained=settings.clip_pretrained,
+                model_name=self._settings.clip_model_name,
+                pretrained=self._settings.clip_pretrained,
                 device=self._device,
                 cache_dir=str(cache_dir),
             )
@@ -179,12 +194,12 @@ class ClipEmbedder:
             load_time = (time.time() - start_time) * 1000
 
             logger.info(
-                f"CLIP model loaded successfully: {settings.clip_model_name} "
+                f"CLIP model loaded successfully: {self._settings.clip_model_name} "
                 f"(embed_dim={self._embed_dim}, device={self._device}, "
                 f"load_time={load_time:.1f}ms, cache_dir={cache_dir})"
             )
 
-            if settings.clip_debug_log:
+            if self._settings.clip_debug_log:
                 logger.debug(
                     f"CLIP model details: {model.__class__.__name__}, "
                     f"preprocess={preprocess}"
@@ -219,10 +234,10 @@ class ClipEmbedder:
         start_time = time.time()
 
         metadata = ClipEmbeddingMetadata(
-            model_name=settings.clip_model_name,
-            pretrained=settings.clip_pretrained,
+            model_name=self._settings.clip_model_name,
+            pretrained=self._settings.clip_pretrained,
             embed_dim=self._embed_dim,
-            normalized=settings.clip_normalize,
+            normalized=self._settings.clip_normalize,
             device=str(self._device),
             frame_path=str(image_path.name),
             frame_quality=quality_info,
@@ -233,8 +248,8 @@ class ClipEmbedder:
             image = Image.open(image_path).convert("RGB")
 
             # Optional: resize if too large (memory safety)
-            if settings.clip_max_image_size:
-                max_size = settings.clip_max_image_size
+            if self._settings.clip_max_image_size:
+                max_size = self._settings.clip_max_image_size
                 if max(image.size) > max_size:
                     image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
@@ -246,7 +261,7 @@ class ClipEmbedder:
                 embedding = self._model.encode_image(image_tensor)
 
                 # L2 normalize if configured (recommended for cosine similarity)
-                if settings.clip_normalize:
+                if self._settings.clip_normalize:
                     embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
 
                 # Convert to list
@@ -255,7 +270,7 @@ class ClipEmbedder:
             inference_time = (time.time() - start_time) * 1000
             metadata.inference_time_ms = round(inference_time, 2)
 
-            if settings.clip_debug_log:
+            if self._settings.clip_debug_log:
                 logger.debug(
                     f"CLIP embedding created: {image_path.name}, "
                     f"dim={len(embedding_list)}, time={inference_time:.1f}ms, "
@@ -303,7 +318,7 @@ class ClipEmbedder:
             Never raises - all errors are caught and returned in metadata.error
         """
         # Return early if CLIP disabled
-        if not settings.clip_enabled:
+        if not self._settings.clip_enabled:
             metadata = ClipEmbeddingMetadata(
                 model_name="disabled",
                 pretrained="disabled",
@@ -318,8 +333,8 @@ class ClipEmbedder:
         # Ensure model loaded
         if not self._ensure_model_loaded():
             metadata = ClipEmbeddingMetadata(
-                model_name=settings.clip_model_name,
-                pretrained=settings.clip_pretrained,
+                model_name=self._settings.clip_model_name,
+                pretrained=self._settings.clip_pretrained,
                 embed_dim=0,
                 normalized=False,
                 device="unknown",
@@ -330,7 +345,7 @@ class ClipEmbedder:
 
         # Use configured timeout if not specified
         if timeout_s is None:
-            timeout_s = settings.clip_timeout_s
+            timeout_s = self._settings.clip_timeout_s
 
         # Execute with timeout protection
         try:
@@ -343,10 +358,10 @@ class ClipEmbedder:
 
         except FuturesTimeoutError:
             metadata = ClipEmbeddingMetadata(
-                model_name=settings.clip_model_name,
-                pretrained=settings.clip_pretrained,
+                model_name=self._settings.clip_model_name,
+                pretrained=self._settings.clip_pretrained,
                 embed_dim=self._embed_dim or 0,
-                normalized=settings.clip_normalize,
+                normalized=self._settings.clip_normalize,
                 device=str(self._device) if self._device else "unknown",
                 frame_path=str(image_path.name),
                 frame_quality=quality_info,
@@ -360,10 +375,10 @@ class ClipEmbedder:
         except Exception as e:
             # Should not happen due to internal error handling, but safety net
             metadata = ClipEmbeddingMetadata(
-                model_name=settings.clip_model_name,
-                pretrained=settings.clip_pretrained,
+                model_name=self._settings.clip_model_name,
+                pretrained=self._settings.clip_pretrained,
                 embed_dim=self._embed_dim or 0,
-                normalized=settings.clip_normalize,
+                normalized=self._settings.clip_normalize,
                 device=str(self._device) if self._device else "unknown",
                 frame_path=str(image_path.name),
                 frame_quality=quality_info,
@@ -391,6 +406,6 @@ class ClipEmbedder:
         Returns:
             True if model is loaded and ready, False otherwise
         """
-        if not settings.clip_enabled:
+        if not self._settings.clip_enabled:
             return False
         return self._ensure_model_loaded()

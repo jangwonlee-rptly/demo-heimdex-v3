@@ -88,7 +88,7 @@ def create_worker_context(settings: Settings) -> WorkerContext:
     # Create CLIP embedder (optional, lazy-loads model on first use)
     clip_embedder: Optional[ClipEmbedder] = None
     if settings.clip_enabled:
-        clip_embedder = ClipEmbedder()
+        clip_embedder = ClipEmbedder(settings=settings)
 
     # Create FFmpeg adapter (stateless)
     ffmpeg = FFmpegAdapter()

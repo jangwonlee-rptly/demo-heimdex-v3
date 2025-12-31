@@ -1,5 +1,109 @@
 # Development Log
 
+## 2025-12-31: Phase 1.5 Emergency Hotfix - ClipEmbedder Import Safety
+
+### Problem
+After deploying Phase 1.5, the worker container crashed on startup with:
+```
+AttributeError: 'NoneType' object has no attribute 'clip_enabled'
+  File "/app/src/adapters/clip_embedder.py", line 116, in __init__
+    f"ClipEmbedder singleton created (enabled={settings.clip_enabled})"
+```
+
+The ClipEmbedder was still using the global `settings` import and was not updated in the initial Phase 1.5 hotfix.
+
+### Root Cause
+`services/worker/src/adapters/clip_embedder.py` had:
+- Line 31: `from ..config import settings` (global import)
+- Line 116: Accessed `settings.clip_enabled` at initialization
+- 20+ references to `settings.*` throughout the file
+- No DI-friendly constructor
+
+When `context.py` tried to create `ClipEmbedder()` at line 91, it failed because the global `settings` was `None` after Phase 1.5 refactor.
+
+### Solution
+Refactored ClipEmbedder to use constructor-based dependency injection:
+1. Removed global `from ..config import settings` import
+2. Added `settings` parameter to `__init__` and `__new__` (singleton pattern requires both)
+3. Replaced all 20+ occurrences of `settings.*` with `self._settings.*`
+4. Updated `context.py` to pass settings: `ClipEmbedder(settings=settings)`
+5. Made settings parameter required (no backward compatibility fallback)
+
+### Changes Made
+
+**1. ClipEmbedder Constructor** (`services/worker/src/adapters/clip_embedder.py`)
+```python
+# Before:
+from ..config import settings  # Line 31
+
+def __new__(cls):
+    ...
+
+def __init__(self):
+    ...
+    logger.info(f"ClipEmbedder singleton created (enabled={settings.clip_enabled})")
+
+# After:
+# Removed global import
+
+def __new__(cls, settings=None):  # Accept settings parameter
+    ...
+
+def __init__(self, settings=None):
+    if settings is None:
+        raise ValueError("ClipEmbedder requires settings via constructor")
+    self._settings = settings
+    logger.info(f"ClipEmbedder singleton created (enabled={self._settings.clip_enabled})")
+```
+
+**2. Replace all settings references** (20+ occurrences)
+```python
+# Examples of changes:
+settings.clip_enabled → self._settings.clip_enabled
+settings.clip_model_name → self._settings.clip_model_name
+settings.clip_device → self._settings.clip_device
+settings.clip_normalize → self._settings.clip_normalize
+# ... 16 more similar changes
+```
+
+**3. WorkerContext** (`services/worker/src/context.py:91`)
+```python
+# Before:
+clip_embedder = ClipEmbedder()
+
+# After:
+clip_embedder = ClipEmbedder(settings=settings)
+```
+
+### Verification
+```bash
+# No global settings imports remaining
+rg "from.*config import settings" services/worker/src/adapters/
+# → Only lazy-loads inside functions (acceptable)
+
+# Python syntax check
+python3 -c "from src.adapters.clip_embedder import ClipEmbedder"
+# → Module imports successfully
+```
+
+### Deployment
+This fix must be deployed immediately to restore worker functionality:
+```bash
+git add services/worker/src/adapters/clip_embedder.py \
+        services/worker/src/context.py \
+        docs/DEVLOG.md
+git commit -m "hotfix: ClipEmbedder DI for Phase 1.5 import safety"
+git push
+```
+
+Worker will now start successfully with proper DI throughout all adapters.
+
+### Related
+- Phase 1.5 Hotfix (original): Worker Import Safety & DI Consistency
+- Phase 1 Refactor Summary: Original DI initiative
+
+---
+
 ## 2025-12-31: Phase 1.5 Hotfix - Worker Import Safety & DI Consistency
 
 ### Problem
