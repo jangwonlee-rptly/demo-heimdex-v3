@@ -1,25 +1,29 @@
 # Development Log
 
-## 2025-12-31: Phase 1.5 Emergency Hotfix - Missing DI for ClipEmbedder & SceneDetector
+## 2025-12-31: Phase 1.5 Emergency Hotfix - Missing DI for ClipEmbedder, SceneDetector & FrameQualityChecker
 
 ### Problem
-After deploying Phase 1.5, the worker container crashed on startup, then crashed again during video processing:
+After deploying Phase 1.5, the worker container crashed repeatedly as modules tried to access the global `settings` (now `None`):
 
 **Crash 1 - ClipEmbedder:**
 ```
 AttributeError: 'NoneType' object has no attribute 'clip_enabled'
   File "/app/src/adapters/clip_embedder.py", line 116, in __init__
-    f"ClipEmbedder singleton created (enabled={settings.clip_enabled})"
 ```
 
-**Crash 2 - SceneDetector (after ClipEmbedder fix):**
+**Crash 2 - SceneDetector:**
 ```
 AttributeError: 'NoneType' object has no attribute 'scene_min_len_seconds'
   File "/app/src/domain/scene_detector.py", line 378, in detect_scenes_best
-    min_scene_len = settings.scene_min_len_seconds
 ```
 
-Two modules were missed in the initial Phase 1.5 hotfix and were still using global `settings`.
+**Crash 3 - FrameQualityChecker:**
+```
+AttributeError: 'NoneType' object has no attribute 'visual_brightness_threshold'
+  File "/app/src/domain/frame_quality.py", line 70, in check_frame
+```
+
+Three modules were missed in the initial Phase 1.5 hotfix and were still using global `settings`.
 
 ### Root Cause
 **ClipEmbedder** (`services/worker/src/adapters/clip_embedder.py`):
@@ -34,10 +38,16 @@ Two modules were missed in the initial Phase 1.5 hotfix and were still using glo
 - 15+ references to `settings.*` in active code paths
 - Static methods didn't accept settings parameter
 
+**FrameQualityChecker** (`services/worker/src/domain/frame_quality.py`):
+- Line 13: `from ..config import settings` (global import)
+- Line 240: Module-level singleton `frame_quality_checker = FrameQualityChecker()`
+- Line 70, 74, 85, 89: Accessed `settings.visual_brightness_threshold` and `settings.visual_blur_threshold`
+- Used by SidecarBuilder during scene processing
+
 When the worker processed videos, these modules tried to access the global `settings` (now `None` after Phase 1.5).
 
 ### Solution
-Refactored both ClipEmbedder and SceneDetector to use dependency injection:
+Refactored all three modules to use dependency injection:
 
 **ClipEmbedder** - Constructor-based DI:
 1. Removed global `from ..config import settings` import
@@ -53,6 +63,15 @@ Refactored both ClipEmbedder and SceneDetector to use dependency injection:
 2. Updated internal call in `detect_scenes_with_preferences` to pass settings
 3. Updated `video_processor.py` to pass `self.settings` when calling scene detection
 4. Left backwards-compatible methods (`detect_scenes`, `get_scene_detector`) unchanged (not in active code path)
+
+**FrameQualityChecker** - Instance-based DI:
+1. Removed global `from ..config import settings` import
+2. Added `__init__(self, settings)` constructor (converted from all-static class)
+3. Converted all static methods to instance methods
+4. Replaced all `settings.*` with `self.settings.*` (lines 75, 79, 90, 94)
+5. Removed module-level singleton: `frame_quality_checker = None`
+6. Updated `SidecarBuilder.__init__` to create instance: `self.frame_quality_checker = FrameQualityChecker(settings)`
+7. Updated call site in SidecarBuilder:776 to use `self.frame_quality_checker.rank_frames_by_quality()`
 
 ### Changes Made
 
@@ -140,6 +159,55 @@ scenes, detection_result = scene_detector.detect_scenes_with_preferences(
 )
 ```
 
+**6. FrameQualityChecker** (`services/worker/src/domain/frame_quality.py`)
+```python
+# Before:
+from ..config import settings
+
+class FrameQualityChecker:
+    @staticmethod
+    def check_frame(frame_path: Path) -> FrameQualityResult:
+        brightness = FrameQualityChecker._calculate_brightness(image)
+        is_too_dark = brightness < settings.visual_brightness_threshold  # Global
+
+frame_quality_checker = FrameQualityChecker()  # Module-level singleton
+
+# After:
+class FrameQualityChecker:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def check_frame(self, frame_path: Path) -> FrameQualityResult:
+        brightness = self._calculate_brightness(image)
+        is_too_dark = brightness < self.settings.visual_brightness_threshold  # Instance
+
+frame_quality_checker = None  # Removed singleton
+```
+
+**7. SidecarBuilder** (`services/worker/src/domain/sidecar_builder.py`)
+```python
+# Before:
+from .frame_quality import frame_quality_checker
+
+class SidecarBuilder:
+    def __init__(self, storage, ffmpeg, openai, clip_embedder, settings):
+        # ... no frame_quality_checker creation
+
+    # Later in code:
+    ranked_frames = frame_quality_checker.rank_frames_by_quality(keyframe_paths)  # Global
+
+# After:
+from .frame_quality import FrameQualityChecker
+
+class SidecarBuilder:
+    def __init__(self, storage, ffmpeg, openai, clip_embedder, settings):
+        # ...
+        self.frame_quality_checker = FrameQualityChecker(settings)  # Create instance
+
+    # Later in code:
+    ranked_frames = self.frame_quality_checker.rank_frames_by_quality(keyframe_paths)  # Instance
+```
+
 ### Verification
 
 **Import Safety Check:**
@@ -168,7 +236,9 @@ Worker starts successfully and processes videos without crashing.
 2. `services/worker/src/context.py` - Pass settings to ClipEmbedder
 3. `services/worker/src/domain/scene_detector.py` - Added settings parameter to static methods
 4. `services/worker/src/domain/video_processor.py` - Pass settings when calling scene detection
-5. `docs/DEVLOG.md` - This documentation
+5. **`services/worker/src/domain/frame_quality.py`** - Converted to instance-based class with settings
+6. **`services/worker/src/domain/sidecar_builder.py`** - Create FrameQualityChecker instance with settings
+7. `docs/DEVLOG.md` - This documentation
 
 ### Deployment
 Deploy immediately to restore worker functionality:
@@ -177,12 +247,14 @@ git add services/worker/src/adapters/clip_embedder.py \
         services/worker/src/context.py \
         services/worker/src/domain/scene_detector.py \
         services/worker/src/domain/video_processor.py \
+        services/worker/src/domain/frame_quality.py \
+        services/worker/src/domain/sidecar_builder.py \
         docs/DEVLOG.md
-git commit -m "hotfix: ClipEmbedder & SceneDetector DI for Phase 1.5"
+git commit -m "hotfix: Complete Phase 1.5 DI (ClipEmbedder, SceneDetector, FrameQualityChecker)"
 git push
 ```
 
-Worker now starts and processes videos successfully with proper DI.
+Worker now starts and processes videos end-to-end successfully with proper DI throughout.
 
 ### Related
 - Phase 1.5 Hotfix (original): Worker Import Safety & DI Consistency

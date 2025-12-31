@@ -10,8 +10,6 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from ..config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -42,8 +40,15 @@ class FrameQualityResult:
 class FrameQualityChecker:
     """Checks frame quality to determine if visual semantics analysis is worthwhile."""
 
-    @staticmethod
-    def check_frame(frame_path: Path) -> FrameQualityResult:
+    def __init__(self, settings):
+        """Initialize FrameQualityChecker with settings.
+
+        Args:
+            settings: Settings object with visual quality thresholds
+        """
+        self.settings = settings
+
+    def check_frame(self, frame_path: Path) -> FrameQualityResult:
         """
         Check if a frame is visually informative.
 
@@ -66,12 +71,12 @@ class FrameQualityChecker:
                 )
 
             # Check brightness
-            brightness = FrameQualityChecker._calculate_brightness(image)
-            is_too_dark = brightness < settings.visual_brightness_threshold
+            brightness = self._calculate_brightness(image)
+            is_too_dark = brightness < self.settings.visual_brightness_threshold
 
             # Check blur
-            blur_score = FrameQualityChecker._calculate_blur_score(image)
-            is_too_blurry = blur_score < settings.visual_blur_threshold
+            blur_score = self._calculate_blur_score(image)
+            is_too_blurry = blur_score < self.settings.visual_blur_threshold
 
             # Determine if informative
             is_informative = not (is_too_dark or is_too_blurry)
@@ -82,11 +87,11 @@ class FrameQualityChecker:
                 reasons = []
                 if is_too_dark:
                     reasons.append(
-                        f"too dark (brightness={brightness:.1f} < {settings.visual_brightness_threshold})"
+                        f"too dark (brightness={brightness:.1f} < {self.settings.visual_brightness_threshold})"
                     )
                 if is_too_blurry:
                     reasons.append(
-                        f"too blurry (blur={blur_score:.1f} < {settings.visual_blur_threshold})"
+                        f"too blurry (blur={blur_score:.1f} < {self.settings.visual_blur_threshold})"
                     )
                 reason = ", ".join(reasons)
 
@@ -111,8 +116,7 @@ class FrameQualityChecker:
                 reason=f"Error: {str(e)}",
             )
 
-    @staticmethod
-    def _calculate_brightness(image: np.ndarray) -> float:
+    def _calculate_brightness(self, image: np.ndarray) -> float:
         """
         Calculate average brightness of an image.
 
@@ -128,8 +132,7 @@ class FrameQualityChecker:
         # Calculate mean intensity
         return float(np.mean(gray))
 
-    @staticmethod
-    def _calculate_blur_score(image: np.ndarray) -> float:
+    def _calculate_blur_score(self, image: np.ndarray) -> float:
         """
         Calculate blur score using Laplacian variance.
 
@@ -150,8 +153,7 @@ class FrameQualityChecker:
 
         return variance
 
-    @staticmethod
-    def find_best_frame(frame_paths: list[Path]) -> Optional[Path]:
+    def find_best_frame(self, frame_paths: list[Path]) -> Optional[Path]:
         """
         Find the best (most informative) frame from a list.
 
@@ -168,7 +170,7 @@ class FrameQualityChecker:
         best_score = -1
 
         for frame_path in frame_paths:
-            result = FrameQualityChecker.check_frame(frame_path)
+            result = self.check_frame(frame_path)
 
             if result.is_informative:
                 # Score based on brightness and blur
@@ -192,8 +194,7 @@ class FrameQualityChecker:
 
         return best_frame
 
-    @staticmethod
-    def rank_frames_by_quality(frame_paths: list[Path]) -> list[tuple[Path, float]]:
+    def rank_frames_by_quality(self, frame_paths: list[Path]) -> list[tuple[Path, float]]:
         """
         Rank all frames by quality score (highest first).
 
@@ -210,7 +211,7 @@ class FrameQualityChecker:
         scored_frames = []
 
         for frame_path in frame_paths:
-            result = FrameQualityChecker.check_frame(frame_path)
+            result = self.check_frame(frame_path)
 
             if result.is_informative:
                 # Score based on brightness and blur
@@ -236,5 +237,5 @@ class FrameQualityChecker:
         return scored_frames
 
 
-# Global frame quality checker instance
-frame_quality_checker = FrameQualityChecker()
+# Module-level singleton removed - FrameQualityChecker now requires settings via DI
+frame_quality_checker = None  # Placeholder for backward compatibility

@@ -24,7 +24,7 @@ from typing import Optional
 from uuid import UUID
 
 from .scene_detector import Scene
-from .frame_quality import frame_quality_checker
+from .frame_quality import FrameQualityChecker
 from ..adapters.clip_embedder import ClipEmbedder
 from ..adapters import clip_inference
 
@@ -264,6 +264,8 @@ class SidecarBuilder:
         self.openai = openai
         self.clip_embedder = clip_embedder
         self.settings = settings
+        # Create FrameQualityChecker with settings
+        self.frame_quality_checker = FrameQualityChecker(settings)
 
     def _normalize_tags(self, entities: list[str], actions: list[str]) -> list[str]:
         """
@@ -771,7 +773,7 @@ class SidecarBuilder:
 
             if keyframe_paths:
                 # Rank frames by quality (best first)
-                ranked_frames = frame_quality_checker.rank_frames_by_quality(keyframe_paths)
+                ranked_frames = self.frame_quality_checker.rank_frames_by_quality(keyframe_paths)
                 stats.best_frame_found = len(ranked_frames) > 0
 
                 if ranked_frames:
