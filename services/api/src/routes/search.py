@@ -25,6 +25,8 @@ from ..domain.search.fusion import (
     FusedCandidate,
     ScoreType,
 )
+from ..domain.search.person_query_parser import PersonQueryParser
+from ..domain.search.person_fusion import fuse_with_person
 from ..domain.search.rerank import rerank_with_clip
 from ..domain.search.intent import detect_query_intent
 from ..domain.visual_router import get_visual_intent_router
@@ -502,13 +504,33 @@ async def search_scenes(
     user_profile = db.get_user_profile(user_id)
     user_language = user_profile.preferred_language if user_profile else "ko"
 
+    # Parse query for person name (Phase 10)
+    person_id: Optional[UUID] = None
+    person_embedding: Optional[list[float]] = None
+    content_query = request.query  # Will be updated if person detected
+
+    try:
+        parser = PersonQueryParser(db, user_id)
+        person_id, person_embedding, content_query = parser.parse(request.query)
+
+        if person_id:
+            has_embedding = person_embedding is not None
+            logger.info(
+                f"Person detected: person_id={person_id}, "
+                f"has_embedding={has_embedding}, content_query='{content_query}'"
+            )
+    except Exception as e:
+        logger.error(f"Person query parsing failed: {e}", exc_info=True)
+        # Continue with original query if parsing fails
+
     # Detect query intent for soft lexical gating (lookup vs semantic)
-    query_intent = detect_query_intent(request.query, language=user_language)
+    query_intent = detect_query_intent(content_query, language=user_language)
 
     logger.info(
         f"Search request from user {user_id} (language: {user_language}): "
-        f"query='{request.query}', video_id={request.video_id}, limit={request.limit}, "
-        f"intent={query_intent}, "
+        f"query='{request.query}', content_query='{content_query}', "
+        f"video_id={request.video_id}, limit={request.limit}, "
+        f"intent={query_intent}, person_id={person_id}, "
         f"hybrid_enabled={settings.hybrid_search_enabled}, "
         f"fusion_method={fusion_method}, weights=({weight_dense:.2f}/{weight_lexical:.2f})"
     )
@@ -534,9 +556,10 @@ async def search_scenes(
     embedding_failed = False
 
     # OpenAI embedding (always needed for transcript/summary)
+    # Use content_query (person name stripped if detected)
     try:
         embed_start = time.time()
-        query_embedding = openai_client.create_embedding(request.query)
+        query_embedding = openai_client.create_embedding(content_query)
         embedding_ms = int((time.time() - embed_start) * 1000)
     except Exception as e:
         logger.error(f"Failed to create OpenAI embedding: {e}")
@@ -623,7 +646,7 @@ async def search_scenes(
         try:
             lexical_start = time.time()
             lexical_results = opensearch_client.bm25_search(
-                query=request.query,
+                query=content_query,
                 owner_id=str(user_id),
                 video_id=str(request.video_id) if request.video_id else None,
                 size=settings.candidate_k_lexical,
@@ -730,7 +753,7 @@ async def search_scenes(
             query_embedding,
             user_id,
             request.video_id,
-            request.query,
+            content_query,
             db,
             opensearch_client,
             settings,
@@ -858,7 +881,7 @@ async def search_scenes(
                 ): "dense",
                 executor.submit(
                     _run_lexical_search,
-                    request.query,
+                    content_query,
                     user_id,
                     request.video_id,
                     settings.candidate_k_lexical,
@@ -897,7 +920,7 @@ async def search_scenes(
         # Embedding failed but OpenSearch is available - use lexical only
         logger.warning("Embedding failed, falling back to lexical-only search")
         lexical_candidates, lexical_ms = _run_lexical_search(
-            request.query,
+            content_query,
             user_id,
             request.video_id,
             request.limit,
@@ -1011,12 +1034,71 @@ async def search_scenes(
 
     # Apply minimum fused score threshold filter (post-fusion, pre-hydration)
     # This filters out low-quality results before database hydration to save queries
+    # Phase 10: Person-aware search fusion (if person detected)
+    if person_id and person_embedding:
+        try:
+            logger.info(f"Running person-aware search for person_id={person_id}")
+
+            # Run person retrieval
+            person_start = time.time()
+            person_results = db.search_scenes_by_person_clip_embedding(
+                query_embedding=person_embedding,
+                user_id=user_id,
+                video_id=request.video_id,
+                match_count=settings.candidate_k_person,
+                threshold=settings.threshold_person,
+            )
+            person_ms = int((time.time() - person_start) * 1000)
+
+            # Convert to Candidate list
+            person_candidates = [
+                Candidate(scene_id=scene_id, rank=rank, score=similarity)
+                for scene_id, rank, similarity in person_results
+            ]
+
+            logger.info(
+                f"Person retrieval: found {len(person_candidates)} candidates "
+                f"(threshold={settings.threshold_person}, elapsed_ms={person_ms})"
+            )
+
+            # Convert content fused_results to Candidate list (preserve top 200 before truncation)
+            content_candidates = [
+                Candidate(scene_id=f.scene_id, rank=i + 1, score=f.score)
+                for i, f in enumerate(fused_results[:settings.candidate_k_person])
+            ]
+
+            # Fuse person + content
+            fusion_start = time.time()
+            fused_results = fuse_with_person(
+                content_candidates=content_candidates,
+                person_candidates=person_candidates,
+                weight_content=settings.weight_content_person_search,
+                weight_person=settings.weight_person_person_search,
+                top_k=request.limit,
+            )
+            fusion_ms += int((time.time() - fusion_start) * 1000)
+
+            logger.info(
+                f"Person fusion: returned {len(fused_results)} results, "
+                f"weights=(content={settings.weight_content_person_search:.2f}, "
+                f"person={settings.weight_person_person_search:.2f})"
+            )
+
+        except Exception as e:
+            logger.error(f"Person search failed, falling back to content-only: {e}", exc_info=True)
+            # Continue with content-only results (fused_results unchanged)
+
+    elif person_id and not person_embedding:
+        logger.info(
+            f"Person '{person_id}' detected but no query_embedding yet, using content-only"
+        )
+
     min_score_threshold = (
         request.min_fused_score
         if request.min_fused_score is not None
         else settings.min_fused_score_threshold
     )
-    
+
     if min_score_threshold > 0.0 and fused_results:
         filtered_count_before = len(fused_results)
         fused_results = [r for r in fused_results if r.score >= min_score_threshold]

@@ -805,6 +805,210 @@ class Database:
 
         return response.data[0] if response.data else {}
 
+    # ========================================================================
+    # PERSON REFERENCE PHOTO STATE MANAGEMENT (Phase 5)
+    # ========================================================================
+
+    def get_person_reference_photo(self, photo_id: UUID) -> Optional[dict]:
+        """Get photo by ID.
+
+        Args:
+            photo_id: UUID of the photo.
+
+        Returns:
+            Optional[dict]: The photo data if found, otherwise None.
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("*")
+            .eq("id", str(photo_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data[0]
+
+    def update_person_photo_state(
+        self,
+        photo_id: UUID,
+        state: str,
+    ) -> None:
+        """Update photo state (UPLOADED, PROCESSING, READY, FAILED).
+
+        Args:
+            photo_id: UUID of the photo.
+            state: New state.
+        """
+        self.client.table("person_reference_photos").update({
+            "state": state,
+        }).eq("id", str(photo_id)).execute()
+
+    def update_person_photo_embedding(
+        self,
+        photo_id: UUID,
+        embedding: list[float],
+        quality_score: float,
+        state: str = "READY",
+    ) -> None:
+        """Update photo with embedding after processing.
+
+        Args:
+            photo_id: UUID of the photo.
+            embedding: 512-dimensional CLIP embedding.
+            quality_score: Quality score (0-1).
+            state: New state (default: READY).
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        self.client.table("person_reference_photos").update({
+            "embedding": embedding_str,
+            "quality_score": quality_score,
+            "state": state,
+            "error_message": None,  # Clear any previous error
+        }).eq("id", str(photo_id)).execute()
+
+    def update_person_photo_failed(
+        self,
+        photo_id: UUID,
+        error_message: str,
+    ) -> None:
+        """Mark photo as failed.
+
+        Args:
+            photo_id: UUID of the photo.
+            error_message: Error message.
+        """
+        self.client.table("person_reference_photos").update({
+            "state": "FAILED",
+            "error_message": error_message[:500],  # Truncate
+        }).eq("id", str(photo_id)).execute()
+
+    def get_ready_photo_embeddings(self, person_id: UUID) -> list[list[float]]:
+        """Get all READY photo embeddings for aggregation.
+
+        Args:
+            person_id: UUID of the person.
+
+        Returns:
+            list[list[float]]: List of embeddings.
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("embedding")
+            .eq("person_id", str(person_id))
+            .eq("state", "READY")
+            .not_.is_("embedding", "null")
+            .execute()
+        )
+
+        embeddings = []
+        for row in response.data:
+            if row.get("embedding"):
+                embeddings.append(row["embedding"])
+
+        return embeddings
+
+    def update_person_query_embedding(
+        self,
+        person_id: UUID,
+        embedding: list[float],
+    ) -> None:
+        """Update aggregate query embedding for person.
+
+        Args:
+            person_id: UUID of the person.
+            embedding: 512-dimensional CLIP embedding.
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        self.client.table("persons").update({
+            "query_embedding": embedding_str,
+        }).eq("id", str(person_id)).execute()
+
+    # ========================================================================
+    # SCENE PERSON EMBEDDINGS (Phase 5)
+    # ========================================================================
+
+    def create_scene_person_embedding(
+        self,
+        owner_id: UUID,
+        video_id: UUID,
+        scene_id: UUID,
+        embedding: list[float],
+        kind: str = "thumbnail",
+        ordinal: int = 0,
+    ) -> None:
+        """Create or update scene person embedding (upsert on unique constraint).
+
+        Args:
+            owner_id: UUID of the owning user.
+            video_id: UUID of the video.
+            scene_id: UUID of the scene.
+            embedding: 512-dimensional CLIP embedding.
+            kind: Embedding kind (default: thumbnail).
+            ordinal: Ordinal within kind (default: 0).
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        data = {
+            "owner_id": str(owner_id),
+            "video_id": str(video_id),
+            "scene_id": str(scene_id),
+            "kind": kind,
+            "ordinal": ordinal,
+            "embedding": embedding_str,
+        }
+
+        # Upsert: insert or update on conflict
+        self.client.table("scene_person_embeddings").upsert(
+            data,
+            on_conflict="scene_id,kind,ordinal"
+        ).execute()
+
+    def get_scene_person_embedding(
+        self,
+        scene_id: UUID,
+        kind: str = "thumbnail",
+        ordinal: int = 0,
+    ) -> Optional[dict]:
+        """Check if scene has person embedding.
+
+        Args:
+            scene_id: UUID of the scene.
+            kind: Embedding kind (default: thumbnail).
+            ordinal: Ordinal within kind (default: 0).
+
+        Returns:
+            Optional[dict]: Embedding record if exists, otherwise None.
+        """
+        response = (
+            self.client.table("scene_person_embeddings")
+            .select("id,created_at")
+            .eq("scene_id", str(scene_id))
+            .eq("kind", kind)
+            .eq("ordinal", ordinal)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data[0]
+
 
 # No global database instance - Database should be created via dependency injection
 # in create_worker_context() with explicit configuration parameters

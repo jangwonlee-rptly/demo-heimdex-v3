@@ -74,9 +74,17 @@ def bootstrap(settings: Optional[Settings] = None) -> WorkerContext:
 
     # Import the canonical actors from shared tasks module
     # This registers the actors with the broker we just set
-    from libs.tasks import process_video, export_scene_as_short, process_highlight_export  # noqa: F401
+    from libs.tasks import (  # noqa: F401
+        process_video,
+        export_scene_as_short,
+        process_highlight_export,
+        process_reference_photo,
+    )
 
-    logger.info("Imported actors: process_video, export_scene_as_short, process_highlight_export")
+    logger.info(
+        "Imported actors: process_video, export_scene_as_short, "
+        "process_highlight_export, process_reference_photo"
+    )
 
     # Create worker context
     _worker_context = create_worker_context(settings)

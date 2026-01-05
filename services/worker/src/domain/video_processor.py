@@ -423,6 +423,14 @@ class VideoProcessor:
                     )
                     self.db.update_video_metadata(video_id=video_id, thumbnail_url=thumbnail_url)
 
+            # Step 7.5: Generate scene person embeddings for person-aware search (Phase 7)
+            logger.info("Generating scene person embeddings (Phase 7)")
+            try:
+                self._generate_scene_person_embeddings(owner_id, video_id)
+            except Exception as e:
+                # Log but don't fail - person search is a best-effort feature
+                logger.error(f"Scene person embedding generation failed: {e}", exc_info=True)
+
             # Step 8: Generate video-level summary from scene descriptions (v2)
             logger.info("Generating video-level summary from scene descriptions")
             try:
@@ -502,3 +510,139 @@ class VideoProcessor:
             if work_dir.exists():
                 logger.info(f"Cleaning up working directory: {work_dir}")
                 shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _generate_scene_person_embeddings(
+        self,
+        owner_id: UUID,
+        video_id: UUID,
+    ) -> None:
+        """Generate person embeddings for scenes (idempotent, Phase 7).
+
+        Generates CLIP embeddings from scene thumbnails for person-aware search.
+        Called after scene processing completes and thumbnails are uploaded.
+
+        Args:
+            owner_id: UUID of the video owner
+            video_id: UUID of the video
+
+        Note:
+            Failures are logged but do not block video processing.
+            This ensures person search feature never breaks existing pipeline.
+        """
+        # Skip if CLIP not available
+        if not self.clip_embedder:
+            logger.debug("CLIP embedder not available, skipping scene person embeddings")
+            return
+
+        logger.info(f"Generating scene person embeddings for video {video_id}")
+
+        try:
+            # Get all scenes for video (need scene IDs + indices)
+            response = (
+                self.db.client.table("video_scenes")
+                .select("id,index")
+                .eq("video_id", str(video_id))
+                .order("index")
+                .execute()
+            )
+
+            scenes = response.data
+            if not scenes:
+                logger.warning(f"No scenes found for video {video_id}")
+                return
+
+            logger.info(f"Processing {len(scenes)} scenes for person embeddings")
+
+            processed_count = 0
+            skipped_count = 0
+            failed_count = 0
+
+            for scene in scenes:
+                scene_id = UUID(scene["id"])
+                scene_index = scene["index"]
+
+                try:
+                    # Idempotency check
+                    existing = self.db.get_scene_person_embedding(
+                        scene_id=scene_id,
+                        kind="thumbnail",
+                        ordinal=0,
+                    )
+
+                    if existing:
+                        skipped_count += 1
+                        continue
+
+                    # Compute deterministic thumbnail storage path
+                    # Pattern: {owner_id}/{video_id}/thumbnails/scene_{index}.jpg
+                    thumbnail_storage_path = (
+                        f"{owner_id}/{video_id}/thumbnails/scene_{scene_index}.jpg"
+                    )
+
+                    # Download thumbnail to temporary location
+                    from tempfile import TemporaryDirectory
+                    with TemporaryDirectory() as tmpdir:
+                        local_path = Path(tmpdir) / f"scene_{scene_index}.jpg"
+
+                        # Download from storage
+                        thumbnail_data = self.storage.download_file(thumbnail_storage_path)
+                        local_path.write_bytes(thumbnail_data)
+
+                        # Generate CLIP embedding
+                        embedding, metadata = self.clip_embedder.create_visual_embedding(
+                            image_path=local_path,
+                            timeout_s=3.0,
+                        )
+
+                        if not embedding:
+                            error_msg = metadata.error if metadata and metadata.error else "CLIP failed"
+                            logger.warning(
+                                f"Failed to generate embedding for scene {scene_index}: {error_msg}"
+                            )
+                            failed_count += 1
+                            continue
+
+                        # Validate dimension
+                        if len(embedding) != 512:
+                            logger.warning(
+                                f"Invalid embedding dimension for scene {scene_index}: {len(embedding)}"
+                            )
+                            failed_count += 1
+                            continue
+
+                        # Normalize embedding if needed
+                        import numpy as np
+                        embedding_array = np.array(embedding)
+                        norm = np.linalg.norm(embedding_array)
+                        if abs(norm - 1.0) > 0.01:
+                            embedding_array = embedding_array / norm
+                            embedding = embedding_array.tolist()
+
+                        # Store embedding (UPSERT on unique constraint)
+                        self.db.create_scene_person_embedding(
+                            owner_id=owner_id,
+                            video_id=video_id,
+                            scene_id=scene_id,
+                            embedding=embedding,
+                            kind="thumbnail",
+                            ordinal=0,
+                        )
+
+                        processed_count += 1
+
+                except Exception as e:
+                    # Log but continue processing other scenes
+                    logger.warning(
+                        f"Failed to process scene {scene_index} for person embeddings: {e}"
+                    )
+                    failed_count += 1
+                    continue
+
+            logger.info(
+                f"Scene person embeddings: processed={processed_count}, "
+                f"skipped={skipped_count}, failed={failed_count}"
+            )
+
+        except Exception as e:
+            # Log error but don't raise - this is a best-effort feature
+            logger.error(f"Failed to generate scene person embeddings: {e}", exc_info=True)

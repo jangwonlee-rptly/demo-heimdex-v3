@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     weight_summary: float = 0.10
     weight_lexical_multi: float = 0.20  # Separate from fusion_weight_lexical for legacy mode
 
+    # Person search configuration (Phase 10)
+    candidate_k_person: int = 200
+    threshold_person: float = 0.3
+    weight_content_person_search: float = 0.35
+    weight_person_person_search: float = 0.65
+
     # Multi-dense fusion method (reuses fusion_method setting)
     # Options: "minmax_mean" (default) | "rrf"
 
