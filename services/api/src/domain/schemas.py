@@ -299,7 +299,15 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
     video_id: Optional[UUID] = None  # If provided, search only in this video
     limit: int = Field(10, ge=1, le=100)
-    threshold: float = Field(0.2, ge=0.0, le=1.0)
+    threshold: float = Field(0.2, ge=0.0, le=1.0)  # Legacy: per-channel similarity threshold (dense-only mode)
+    min_fused_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum fused score threshold for results. Results with fused score below this will be filtered out. "
+                    "If not provided, uses server default from MIN_FUSED_SCORE_THRESHOLD. "
+                    "Set to 0.0 to disable filtering. Applies after fusion, before hydration.",
+    )
 
     # Fusion configuration overrides (optional)
     fusion_method: Optional[str] = Field(

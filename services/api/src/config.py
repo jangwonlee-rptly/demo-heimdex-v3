@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     max_visual_weight: float = 0.8  # Cap visual weight (prevent sparse match over-reliance)
     min_lexical_weight: float = 0.05  # Minimum lexical weight (preserve keyword signal)
 
+    # Minimum fused score threshold (post-fusion filtering)
+    # Results with fused score below this threshold will be filtered out before hydration.
+    # Set to 0.0 to disable filtering (default). Applies to all search modes.
+    # Recommended values: 0.0 (no filter), 0.1-0.3 (moderate filtering), 0.4+ (strict filtering)
+    min_fused_score_threshold: float = 0.0
+
     # Display score calibration (UI confidence metric, does not affect ranking)
     # When enabled, adds a 'display_score' field to search results that is calibrated
     # per-query to avoid overconfident "100%" displays on mediocre matches.

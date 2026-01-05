@@ -1009,6 +1009,26 @@ async def search_scenes(
                 f"range=[{min(display_scores):.4f}, {max(display_scores):.4f}]"
             )
 
+    # Apply minimum fused score threshold filter (post-fusion, pre-hydration)
+    # This filters out low-quality results before database hydration to save queries
+    min_score_threshold = (
+        request.min_fused_score
+        if request.min_fused_score is not None
+        else settings.min_fused_score_threshold
+    )
+    
+    if min_score_threshold > 0.0 and fused_results:
+        filtered_count_before = len(fused_results)
+        fused_results = [r for r in fused_results if r.score >= min_score_threshold]
+        filtered_count_after = len(fused_results)
+        
+        if filtered_count_before != filtered_count_after:
+            logger.info(
+                f"Minimum score filter applied: threshold={min_score_threshold:.4f}, "
+                f"filtered {filtered_count_before} -> {filtered_count_after} results "
+                f"({filtered_count_before - filtered_count_after} removed)"
+            )
+
     # Hydrate scenes with debug info if enabled
     scene_responses, hydrate_ms = _hydrate_scenes(
         fused_results,
