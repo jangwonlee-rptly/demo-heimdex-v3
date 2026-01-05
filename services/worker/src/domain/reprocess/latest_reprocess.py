@@ -560,7 +560,7 @@ class ReprocessRunner:
                 if emb_summary:
                     update_data["embedding_summary"] = to_pgvector(emb_summary)
                 if multi_metadata:
-                    update_data["multi_embedding_metadata"] = multi_metadata.to_dict()
+                    update_data["embedding_metadata"] = multi_metadata.to_dict()
 
                 # Update embedding_version to track which spec was used
                 update_data["embedding_version"] = self.settings.embedding_version
