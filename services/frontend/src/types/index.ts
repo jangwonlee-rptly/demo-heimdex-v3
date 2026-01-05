@@ -270,10 +270,3 @@ export interface PersonPhotoUploadUrl {
   storage_path: string;
   photo_id: string;
 }
-
-/**
- * Request to complete a photo upload.
- */
-export interface CompletePhotoUploadRequest {
-  storage_path: string;
-}

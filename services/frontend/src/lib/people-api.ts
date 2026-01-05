@@ -9,7 +9,6 @@ import type {
   PersonDisplayStatus,
   CreatePersonRequest,
   PersonPhotoUploadUrl,
-  CompletePhotoUploadRequest,
 } from '@/types';
 
 /**
@@ -85,14 +84,11 @@ export async function completePersonPhotoUpload(
   photoId: string,
   storagePath: string
 ): Promise<void> {
-  const body: CompletePhotoUploadRequest = { storage_path: storagePath };
-  await apiRequest<void>(
-    `/persons/${personId}/photos/${photoId}/complete`,
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }
-  );
+  // Backend expects storage_path as a query parameter, not in the body
+  const url = `/persons/${personId}/photos/${photoId}/complete?storage_path=${encodeURIComponent(storagePath)}`;
+  await apiRequest<void>(url, {
+    method: 'POST',
+  });
 }
 
 /**

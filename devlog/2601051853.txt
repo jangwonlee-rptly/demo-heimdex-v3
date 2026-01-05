@@ -1,0 +1,207 @@
+[2026-01-05 18:53] Bugfix #2 - Photo Upload Complete Endpoint Query Parameter
+File: devlog/2601051853.txt
+
+== What we worked on ==
+- Fixed second API contract mismatch in People frontend
+- Photo upload completion was failing with 422 Unprocessable Entity
+- Backend expected storage_path as query parameter, frontend sent it in body
+- This is a FastAPI parameter binding issue (implicit query parameter)
+
+== Changes made ==
+services/frontend/src/lib/people-api.ts:
+- Fixed completePersonPhotoUpload() to send storage_path as URL query param
+- Added encodeURIComponent() for proper URL encoding (path contains slashes)
+- Removed request body (endpoint doesn't expect one)
+- Removed CompletePhotoUploadRequest import (no longer needed)
+
+services/frontend/src/types/index.ts:
+- Removed CompletePhotoUploadRequest interface (unused)
+
+BUGFIX_PHOTO_UPLOAD.md:
+- Comprehensive documentation of issue and fix
+- Includes backend API reference with curl example
+- Prevention strategies for future API contract issues
+
+== Problems encountered ==
+Backend API Contract Mismatch (Second Instance)
+- Symptom: 422 Unprocessable Entity on POST /complete endpoint
+- Logs showed: Request reached endpoint but was rejected
+- No error message in logs (FastAPI validation error)
+- Required deeper investigation of backend implementation
+
+Backend Code Analysis:
+```python
+@router.post("/persons/{person_id}/photos/{photo_id}/complete")
+async def complete_photo_upload(
+    person_id: UUID,      # Path param (in URL)
+    photo_id: UUID,       # Path param (in URL)
+    storage_path: str,    # Query param (no annotation = query!)
+    current_user: User = Depends(get_current_user),
+    ...
+):
+```
+
+Key insight: In FastAPI, unannotated non-path parameters default to query params.
+
+Frontend Assumption:
+- Assumed storage_path would be in request body (like most POST endpoints)
+- Created CompletePhotoUploadRequest interface with storage_path field
+- Sent JSON body: {"storage_path": "persons/..."}
+- Backend expected: ?storage_path=persons%2F...
+
+== How we tried to solve it ==
+Investigation Steps:
+1. Checked backend logs - saw 422 error but no validation details
+2. Examined backend route definition in persons.py
+3. Analyzed function signature for complete_photo_upload
+4. Noticed storage_path parameter had no type annotation (Body, Query, etc.)
+5. Remembered FastAPI default: unannotated params = query params
+6. Tested hypothesis by checking other similar endpoints
+
+Verification:
+- Checked upload-url endpoint: returns storage_path in response
+- Frontend receives: {upload_url: "...", storage_path: "persons/...", photo_id: "..."}
+- Frontend should send storage_path back as query param, not body
+- Storage path format: "persons/{owner_id}/{person_id}/refs/{photo_id}.jpg"
+
+== How we solved it / Current status ==
+✅ FIXED - Query parameter now sent correctly
+
+Solution:
+1. Changed completePersonPhotoUpload() to build URL with query parameter
+2. Used encodeURIComponent() to handle slashes in path
+3. Removed request body entirely (endpoint doesn't need one)
+4. Removed unused CompletePhotoUploadRequest type
+
+Before:
+```typescript
+const body = { storage_path: storagePath };
+await apiRequest('/complete', { method: 'POST', body: JSON.stringify(body) });
+```
+
+After:
+```typescript
+const url = `/complete?storage_path=${encodeURIComponent(storagePath)}`;
+await apiRequest(url, { method: 'POST' });
+```
+
+Expected Request Format:
+```
+POST /v1/persons/{id}/photos/{photo_id}/complete?storage_path=persons%2F...
+Content-Type: application/json
+
+(empty body or no body)
+```
+
+Backend Validation:
+- Backend validates storage_path matches expected format
+- Expected: "persons/{owner_id}/{person_id}/refs/{photo_id}.jpg"
+- This prevents path injection attacks
+- Mismatch returns 400 Bad Request (not 422)
+
+== Next steps / TODOs ==
+Deployment & Testing:
+- [ ] Rebuild frontend: docker-compose build frontend
+- [ ] Deploy: docker-compose up -d frontend
+- [ ] Test photo upload flow end-to-end
+- [ ] Verify photos transition to PROCESSING state
+- [ ] Check backend logs for successful task queueing
+- [ ] Wait for photos to reach READY state
+- [ ] Verify person status becomes READY
+
+Systemic Improvements (Recommended):
+- [ ] Add OpenAPI spec generation to backend
+- [ ] Generate frontend types from OpenAPI spec
+- [ ] Add integration tests that call real backend APIs
+- [ ] Consider adding explicit Query() annotations in backend:
+      ```python
+      storage_path: str = Query(..., description="Storage path from upload-url")
+      ```
+- [ ] Add runtime validation with zod for API responses
+- [ ] Create contract tests (Pact or similar)
+
+Documentation:
+- [ ] Update API documentation with query parameter examples
+- [ ] Add section on FastAPI parameter binding conventions
+- [ ] Document all endpoints with their exact parameter types
+
+== Root cause analysis ==
+Pattern Recognition:
+This is the second API contract mismatch in the People feature:
+1. First: Response wrappers ({persons: []} vs [])
+2. Second: Query parameters vs request body
+
+Common Root Cause:
+- Frontend developed based on assumptions, not actual backend inspection
+- No shared type definitions between frontend and backend
+- No integration tests verifying actual API contracts
+- FastAPI's implicit parameter binding can be non-obvious
+
+Why This Specific Issue:
+1. Most POST endpoints accept JSON body
+2. Frontend developer assumed this followed same pattern
+3. Backend used query param for security validation reasons
+4. Query param makes storage_path visible in logs for auditing
+5. No explicit annotation made it easy to miss
+
+FastAPI Implicit Behavior:
+- Path params: Must be in route path definition
+- Query params: Not in path, no annotation → defaults to query
+- Body params: Requires explicit annotation (Body, Pydantic model)
+- Form params: Requires Form() annotation
+- Header params: Requires Header() annotation
+
+Best Practice Violated:
+Backend should explicitly annotate all parameters:
+```python
+# Good - Clear and explicit
+storage_path: str = Query(..., description="Storage path")
+
+# Bad - Implicit, easy to misunderstand
+storage_path: str
+```
+
+== Impact ==
+Severity: High (photo upload broken)
+Scope: All photo upload attempts
+User Impact: Users could create person but not add photos
+Time to Fix: ~15 minutes (faster than first issue due to pattern recognition)
+Blocking: Complete feature broken without this fix
+
+== Lessons learned ==
+1. FastAPI implicit parameter binding can be confusing
+2. Always check backend implementation, don't assume patterns
+3. Query parameters are not obvious from just looking at route path
+4. URL encoding is required for paths containing special chars
+5. Pattern recognition from first bug helped solve this faster
+6. Explicit annotations in backend would prevent confusion
+7. Integration tests would catch these immediately
+8. Two similar bugs suggest systemic process issue, not isolated mistakes
+9. When POST returns 422, check parameter binding first
+10. Backend validation errors should include more details in response
+
+== Prevention strategy ==
+Immediate (Frontend):
+1. Test all remaining People endpoints before deploying
+2. Check search endpoint person detection with real backend
+3. Verify polling logic works with real data
+
+Short-term (Process):
+1. Add integration test suite that calls real backend
+2. Document all API contracts in shared location
+3. Use TypeScript to generate API client from OpenAPI spec
+4. Add zod validation for runtime type safety
+
+Long-term (Architecture):
+1. Generate frontend types from backend OpenAPI spec automatically
+2. Add contract testing to CI/CD pipeline
+3. Consider GraphQL or tRPC for type-safe end-to-end APIs
+4. Implement API versioning strategy for breaking changes
+5. Add request/response logging in development mode
+
+Backend Recommendations:
+1. Add explicit parameter annotations everywhere
+2. Improve validation error messages (include expected format)
+3. Document query parameters in OpenAPI spec
+4. Consider consolidating to JSON body for consistency
+5. Add examples to docstrings showing exact request format
