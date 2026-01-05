@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     lookup_fallback_mode: str = "dense_best_guess"  # Future-proof: fallback strategy
     lookup_label_mode: str = "api_field"  # How to communicate match quality (api_field | message)
 
+    # Lookup absolute display score calibration (for best_guess fallback)
+    # When lookup fallback is used (lexical_hits=0), calibrate display_score using
+    # absolute dense similarity instead of fused score to avoid overconfident ~95% displays
+    enable_lookup_absolute_display_score: bool = False
+    lookup_abs_sim_floor: float = 0.20  # Min raw similarity for linear mapping
+    lookup_abs_sim_ceil: float = 0.55   # Max raw similarity for linear mapping
+    lookup_best_guess_max_cap: float = 0.65  # Max display score for best_guess (lower than supported)
+
     def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
         """Validate and redistribute multi-dense channel weights.
 

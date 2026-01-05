@@ -265,6 +265,76 @@ def _run_multi_dense_search(
     return channel_candidates, timing_ms
 
 
+def _build_raw_dense_by_id(channel_candidates: dict[str, list[Candidate]]) -> dict[str, float]:
+    """Build mapping of scene_id to max raw dense similarity across channels.
+
+    For lookup fallback calibration, we need absolute dense similarity (not fused).
+    Extract the max raw similarity across dense channels (transcript, visual, summary).
+    Excludes lexical channel since it uses BM25 scores (not cosine similarity).
+
+    Args:
+        channel_candidates: Dict of channel_name -> list[Candidate]
+
+    Returns:
+        Dict mapping scene_id -> max raw dense similarity (0.0 to 1.0)
+    """
+    raw_dense_by_id: dict[str, float] = {}
+    dense_channels = ["transcript", "visual", "summary"]
+
+    for channel_name, candidates in channel_candidates.items():
+        if channel_name not in dense_channels:
+            continue  # Skip lexical (BM25 scores)
+
+        for candidate in candidates:
+            scene_id = candidate.scene_id
+            raw_sim = candidate.score  # Raw cosine similarity from DB
+            # Take max across channels
+            raw_dense_by_id[scene_id] = max(raw_dense_by_id.get(scene_id, 0.0), raw_sim)
+
+    return raw_dense_by_id
+
+
+def _compute_best_guess_display_scores(
+    fused_results: list[FusedCandidate],
+    raw_dense_by_id: dict[str, float],
+    floor: float,
+    ceil: float,
+    cap: float,
+) -> dict[str, float]:
+    """Compute display scores for lookup fallback using absolute dense similarity.
+
+    Uses linear mapping from [floor, ceil] -> [0, 1], then multiply by cap.
+    This prevents best_guess results from showing ~95% display score when
+    fused score is ~1.0 but absolute similarity is weak (~0.33).
+
+    Args:
+        fused_results: List of fused candidates (for scene_ids and ordering)
+        raw_dense_by_id: Mapping of scene_id -> max raw dense similarity
+        floor: Min raw similarity for linear mapping (e.g., 0.20)
+        ceil: Max raw similarity for linear mapping (e.g., 0.55)
+        cap: Max display score for best_guess (e.g., 0.65)
+
+    Returns:
+        Dict mapping scene_id -> display_score (capped at cap)
+    """
+    display_score_map: dict[str, float] = {}
+    eps = 1e-9  # Avoid division by zero
+
+    for fused in fused_results:
+        scene_id = fused.scene_id
+        abs_sim = raw_dense_by_id.get(scene_id, 0.0)
+
+        # Linear map from [floor, ceil] to [0, 1]
+        normalized = max(0.0, min(1.0, (abs_sim - floor) / (ceil - floor + eps)))
+
+        # Apply cap
+        display_score = normalized * cap
+
+        display_score_map[scene_id] = display_score
+
+    return display_score_map
+
+
 def _hydrate_scenes(
     fused_results: list[FusedCandidate],
     db: Database,
@@ -554,9 +624,9 @@ async def search_scenes(
             lexical_start = time.time()
             lexical_results = opensearch_client.bm25_search(
                 query=request.query,
-                user_id=user_id,
-                video_id=request.video_id,
-                limit=settings.candidate_k_lexical,
+                owner_id=str(user_id),
+                video_id=str(request.video_id) if request.video_id else None,
+                size=settings.candidate_k_lexical,
             )
             lexical_check_ms = int((time.time() - lexical_start) * 1000)
             lexical_hits_count = len(lexical_results)
@@ -568,7 +638,7 @@ async def search_scenes(
 
             # If we have enough lexical hits, use allowlist mode
             if lexical_hits_count >= settings.lookup_lexical_min_hits:
-                lookup_allowlist_ids = {str(sid) for sid, _, _ in lexical_results}
+                lookup_allowlist_ids = {result["scene_id"] for result in lexical_results}
                 lookup_used_allowlist = True
                 match_quality = "supported"
                 logger.info(
@@ -585,9 +655,11 @@ async def search_scenes(
                 )
 
         except Exception as e:
-            logger.warning(f"Lookup soft gating: Lexical check failed, proceeding normally: {e}")
-            # On error, proceed normally (no gating)
-            pass
+            logger.warning(f"Lookup soft gating: Lexical check failed, using fallback mode: {e}")
+            # On error, treat as fallback (no lexical support available)
+            lookup_used_allowlist = False
+            lookup_fallback_used = True
+            match_quality = "best_guess"
 
     if use_multi_dense:
         # Multi-dense mode: run N dense channels + lexical in parallel
@@ -867,7 +939,48 @@ async def search_scenes(
 
     # Apply display score calibration if enabled (post-fusion, pre-hydration)
     display_score_map: dict[str, float] = {}
-    if settings.enable_display_score_calibration and fused_results:
+    display_mode = "none"  # Track which display score method was used
+
+    # Check if we should use absolute display score calibration for lookup fallback
+    use_absolute_display_score = (
+        settings.enable_lookup_absolute_display_score
+        and settings.enable_lookup_soft_gating
+        and query_intent == "lookup"
+        and lookup_fallback_used
+        and use_multi_dense  # Only works in multi-dense mode (need channel_candidates)
+        and fused_results
+    )
+
+    if use_absolute_display_score:
+        # Lookup fallback mode: Use absolute dense similarity for display scores
+        logger.info("Using absolute dense similarity for lookup fallback display scores")
+
+        # Build raw dense similarity mapping from channel candidates
+        raw_dense_by_id = _build_raw_dense_by_id(channel_candidates)
+
+        # Compute display scores using absolute similarity
+        display_score_map = _compute_best_guess_display_scores(
+            fused_results=fused_results,
+            raw_dense_by_id=raw_dense_by_id,
+            floor=settings.lookup_abs_sim_floor,
+            ceil=settings.lookup_abs_sim_ceil,
+            cap=settings.lookup_best_guess_max_cap,
+        )
+
+        display_mode = "abs_dense_best_guess"
+
+        if settings.search_debug:
+            abs_sims = [raw_dense_by_id.get(r.scene_id, 0.0) for r in fused_results[:3]]
+            display_scores = [display_score_map.get(r.scene_id, 0.0) for r in fused_results[:3]]
+            logger.info(
+                f"Display score calibration (abs_dense): "
+                f"floor={settings.lookup_abs_sim_floor}, ceil={settings.lookup_abs_sim_ceil}, "
+                f"cap={settings.lookup_best_guess_max_cap}, "
+                f"top_abs_sims={abs_sims}, top_display_scores={display_scores}"
+            )
+
+    elif settings.enable_display_score_calibration and fused_results:
+        # Standard display score calibration (fused score based)
         from ..domain.search.display_score import calibrate_display_scores
 
         # Extract fused scores in result order
@@ -886,6 +999,8 @@ async def search_scenes(
             r.scene_id: display_scores[i]
             for i, r in enumerate(fused_results)
         }
+
+        display_mode = "fused_exp_squash" if settings.display_score_method == "exp_squash" else "fused_pctl_ceiling"
 
         if settings.search_debug:
             logger.info(
@@ -1047,7 +1162,15 @@ async def search_scenes(
         # Get top scores for analysis
         top_scores = scene_responses[:3] if scene_responses else []
         top_display_scores = [s.display_score for s in top_scores if s.display_score is not None]
-        top_raw_scores = [s.score for s in top_scores if s.score is not None]
+        top_fused_scores = [s.score for s in top_scores if s.score is not None]
+
+        # Get absolute dense similarities if available (fallback mode only)
+        top_abs_dense_sims = []
+        if use_multi_dense and 'raw_dense_by_id' in locals():
+            top_abs_dense_sims = [
+                raw_dense_by_id.get(str(s.id), 0.0)
+                for s in top_scores
+            ]
 
         logger.info(
             f"Lookup soft gating metrics: "
@@ -1057,7 +1180,9 @@ async def search_scenes(
             f"fallback_used={lookup_fallback_used}, "
             f"match_quality={match_quality}, "
             f"results_count={len(scene_responses)}, "
-            f"top_raw_scores={top_raw_scores[:3]}, "
+            f"display_mode={display_mode}, "
+            f"top_fused_scores={top_fused_scores[:3]}, "
+            f"top_abs_dense_sims={top_abs_dense_sims[:3] if top_abs_dense_sims else 'N/A'}, "
             f"top_display_scores={top_display_scores[:3]}"
         )
 

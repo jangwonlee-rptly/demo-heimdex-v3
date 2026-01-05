@@ -115,6 +115,60 @@ def test_config_lookup_soft_gating_enabled():
     print(f"✅ lookup_lexical_min_hits = {settings.lookup_lexical_min_hits}")
 
 
+def test_config_lookup_absolute_display_score_flags():
+    """Verify lookup absolute display score config flags have correct defaults."""
+    print("\n=== Test: Config - Absolute Display Score Flags ===")
+
+    settings = Settings(
+        supabase_url="http://localhost:54321",
+        supabase_anon_key="test_key",
+        supabase_service_role_key="test_key",
+        supabase_jwt_secret="test_secret",
+        database_url="postgresql://test",
+        openai_api_key="test_key",
+    )
+
+    # Verify default values
+    assert settings.enable_lookup_absolute_display_score is False, \
+        "enable_lookup_absolute_display_score should default to False (safe rollout)"
+    assert settings.lookup_abs_sim_floor == 0.20
+    assert settings.lookup_abs_sim_ceil == 0.55
+    assert settings.lookup_best_guess_max_cap == 0.65
+
+    print(f"✅ enable_lookup_absolute_display_score = {settings.enable_lookup_absolute_display_score}")
+    print(f"✅ lookup_abs_sim_floor = {settings.lookup_abs_sim_floor}")
+    print(f"✅ lookup_abs_sim_ceil = {settings.lookup_abs_sim_ceil}")
+    print(f"✅ lookup_best_guess_max_cap = {settings.lookup_best_guess_max_cap}")
+
+
+def test_config_lookup_absolute_display_score_enabled():
+    """Verify lookup absolute display score can be enabled via config."""
+    print("\n=== Test: Config - Enable Absolute Display Score ===")
+
+    settings = Settings(
+        supabase_url="http://localhost:54321",
+        supabase_anon_key="test_key",
+        supabase_service_role_key="test_key",
+        supabase_jwt_secret="test_secret",
+        database_url="postgresql://test",
+        openai_api_key="test_key",
+        enable_lookup_absolute_display_score=True,
+        lookup_abs_sim_floor=0.25,
+        lookup_abs_sim_ceil=0.60,
+        lookup_best_guess_max_cap=0.70,
+    )
+
+    assert settings.enable_lookup_absolute_display_score is True
+    assert settings.lookup_abs_sim_floor == 0.25
+    assert settings.lookup_abs_sim_ceil == 0.60
+    assert settings.lookup_best_guess_max_cap == 0.70
+
+    print(f"✅ enable_lookup_absolute_display_score = {settings.enable_lookup_absolute_display_score}")
+    print(f"✅ lookup_abs_sim_floor = {settings.lookup_abs_sim_floor}")
+    print(f"✅ lookup_abs_sim_ceil = {settings.lookup_abs_sim_ceil}")
+    print(f"✅ lookup_best_guess_max_cap = {settings.lookup_best_guess_max_cap}")
+
+
 def test_match_quality_values():
     """Verify match_quality field values are as expected."""
     print("\n=== Test: Match Quality Values ===")
@@ -203,7 +257,9 @@ def test_logging_metrics_format():
         "fallback_used": False,
         "match_quality": "supported",
         "results_count": 10,
-        "top_raw_scores": [1.0, 0.95, 0.88],
+        "display_mode": "fused_exp_squash",
+        "top_fused_scores": [1.0, 0.95, 0.88],
+        "top_abs_dense_sims": "N/A",
         "top_display_scores": [0.97, 0.92, 0.85],
     }
 
@@ -211,7 +267,7 @@ def test_logging_metrics_format():
     required_fields = [
         "query", "intent", "lexical_hits", "used_allowlist",
         "fallback_used", "match_quality", "results_count",
-        "top_raw_scores", "top_display_scores"
+        "display_mode", "top_fused_scores", "top_abs_dense_sims", "top_display_scores"
     ]
 
     for field in required_fields:
@@ -227,7 +283,10 @@ def test_logging_metrics_format():
     assert isinstance(metrics["fallback_used"], bool)
     assert isinstance(metrics["match_quality"], str)
     assert isinstance(metrics["results_count"], int)
-    assert isinstance(metrics["top_raw_scores"], list)
+    assert isinstance(metrics["display_mode"], str)
+    assert isinstance(metrics["top_fused_scores"], list)
+    # top_abs_dense_sims can be string "N/A" or list
+    assert isinstance(metrics["top_abs_dense_sims"], (str, list))
     assert isinstance(metrics["top_display_scores"], list)
 
     print(f"✅ All metrics have correct data types")
@@ -244,6 +303,8 @@ def run_all_tests():
         test_detect_query_intent_semantic()
         test_config_lookup_soft_gating_flags()
         test_config_lookup_soft_gating_enabled()
+        test_config_lookup_absolute_display_score_flags()
+        test_config_lookup_absolute_display_score_enabled()
         test_match_quality_values()
         test_allowlist_filtering_simulation()
         test_fallback_behavior_simulation()
