@@ -60,5 +60,17 @@ export async function apiRequest<T>(
     throw new Error(error.detail || `API request failed: ${response.statusText}`);
   }
 
-  return response.json();
+  // Handle empty responses (e.g., 204 No Content, or DELETE with no body)
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === '0' || response.status === 204) {
+    return undefined as T;
+  }
+
+  // Check if response has content before parsing
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text);
 }
