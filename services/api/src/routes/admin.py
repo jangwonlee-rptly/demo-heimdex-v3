@@ -579,9 +579,17 @@ async def reprocess_embeddings(
 
     Requires admin privileges.
     """
-    # Import the spec version constant
+    # Import the spec version constant from shared location
     # This is a lazy import to avoid import-time dependencies
-    from src.domain.reprocess import LATEST_EMBEDDING_SPEC_VERSION
+    import sys
+    from pathlib import Path
+
+    # Add libs to path for shared constants
+    libs_path = Path(__file__).resolve().parents[4] / "libs"
+    if str(libs_path) not in sys.path:
+        sys.path.insert(0, str(libs_path))
+
+    from shared_constants import LATEST_EMBEDDING_SPEC_VERSION
 
     logger.info(
         f"Admin {admin.user_id} triggered reprocess-embeddings: scope={request.scope}, "

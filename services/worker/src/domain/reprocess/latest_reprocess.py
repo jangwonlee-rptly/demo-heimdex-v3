@@ -15,9 +15,15 @@ from enum import Enum
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 import logging
+import sys
+from pathlib import Path
 
-# Version constant - update this whenever embedding logic changes
-LATEST_EMBEDDING_SPEC_VERSION = "2026-01-06"
+# Add libs to path for shared constants
+libs_path = Path(__file__).resolve().parents[5] / "libs"
+if str(libs_path) not in sys.path:
+    sys.path.insert(0, str(libs_path))
+
+from shared_constants import LATEST_EMBEDDING_SPEC_VERSION
 
 logger = logging.getLogger(__name__)
 
