@@ -23,7 +23,7 @@ def reprocess_embeddings(
     owner_id: Optional[str] = None,
     force: bool = False,
     since: Optional[str] = None,  # ISO format datetime string
-) -> dict:
+) -> None:
     """
     Reprocess embeddings using the latest embedding methods.
 
@@ -36,9 +36,6 @@ def reprocess_embeddings(
         owner_id: Optional owner UUID (required for scope="owner")
         force: Force regeneration even if embeddings exist
         since: Optional ISO datetime string (only reprocess videos updated after this)
-
-    Returns:
-        dict with reprocessing results
     """
     # Lazy import to avoid import-time side effects
     from src.tasks import get_worker_context
@@ -49,6 +46,9 @@ def reprocess_embeddings(
         LATEST_EMBEDDING_SPEC_VERSION,
     )
     from datetime import datetime
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     # Get worker context (DI container)
     ctx = get_worker_context()
@@ -83,5 +83,7 @@ def reprocess_embeddings(
     # Execute reprocessing
     progress = runner.run_reprocess(request)
 
-    # Return results
-    return progress.to_dict()
+    # Log final results (don't return - Results middleware not enabled)
+    logger.info(
+        f"Reprocessing actor completed: {progress.to_dict()}"
+    )

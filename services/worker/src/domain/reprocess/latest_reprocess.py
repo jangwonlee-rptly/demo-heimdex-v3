@@ -518,18 +518,68 @@ class ReprocessRunner:
 
         for scene in scenes:
             try:
+                scene_id = UUID(scene["id"])
+
                 # Skip if embeddings exist and not forcing
                 if not request.force and scene.get("embedding_transcript") is not None:
                     progress.scenes_skipped += 1
                     continue
 
-                # Regenerate using SidecarBuilder
-                self.sidecar_builder._create_multi_channel_embeddings(scene)
-                progress.scenes_processed += 1
+                # Extract required fields from scene
+                transcript_segment = scene.get("transcript_segment", "")
+                visual_description = scene.get("visual_description", "")
+                tags = scene.get("tags", [])
+                summary = None  # Currently not used
+                scene_index = scene.get("index", 0)
+                language = scene.get("language", "ko")  # Default to Korean if not specified
+
+                # Regenerate multi-channel embeddings using SidecarBuilder
+                (
+                    emb_transcript,
+                    emb_visual,
+                    emb_summary,
+                    multi_metadata,
+                ) = self.sidecar_builder._create_multi_channel_embeddings(
+                    transcript_segment=transcript_segment,
+                    visual_description=visual_description,
+                    tags=tags,
+                    summary=summary,
+                    scene_index=scene_index,
+                    language=language,
+                )
+
+                # Update scene with new embeddings
+                def to_pgvector(emb: list[float]) -> str:
+                    return "[" + ",".join(str(x) for x in emb) + "]"
+
+                update_data = {}
+                if emb_transcript:
+                    update_data["embedding_transcript"] = to_pgvector(emb_transcript)
+                if emb_visual:
+                    update_data["embedding_visual"] = to_pgvector(emb_visual)
+                if emb_summary:
+                    update_data["embedding_summary"] = to_pgvector(emb_summary)
+                if multi_metadata:
+                    update_data["multi_embedding_metadata"] = multi_metadata.to_dict()
+
+                # Update embedding_version to track which spec was used
+                update_data["embedding_version"] = self.settings.embedding_version
+
+                if update_data:
+                    self.db.client.table("video_scenes").update(update_data).eq("id", str(scene_id)).execute()
+                    progress.scenes_processed += 1
+                    logger.info(
+                        f"Regenerated text embeddings for scene {scene_id} "
+                        f"(transcript={'✓' if emb_transcript else '✗'}, "
+                        f"visual={'✓' if emb_visual else '✗'})"
+                    )
+                else:
+                    logger.warning(f"No embeddings generated for scene {scene_id}, skipping update")
+                    progress.scenes_skipped += 1
 
             except Exception as e:
                 scene_id = scene.get("id", "unknown")
-                logger.error(f"Failed to regenerate text embeddings for scene {scene_id}: {e}")
+                logger.error(f"Failed to regenerate text embeddings for scene {scene_id}: {e}", exc_info=True)
                 progress.scenes_failed += 1
 
     def _regenerate_scene_clip_embeddings(

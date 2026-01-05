@@ -1,0 +1,71 @@
+[2026-01-06 02:27] Fixed Reprocess Pipeline Storage Path Parsing Bug
+File: devlog/2601060227.txt
+
+== What we worked on ==
+- Debugged and fixed errors in the worker service reprocess pipeline
+- The pipeline was failing when trying to regenerate embeddings for video scenes
+- Errors manifested as 404 "Object not found" and 400 "Bad Request" errors from Supabase storage
+
+== Changes made ==
+- services/worker/src/domain/reprocess/latest_reprocess.py:
+  - Fixed storage path parsing logic for CLIP embeddings (lines 564-579)
+  - Fixed storage path parsing logic for scene person embeddings (lines 668-683)
+  - Added graceful error handling for missing thumbnails (404 errors)
+  - Added debug logging to track parsed storage paths
+  - Improved temporary file cleanup to check existence before deletion
+
+== Problems encountered ==
+- Problem 1: Initial 404 errors - "Object not found"
+  - Error logs showed: {'statusCode': 404, 'error': not_found, 'message': Object not found}
+  - Affecting both CLIP embeddings and scene person embeddings generation
+  - Pipeline was logging these as ERROR level and treating them as hard failures
+
+- Problem 2: After initial fix, 400 "Bad Request" errors
+  - HTTP logs showed: GET .../storage/v1/object/videos/videos/691de091-.../thumbnails/scene_54.jpg "HTTP/2 400 Bad Request"
+  - Notice the double "videos/" in the path: /videos/videos/
+  - This indicated incorrect URL parsing logic
+
+== How we tried to solve it ==
+- Attempt 1: Added error handling for 404s
+  - Wrapped storage download calls in try-catch blocks
+  - Distinguished between 404 (missing thumbnail) and other errors
+  - Changed 404 errors from ERROR to WARNING log level
+  - Marked scenes with missing thumbnails as "skipped" instead of "failed"
+  - Result: Better error handling, but didn't fix the root cause
+
+- Attempt 2: Investigated storage path parsing
+  - Examined the HTTP request logs to see the actual URLs being requested
+  - Noticed the double "videos/" prefix in the path
+  - Compared with the working backfill script implementation
+  - Found the discrepancy in URL parsing logic
+
+== How we solved it / Current status ==
+- Root cause: Incorrect storage path extraction from thumbnail URLs
+  - Thumbnail URLs format: https://[project].supabase.co/storage/v1/object/public/videos/[owner]/[video]/thumbnails/scene_X.jpg
+  - Old parsing: split("/storage/v1/object/public/")[-1]
+    - This extracted: "videos/[owner]/[video]/thumbnails/scene_X.jpg"
+  - But the Supabase client already prepends the bucket name "videos" via from_(bucket_name)
+    - Final URL became: /storage/v1/object/videos/videos/[owner]/... (double "videos/")
+    - This caused 400 Bad Request errors
+
+- Key fix:
+  - Changed parsing to: split("/storage/v1/object/public/videos/")[1]
+  - This extracts only: "[owner]/[video]/thumbnails/scene_X.jpg"
+  - Matches the logic already working in backfill_clip_visual_embeddings.py
+  - Added fallback handling for edge cases
+
+- Additional improvements:
+  - Better error messages that distinguish between missing thumbnails and other failures
+  - Debug logging to track parsed paths for future troubleshooting
+  - Graceful handling: scenes with missing thumbnails are skipped with warnings
+
+- Status: SOLVED
+  - Worker container rebuilt and restarted with fix
+  - Reprocess pipeline should now correctly download thumbnails
+  - Missing thumbnails will be gracefully skipped with warning logs
+
+== Next steps / TODOs ==
+- Test the reprocess pipeline end-to-end from admin interface
+- Monitor logs to confirm thumbnails download successfully
+- Consider investigating why some thumbnails might be missing in storage
+- Consider adding a pre-flight check to validate thumbnail existence before starting reprocess

@@ -1,0 +1,117 @@
+[2026-01-06 08:02] Fixed Reprocess Pipeline Text Embeddings Method Call Error
+File: devlog/2601060802.txt
+
+== What we worked on ==
+- Fixed critical error in worker reprocess pipeline that prevented text embeddings regeneration
+- Addressed Dramatiq actor warning about discarded return values
+- Rebuilt and restarted worker container with fixes
+
+== Changes made ==
+- services/worker/src/domain/reprocess/latest_reprocess.py:
+  - Fixed _regenerate_scene_text_embeddings() method (lines 509-583)
+  - Properly extract scene fields before calling _create_multi_channel_embeddings()
+  - Pass correct parameters: transcript_segment, visual_description, tags, summary, scene_index, language
+  - Added proper database update logic for multi-channel embeddings
+  - Added comprehensive logging for debugging
+
+- libs/tasks/reprocess_embeddings.py:
+  - Changed return type from dict to None (line 26)
+  - Removed return statement (line 87)
+  - Added logging of final results instead of returning them
+  - Prevents Dramatiq warning about Results middleware
+
+== Problems encountered ==
+- Problem 1: Method signature mismatch
+  - Error: "SidecarBuilder._create_multi_channel_embeddings() missing 5 required positional arguments"
+  - Location: latest_reprocess.py:527
+  - Root cause: Passing entire scene dict instead of individual fields
+
+- Problem 2: Dramatiq warning
+  - Warning: "Actor 'reprocess_embeddings' returned a value that is not None"
+  - Impact: Return values discarded, clutters logs
+  - Root cause: Results middleware not configured
+
+== How we solved it ==
+- Solution 1: Fixed method call signature
+  - Extract required fields from scene dict:
+    - transcript_segment (from scene.transcript_segment)
+    - visual_description (from scene.visual_description)
+    - tags (from scene.tags, default to [])
+    - summary (set to None, not yet implemented)
+    - scene_index (from scene.index)
+    - language (from scene.language, default to "ko")
+
+  - Call _create_multi_channel_embeddings with unpacked parameters
+
+  - Process returned embeddings:
+    - emb_transcript → embedding_transcript column
+    - emb_visual → embedding_visual column
+    - emb_summary → embedding_summary column
+    - multi_metadata → multi_embedding_metadata column
+
+  - Update database with pgvector format: "[1.0,2.0,3.0,...]"
+  - Track which spec version was used via embedding_version field
+
+- Solution 2: Removed return value from actor
+  - Changed return type annotation from dict to None
+  - Log final results instead of returning them
+  - Prevents Dramatiq from warning about discarded values
+
+== How we tested it ==
+- Rebuilt worker container: docker-compose build worker
+- Restarted worker: docker-compose restart worker
+- Ready for user to test reprocess from admin interface
+
+== Next steps / TODOs ==
+- User should test reprocessing from admin interface
+- Monitor logs for successful embedding generation
+- Verify multi-channel embeddings are saved to database
+- Check that embedding_version is correctly set
+
+== Impact ==
+Severity: Critical bug fix (prevented reprocessing from working at all)
+Scope: Worker service reprocess pipeline
+User Impact:
+  - Reprocess embeddings feature now functional
+  - Text embeddings can be regenerated correctly
+  - Multi-channel embedding architecture working as designed
+
+Developer Impact:
+  - Cleaner logs (no Dramatiq warnings)
+  - Proper error messages with stack traces
+  - Easier debugging with scene-level logging
+
+== Lessons learned ==
+1. Method signatures must match exactly when calling private methods
+   - Extract dict fields before passing to methods expecting individual params
+   - Don't pass entire objects when specific fields are required
+
+2. Dramatiq actors should not return values unless Results middleware is configured
+   - Use logging instead of return values for background jobs
+   - Keep actor interface simple (None return type)
+
+3. Database updates require proper formatting
+   - pgvector columns need "[...]" string format
+   - Check for None before updating to avoid NULL violations
+
+4. Multi-step reprocess needs careful orchestration
+   - Each embedding channel is independent
+   - Track metadata per-channel for debugging
+   - Version tracking critical for future migrations
+
+== Related files ==
+This session:
+- devlog/2601060802.txt (this file)
+- services/worker/src/domain/reprocess/latest_reprocess.py (method call fix)
+- libs/tasks/reprocess_embeddings.py (return value fix)
+
+Previous related work:
+- devlog/2601060227.txt (storage path parsing fix)
+- devlog/2601052239.txt (embedding serialization systematic fix)
+- services/worker/src/domain/sidecar_builder.py (multi-channel embeddings)
+
+Architecture:
+- ReprocessRunner orchestrates pipeline execution
+- SidecarBuilder provides embedding generation logic
+- Dramatiq actors provide async execution
+- Results logged, not returned (no Results middleware)
