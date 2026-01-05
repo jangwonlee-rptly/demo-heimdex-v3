@@ -2,7 +2,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 from supabase import create_client, Client
 
@@ -10,6 +10,51 @@ logger = logging.getLogger(__name__)
 
 # Cache for video owner_id lookups (cleared per video processing job)
 _video_owner_cache: dict[str, str] = {}
+
+
+def deserialize_embedding(value: Any) -> Optional[list[float]]:
+    """Safely deserialize pgvector embedding from Supabase/PostgREST.
+
+    Supabase Python client returns pgvector columns as JSON-serialized strings,
+    not as auto-parsed Python lists. This helper ensures consistent deserialization
+    across all embedding fields.
+
+    Args:
+        value: Raw value from database (may be JSON string, list, or None).
+
+    Returns:
+        list[float] if valid embedding, None if value is None.
+
+    Raises:
+        TypeError: If value is an unexpected type.
+        ValueError: If JSON parsing fails or result is not a list.
+
+    Examples:
+        >>> deserialize_embedding(None)
+        None
+        >>> deserialize_embedding([0.1, 0.2, 0.3])
+        [0.1, 0.2, 0.3]
+        >>> deserialize_embedding('[0.1, 0.2, 0.3]')
+        [0.1, 0.2, 0.3]
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        # Already deserialized (e.g., from mock or different client)
+        return value
+
+    if isinstance(value, str):
+        # PostgREST serialization: vector(N) -> JSON string
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError(f"Parsed embedding is not a list: {type(parsed).__name__}")
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse embedding JSON: {e}") from e
+
+    raise TypeError(f"Unexpected embedding type: {type(value).__name__}")
 
 
 class VideoStatus:
@@ -909,12 +954,15 @@ class Database:
 
         embeddings = []
         for row in response.data:
-            embedding = row.get("embedding")
+            embedding = deserialize_embedding(row.get("embedding"))
             if embedding:
-                # Handle both string (JSON) and list formats
-                if isinstance(embedding, str):
-                    import json
-                    embedding = json.loads(embedding)
+                # Validate dimension
+                if len(embedding) != 512:
+                    logger.warning(
+                        f"Skipping photo embedding with invalid dimension: "
+                        f"expected 512, got {len(embedding)}"
+                    )
+                    continue
                 embeddings.append(embedding)
 
         return embeddings

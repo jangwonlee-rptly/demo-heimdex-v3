@@ -1,0 +1,567 @@
+[2026-01-05 21:04] Bugfix #7 - Person Query Embedding Deserialization
+File: devlog/2601052104.txt
+
+== What we worked on ==
+- Diagnosed why person-based search wasn't working despite having all prerequisites
+- Fixed JSON deserialization bug for person query_embedding in API database adapter
+- Created diagnostic tool for troubleshooting person search issues
+- This is the same serialization issue as Bug #6, but in different code location
+
+== Changes made ==
+services/api/src/adapters/database.py (lines 1865-1888):
+- Added JSON deserialization for person query_embedding
+- Removed misleading comment about "Already a list from Supabase"
+- Added defensive isinstance() check to handle both string and list formats
+
+Before:
+```python
+def _map_person_row(self, row: dict) -> Person:
+    """Map database row to Person model."""
+    return Person(
+        id=UUID(row["id"]),
+        owner_id=UUID(row["owner_id"]),
+        display_name=row.get("display_name"),
+        query_embedding=row.get("query_embedding"),  # Already a list from Supabase
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+    )
+```
+
+After:
+```python
+def _map_person_row(self, row: dict) -> Person:
+    """Map database row to Person model."""
+    # Deserialize query_embedding if it's a JSON string
+    query_embedding = row.get("query_embedding")
+    if query_embedding and isinstance(query_embedding, str):
+        import json
+        query_embedding = json.loads(query_embedding)
+
+    return Person(
+        id=UUID(row["id"]),
+        owner_id=UUID(row["owner_id"]),
+        display_name=row.get("display_name"),
+        query_embedding=query_embedding,
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+    )
+```
+
+BUGFIX_PERSON_QUERY_EMBEDDING.md:
+- Complete documentation of person query embedding deserialization issue
+- Comprehensive diagnostic findings and analysis
+- Prevention strategies and systematic code review recommendations
+
+== Problems encountered ==
+Person Search Not Working Despite All Prerequisites Met
+- Symptom: Person-based search returns no results or fails silently
+- User had created person profile with 3 READY reference photos
+- Query embedding was generated (512-dimensional CLIP embedding)
+- Video scenes had CLIP embeddings (84 out of 100 sampled)
+- But search still didn't work with queries like "이장원 presentation"
+
+Diagnostic Findings:
+```
+Person: 이장원 (ID: 1508da17...)
+  status: active
+  query_embedding: STRING (len=6390) - needs JSON parse
+      Parsed dim: 512
+
+Reference Photos:
+  Total: 3 photos
+  ✅ READY: 3
+
+Video Scenes:
+  Sampled: 100 scenes
+  ✅ With CLIP embedding: 84
+  ❌ Without CLIP embedding: 16
+```
+
+Root Cause - Person Query Embedding JSON Serialization:
+- Database stored query_embedding as JSONB column
+- Supabase Python client returned it as JSON string: `"[0.123, 0.456, ...]"`
+- API database adapter assumed it was "already a list" (misleading comment)
+- PersonQueryParser received string instead of list[float]
+- Search would fail when trying to use string as embedding vector
+
+Error Pattern:
+```python
+# What was returned from database:
+query_embedding = "[0.123, 0.456, 0.789, ...]"  # String with 6390 chars
+type(query_embedding)  # <class 'str'>
+
+# What PersonQueryParser expected:
+query_embedding = [0.123, 0.456, 0.789, ...]  # list[float]
+type(query_embedding)  # <class 'list'>
+
+# When search tried to use it:
+# Would fail because you can't do vector search with a string
+```
+
+Understanding the Issue:
+- This is IDENTICAL to Bug #6 (photo embedding deserialization)
+- Bug #6: Worker's database.py - photo embeddings
+- Bug #7: API's database.py - person query embeddings
+- Same root cause: Supabase JSONB serialization
+- Same solution: JSON deserialization with isinstance() check
+- Different code location (different service)
+
+Why This Wasn't Caught Earlier:
+1. Type hints don't enforce runtime types in Python
+2. Code had misleading comment: "Already a list from Supabase"
+3. No integration tests with real database data
+4. Manual testing only revealed issue after full deployment
+5. Symptom was "no results" not a clear error message
+
+Diagnostic Process:
+1. User reported person search not showing results
+2. Verified all prerequisites (person created, photos ready, CLIP enabled)
+3. Created diagnostic script to check database state
+4. Found query_embedding was JSON string (6390 chars = 512 floats serialized)
+5. Traced to _map_person_row() in API database adapter
+6. Applied same fix as Bug #6 (JSON deserialization)
+
+== How we tried to solve it ==
+Investigation Steps:
+1. Asked user about their testing: "three pictures of me and video archive"
+2. Created diagnostic script to run inside Docker containers
+3. Fixed API container stuck in test mode (wrong Dockerfile)
+4. Rebuilt API container with correct Dockerfile
+5. Ran diagnostic to check person profile, photos, and video CLIP embeddings
+6. Found query_embedding was STRING type (6390 characters)
+7. Searched for _map_person_row() method in database.py
+8. Identified missing JSON deserialization
+
+Diagnostic Tool Created:
+```python
+# Check person profile
+persons_resp = supabase.table("persons").select("*").execute()
+for p in persons_resp.data:
+    qe = p.get('query_embedding')
+    if isinstance(qe, str):
+        print(f"❌ {p['display_name']}: query_embedding is STRING")
+        parsed = json.loads(qe)
+        print(f"   Parsed dim: {len(parsed)}")
+    elif isinstance(qe, list):
+        print(f"✅ {p['display_name']}: query_embedding is list (dim={len(qe)})")
+
+# Check reference photos
+photos_resp = supabase.table("person_reference_photos").select("*").execute()
+states = {}
+for photo in photos_resp.data:
+    states[photo['state']] = states.get(photo['state'], 0) + 1
+print(f"Photos: {states}")
+
+# Check video CLIP embeddings
+scenes_resp = supabase.table("video_scenes").select("embedding_visual_clip").limit(100).execute()
+with_clip = sum(1 for s in scenes_resp.data if s.get('embedding_visual_clip'))
+print(f"Scenes with CLIP: {with_clip}/100")
+```
+
+Verification:
+- Person "이장원" exists with status "active"
+- 3 reference photos in READY state
+- Query embedding exists but as STRING (len=6390)
+- Parsed to list shows dim=512 (correct)
+- 84 out of 100 video scenes have CLIP embeddings
+- Therefore: All prerequisites met, just deserialization issue
+
+== How we solved it / Current status ==
+✅ FIXED - Person query embedding properly deserialized
+
+Solution:
+Add JSON deserialization in _map_person_row() before returning Person object:
+
+```python
+# services/api/src/adapters/database.py (FIXED)
+def _map_person_row(self, row: dict) -> Person:
+    """Map database row to Person model."""
+    # Deserialize query_embedding if it's a JSON string
+    query_embedding = row.get("query_embedding")
+    if query_embedding and isinstance(query_embedding, str):
+        import json
+        query_embedding = json.loads(query_embedding)
+
+    return Person(
+        id=UUID(row["id"]),
+        owner_id=UUID(row["owner_id"]),
+        display_name=row.get("display_name"),
+        query_embedding=query_embedding,  # Now guaranteed to be list or None
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+    )
+```
+
+Why This Is the Right Fix:
+1. Same pattern as Bug #6 (photo embeddings)
+2. Defensive isinstance() check handles both formats
+3. Minimal code change (just deserialization before return)
+4. No changes to database schema needed
+5. No changes to search logic needed
+6. Consistent with worker's fix for photo embeddings
+
+Deployment:
+```bash
+docker-compose build api   # Rebuilt with fix
+docker-compose up -d api   # Restarted
+```
+
+API Startup Verification:
+```
+api-1  | INFO:     Started server process [1]
+api-1  | INFO:     Waiting for application startup.
+api-1  | INFO:     Application startup complete.
+api-1  | INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+Expected Behavior After Fix:
+User searches for "이장원 presentation":
+
+1. Frontend sends query to /search endpoint
+2. PersonQueryParser detects "이장원" at start of query
+3. Parser loads person from database via list_persons()
+4. _map_person_row() deserializes query_embedding from JSON string
+5. Parser extracts person_id and query_embedding (now list[float])
+6. Search runs person retrieval (CLIP vector search with person embedding)
+7. Search runs content retrieval (multi-dense search with "presentation")
+8. Results fused with weights: 65% person match + 35% content match
+9. User sees results where person appears talking about presentations
+
+API Logs Should Show:
+```
+Person detected: person_id=1508da17-..., has_embedding=True, content_query='presentation'
+Running person-aware search for person_id=1508da17-...
+Person retrieval: found N candidates (threshold=0.3, elapsed_ms=X)
+Person fusion: returned M results, weights=(content=0.35, person=0.65)
+```
+
+== Next steps / TODOs ==
+Testing:
+- [ ] User tests search with "이장원 presentation"
+- [ ] User tests search with "이장원 meeting"
+- [ ] Monitor API logs for person detection messages
+- [ ] Verify results show person in video scenes
+- [ ] Verify person detection banner appears in frontend
+
+Code Quality:
+- [ ] Audit ALL JSONB column accesses in database.py
+- [ ] Check if _map_person_photo_row() needs same fix
+- [ ] Check if _map_scene_row() needs CLIP embedding deserialization
+- [ ] Create reusable deserialize_embedding() helper function
+- [ ] Remove all "Already a list from Supabase" comments
+
+Prevention:
+- [ ] Add integration tests for person search with real database
+- [ ] Add unit tests that verify embedding types (list not string)
+- [ ] Document Supabase JSONB serialization behavior
+- [ ] Add type validation at adapter boundaries
+- [ ] Consider using Pydantic validators for automatic deserialization
+
+== Root cause analysis ==
+Pattern Recognition:
+This is the SEVENTH deployment bug in the project, and the SECOND JSONB serialization bug:
+1. Frontend response wrapper mismatches
+2. Query parameter vs request body
+3. Worker import path error
+4. JSON parse error on delete
+5. Storage method signature mismatch
+6. Photo embedding deserialization (JSONB string)
+7. Person query embedding deserialization (JSONB string) ← current
+
+Common Theme - JSONB Serialization in Supabase:
+Bugs #6 and #7 both involve:
+- Supabase Python client returning JSONB columns as JSON strings
+- Developers assuming auto-parsing to Python objects
+- Type hints claiming list[float] but runtime returns str
+- Only discovered through manual testing with real data
+
+Why This Specific Issue:
+1. Same root cause as Bug #6 but different code location
+2. Bug #6: services/worker/src/adapters/database.py (photo embeddings)
+3. Bug #7: services/api/src/adapters/database.py (person embeddings)
+4. Both had misleading comments: "Already a list from Supabase"
+5. Copy-paste pattern propagated incorrect assumption
+6. No cross-service code review to catch duplication
+
+Systematic Code Review Needed:
+```bash
+# Find all JSONB embedding accesses
+grep -r "embedding\|query_embedding" services/api/src/adapters/database.py
+grep -r "embedding\|query_embedding" services/worker/src/adapters/database.py
+
+# Find all comments claiming "already a list"
+grep -r "already.*list\|Already.*list" services/*/src/adapters/database.py
+```
+
+JSONB Columns in Schema (need deserialization):
+1. persons.query_embedding → ✅ FIXED (Bug #7)
+2. person_reference_photos.embedding → Need to check
+3. video_scenes.embedding → Need to check
+4. video_scenes.embedding_transcript → Need to check
+5. video_scenes.embedding_summary → Need to check
+6. video_scenes.embedding_visual → Need to check
+7. video_scenes.embedding_visual_clip → Need to check
+
+Database Client Behavior:
+PostgreSQL JSONB columns with Supabase Python client:
+- Storage format: Native JSONB (efficient, indexed)
+- Network format: JSON string (serialized for transport)
+- Client behavior: Returns JSON string (no auto-parse)
+- Developer expectation: Assumes auto-parse (incorrect)
+- Reality: Must explicitly deserialize with json.loads()
+
+Different clients behave differently:
+- psycopg3 with json adapter: Auto-parses JSONB to Python objects
+- Supabase Python client: Returns JSONB as JSON strings
+- postgrest-py (underlying): No auto-parsing
+- Must handle both to be safe (defensive isinstance() check)
+
+Why Comments Were Misleading:
+```python
+# Original comment:
+query_embedding=row.get("query_embedding"),  # Already a list from Supabase
+
+# Why this was wrong:
+# 1. Supabase client doesn't auto-parse JSONB
+# 2. Developer tested with mock data (Python lists)
+# 3. Real database returns JSON strings
+# 4. Comment became outdated or was never correct
+# 5. Future developers trusted the comment
+```
+
+Type Hints Don't Prevent This:
+```python
+# Type hint says list[float]
+def _map_person_row(self, row: dict) -> Person:
+    return Person(
+        query_embedding=row.get("query_embedding"),  # Returns str!
+    )
+
+# Person model says:
+@dataclass
+class Person:
+    query_embedding: Optional[list[float]]  # Type hint
+
+# But runtime:
+person = _map_person_row({"query_embedding": "[0.1, 0.2, ...]"})
+type(person.query_embedding)  # <class 'str'> - TYPE MISMATCH!
+# Python doesn't enforce type hints at runtime!
+```
+
+Better Approach with Pydantic:
+```python
+from pydantic import BaseModel, validator
+
+class Person(BaseModel):
+    query_embedding: Optional[list[float]]
+
+    @validator('query_embedding', pre=True)
+    def deserialize_embedding(cls, v):
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
+
+# Pydantic automatically validates and coerces types
+# Would catch this at model creation time
+```
+
+== Impact ==
+Severity: Critical (person search completely non-functional)
+Scope: All person-based searches (entire person search feature)
+User Impact: Person search silently fails or returns no results
+Time to Fix: ~10 minutes (including diagnosis)
+Blocking: Person search feature unusable without this fix
+
+User Experience Impact:
+- User created person profile with 3 reference photos
+- Photos processed successfully (all READY)
+- Query embedding generated (512-dimensional CLIP)
+- Video scenes have CLIP embeddings (84% coverage)
+- User expected search to work with "이장원 presentation"
+- But search returned no results or failed silently
+- No error message visible to user
+- Very frustrating: all setup complete but feature doesn't work
+
+Silent Failure Characteristics:
+- No errors in API logs (type was wrong but didn't crash)
+- No errors in frontend console
+- Search just returned no results
+- User couldn't tell if:
+  - Person not in video (false negative)
+  - Search broken (true cause)
+  - CLIP embeddings missing (false negative)
+  - Query embedding not ready (false negative)
+- Diagnostic tool needed to identify actual issue
+
+Development Impact:
+- This is the 7th bug found through manual testing
+- 2nd bug with same root cause (JSONB serialization)
+- Indicates systematic testing gap:
+  - No integration tests with real database
+  - No type validation at runtime
+  - No automated testing of person search flow
+  - Copy-paste code not reviewed for duplicated bugs
+
+== Lessons learned ==
+1. JSONB columns in Supabase ALWAYS return JSON strings (not auto-parsed)
+2. Comments like "Already a list from Supabase" are dangerously misleading
+3. Type hints don't prevent runtime type mismatches in Python
+4. Same bug in two locations = need systematic code review
+5. Diagnostic tools are essential for troubleshooting deployed features
+6. Integration tests with real database would catch these issues
+7. Pydantic validators could auto-handle deserialization
+8. 7 deployment bugs = need better testing before deployment
+9. Silent failures are hardest to debug (no error messages)
+10. Pattern repetition (Bug #6 → Bug #7) indicates systematic gap
+
+== Prevention strategy ==
+Immediate (Testing):
+1. Test person search with query: "이장원 presentation"
+2. Monitor API logs: `docker-compose logs api -f | grep -i person`
+3. Verify person detection messages appear in logs
+4. Verify search results show person in scenes
+5. Test with multiple person queries to ensure robustness
+
+Short-term (Code Quality):
+1. Audit ALL JSONB column accesses in both database.py files:
+   ```bash
+   grep -n "row.get.*embedding" services/api/src/adapters/database.py
+   grep -n "row.get.*embedding" services/worker/src/adapters/database.py
+   ```
+
+2. Create reusable deserialization helper:
+   ```python
+   def deserialize_embedding(value: Any) -> Optional[list[float]]:
+       """Safely deserialize JSONB embedding from database.
+
+       Args:
+           value: Raw value from database (may be str, list, or None)
+
+       Returns:
+           list[float] if valid embedding, None otherwise
+
+       Raises:
+           TypeError: If value is unexpected type
+           ValueError: If JSON parsing fails
+       """
+       if value is None:
+           return None
+       if isinstance(value, str):
+           import json
+           return json.loads(value)
+       if isinstance(value, list):
+           return value
+       raise TypeError(f"Unexpected embedding type: {type(value).__name__}")
+   ```
+
+3. Apply to all mapping methods:
+   - ✅ API: _map_person_row() (query_embedding)
+   - ⏳ API: _map_person_photo_row() (embedding)
+   - ⏳ API: _map_scene_row() (all embedding fields)
+   - ✅ Worker: get_ready_photo_embeddings() (Bug #6)
+
+4. Remove misleading comments:
+   ```bash
+   # Find and remove all "Already a list" comments
+   grep -r "Already a list\|already a list" services/*/src/adapters/database.py
+   ```
+
+5. Add runtime type validation:
+   ```python
+   def _map_person_row(self, row: dict) -> Person:
+       query_embedding = deserialize_embedding(row.get("query_embedding"))
+
+       # Validate dimension if present
+       if query_embedding and len(query_embedding) != 512:
+           logger.warning(f"Invalid embedding dimension: {len(query_embedding)}")
+
+       return Person(...)
+   ```
+
+Long-term (Architecture):
+1. Add integration tests for person search:
+   ```python
+   def test_person_search_with_real_database():
+       # Create person with real database
+       # Upload photos and process
+       # Wait for query_embedding generation
+       # Run search with person name
+       # Verify results include person
+       # Verify embedding is list[float] not string
+   ```
+
+2. Use Pydantic models for database responses:
+   ```python
+   class PersonRow(BaseModel):
+       id: str
+       owner_id: str
+       display_name: str
+       query_embedding: Optional[list[float]]
+
+       @validator('query_embedding', pre=True)
+       def parse_embedding(cls, v):
+           return deserialize_embedding(v)
+   ```
+
+3. Add CI checks for JSONB handling:
+   ```bash
+   # In CI pipeline
+   # Check that all JSONB accesses use deserialization
+   grep -r "row.get.*embedding" services/*/src/adapters/ | \
+       grep -v "deserialize_embedding" && exit 1
+   ```
+
+4. Document Supabase serialization behavior:
+   ```markdown
+   # services/api/README.md
+
+   ## Database Serialization
+
+   **CRITICAL**: Supabase Python client returns JSONB columns as JSON strings.
+
+   Always use `deserialize_embedding()` helper for:
+   - `persons.query_embedding`
+   - `person_reference_photos.embedding`
+   - `video_scenes.embedding*` (all embedding fields)
+
+   Never assume JSONB is auto-parsed to Python objects.
+   ```
+
+5. Add pre-commit hook to check for "Already a list" comments:
+   ```bash
+   # .git/hooks/pre-commit
+   if git diff --cached | grep -i "already a list\|already.*list"; then
+       echo "ERROR: Found 'Already a list' comment - these are misleading!"
+       exit 1
+   fi
+   ```
+
+Process Improvements:
+1. Test ALL features with real database before declaring done
+2. Create diagnostic tools alongside features (not after bugs)
+3. Add integration test requirements to PR checklist
+4. Code review must check for copy-paste bugs
+5. Document serialization quirks immediately when discovered
+
+== Related issues ==
+Related bugs in People feature deployment:
+1. devlog/2601051844.txt - Response wrapper mismatches
+2. devlog/2601051853.txt - Query parameter issue
+3. devlog/2601051907.txt - Worker import error
+4. devlog/2601051917.txt - JSON parse error on delete
+5. devlog/2601051938.txt - Storage method signature
+6. devlog/2601051946.txt - Photo embedding deserialization (JSONB string)
+7. devlog/2601052104.txt - Person query embedding deserialization (JSONB string) ← current
+
+Pattern: Bugs #6 and #7 are IDENTICAL in root cause but different locations
+- Both: JSONB serialization issue
+- Both: Supabase returns JSON strings
+- Both: Code assumed auto-parsing
+- Both: Fixed with json.loads() + isinstance() check
+- Indicates: Need systematic audit of ALL JSONB accesses
+
+This suggests creating a shared deserialization utility and applying it everywhere.

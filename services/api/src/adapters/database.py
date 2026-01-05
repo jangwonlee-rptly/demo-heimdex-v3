@@ -1,7 +1,8 @@
 """Database adapter for Postgres/Supabase."""
+import json
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 from supabase import create_client, Client
 
@@ -21,6 +22,51 @@ from ..domain.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def deserialize_embedding(value: Any) -> Optional[list[float]]:
+    """Safely deserialize pgvector embedding from Supabase/PostgREST.
+
+    Supabase Python client returns pgvector columns as JSON-serialized strings,
+    not as auto-parsed Python lists. This helper ensures consistent deserialization
+    across all embedding fields.
+
+    Args:
+        value: Raw value from database (may be JSON string, list, or None).
+
+    Returns:
+        list[float] if valid embedding, None if value is None.
+
+    Raises:
+        TypeError: If value is an unexpected type.
+        ValueError: If JSON parsing fails or result is not a list.
+
+    Examples:
+        >>> deserialize_embedding(None)
+        None
+        >>> deserialize_embedding([0.1, 0.2, 0.3])
+        [0.1, 0.2, 0.3]
+        >>> deserialize_embedding('[0.1, 0.2, 0.3]')
+        [0.1, 0.2, 0.3]
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        # Already deserialized (e.g., from mock or different client)
+        return value
+
+    if isinstance(value, str):
+        # PostgREST serialization: vector(N) -> JSON string
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError(f"Parsed embedding is not a list: {type(parsed).__name__}")
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse embedding JSON: {e}") from e
+
+    raise TypeError(f"Unexpected embedding type: {type(value).__name__}")
 
 
 class Database:
@@ -1721,8 +1767,16 @@ class Database:
 
         embeddings = []
         for row in response.data:
-            if row.get("embedding"):
-                embeddings.append(row["embedding"])
+            embedding = deserialize_embedding(row.get("embedding"))
+            if embedding:
+                # Validate dimension
+                if len(embedding) != 512:
+                    logger.warning(
+                        f"Skipping photo embedding with invalid dimension: "
+                        f"expected 512, got {len(embedding)}"
+                    )
+                    continue
+                embeddings.append(embedding)
 
         return embeddings
 
@@ -1871,11 +1925,18 @@ class Database:
         Returns:
             Person: Mapped person model.
         """
-        # Deserialize query_embedding if it's a JSON string
-        query_embedding = row.get("query_embedding")
-        if query_embedding and isinstance(query_embedding, str):
-            import json
-            query_embedding = json.loads(query_embedding)
+        query_embedding = deserialize_embedding(row.get("query_embedding"))
+
+        # Validate embedding dimension if present
+        if query_embedding is not None:
+            if len(query_embedding) != 512:
+                logger.warning(
+                    f"Invalid query_embedding dimension for person {row['id']}: "
+                    f"expected 512, got {len(query_embedding)}"
+                )
+            # Check for non-finite values
+            if not all(isinstance(x, (int, float)) and abs(x) != float('inf') for x in query_embedding):
+                logger.warning(f"Non-finite values in query_embedding for person {row['id']}")
 
         return Person(
             id=UUID(row["id"]),
@@ -1896,13 +1957,25 @@ class Database:
         Returns:
             PersonReferencePhoto: Mapped photo model.
         """
+        embedding = deserialize_embedding(row.get("embedding"))
+
+        # Validate embedding dimension if present
+        if embedding is not None:
+            if len(embedding) != 512:
+                logger.warning(
+                    f"Invalid embedding dimension for photo {row['id']}: "
+                    f"expected 512, got {len(embedding)}"
+                )
+            if not all(isinstance(x, (int, float)) and abs(x) != float('inf') for x in embedding):
+                logger.warning(f"Non-finite values in embedding for photo {row['id']}")
+
         return PersonReferencePhoto(
             id=UUID(row["id"]),
             owner_id=UUID(row["owner_id"]),
             person_id=UUID(row["person_id"]),
             storage_path=row["storage_path"],
             state=row["state"],
-            embedding=row.get("embedding"),  # Already a list from Supabase
+            embedding=embedding,
             quality_score=row.get("quality_score"),
             face_bbox=row.get("face_bbox"),
             error_message=row.get("error_message"),
