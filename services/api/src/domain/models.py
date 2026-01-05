@@ -32,6 +32,22 @@ class HighlightJobStatus(str, Enum):
     ERROR = "error"
 
 
+class PersonStatus(str, Enum):
+    """Person status."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class PersonPhotoState(str, Enum):
+    """Person reference photo processing state."""
+
+    UPLOADED = "UPLOADED"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
 class AspectRatioStrategy(str, Enum):
     """Aspect ratio conversion strategy for exports."""
 
@@ -342,5 +358,83 @@ class HighlightExportJob:
         self.progress = progress
         self.output = output
         self.error = error
+        self.created_at = created_at
+        self.updated_at = updated_at
+
+
+class Person:
+    """Person model for person-aware search."""
+
+    def __init__(
+        self,
+        id: UUID,
+        owner_id: UUID,
+        display_name: Optional[str] = None,
+        query_embedding: Optional[list[float]] = None,
+        status: str = "active",
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ):
+        """Initialize Person.
+
+        Args:
+            id: UUID of the person.
+            owner_id: UUID of the owning user.
+            display_name: Optional display name for the person.
+            query_embedding: Aggregate CLIP embedding (512d) from reference photos.
+            status: Status (active or archived).
+            created_at: Timestamp when person was created.
+            updated_at: Timestamp when person was last updated.
+        """
+        self.id = id
+        self.owner_id = owner_id
+        self.display_name = display_name
+        self.query_embedding = query_embedding
+        self.status = status
+        self.created_at = created_at
+        self.updated_at = updated_at
+
+
+class PersonReferencePhoto:
+    """Person reference photo model."""
+
+    def __init__(
+        self,
+        id: UUID,
+        owner_id: UUID,
+        person_id: UUID,
+        storage_path: str,
+        state: str = "UPLOADED",
+        embedding: Optional[list[float]] = None,
+        quality_score: Optional[float] = None,
+        face_bbox: Optional[dict] = None,
+        error_message: Optional[str] = None,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ):
+        """Initialize PersonReferencePhoto.
+
+        Args:
+            id: UUID of the photo.
+            owner_id: UUID of the owning user.
+            person_id: UUID of the person this photo belongs to.
+            storage_path: Storage path in Supabase storage.
+            state: Processing state (UPLOADED, PROCESSING, READY, FAILED).
+            embedding: CLIP embedding (512d) extracted from photo.
+            quality_score: Quality score (0-1) for this photo.
+            face_bbox: Optional face bounding box dict (x, y, w, h, confidence).
+            error_message: Error message if state is FAILED.
+            created_at: Timestamp when photo was created.
+            updated_at: Timestamp when photo was last updated.
+        """
+        self.id = id
+        self.owner_id = owner_id
+        self.person_id = person_id
+        self.storage_path = storage_path
+        self.state = state
+        self.embedding = embedding
+        self.quality_score = quality_score
+        self.face_bbox = face_bbox
+        self.error_message = error_message
         self.created_at = created_at
         self.updated_at = updated_at

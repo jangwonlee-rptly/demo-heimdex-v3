@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .context import create_app_context, cleanup_app_context
-from .routes import health, profile, videos, search, exports, admin, preferences, highlights
+from .routes import health, profile, videos, search, exports, admin, preferences, highlights, persons
 from .exceptions import HeimdexException
 
 # Configure logging
@@ -128,6 +128,7 @@ app.include_router(search.router, prefix="/v1", tags=["v1", "Search"])
 app.include_router(exports.router, prefix="/v1", tags=["v1", "Exports"])
 app.include_router(preferences.router, prefix="/v1", tags=["v1", "Preferences"])
 app.include_router(highlights.router, prefix="/v1", tags=["v1", "Highlights"])
+app.include_router(persons.router, prefix="/v1", tags=["v1", "Persons"])
 app.include_router(admin.router, tags=["v1", "Admin"])
 
 

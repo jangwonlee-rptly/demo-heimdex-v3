@@ -456,3 +456,62 @@ class DetailedHealthResponse(BaseModel):
         ...,
         description="Health status of each dependency (database, redis, storage)"
     )
+
+
+# ============================================================================
+# PERSON SEARCH SCHEMAS
+# ============================================================================
+
+class PersonCreateRequest(BaseModel):
+    """Schema for creating a new person."""
+
+    display_name: Optional[str] = Field(
+        None,
+        description="Optional display name for the person (e.g., 'J Lee', 'Mom', 'John Smith')"
+    )
+
+
+class PersonResponse(BaseModel):
+    """Schema for person response."""
+
+    id: UUID
+    display_name: Optional[str]
+    status: str = Field(..., description="Person status: active or archived")
+    ready_photos_count: int = Field(..., description="Number of photos in READY state")
+    total_photos_count: int = Field(..., description="Total number of reference photos")
+    has_query_embedding: bool = Field(..., description="Whether person has usable query embedding")
+    created_at: datetime
+    updated_at: datetime
+
+
+class PersonPhotoUploadUrlResponse(BaseModel):
+    """Schema for photo upload URL response."""
+
+    photo_id: UUID
+    upload_url: str = Field(..., description="Signed upload URL (2 hour expiry)")
+    storage_path: str = Field(..., description="Storage path to use for completion")
+
+
+class PersonPhotoResponse(BaseModel):
+    """Schema for person reference photo response."""
+
+    id: UUID
+    person_id: UUID
+    storage_path: str
+    state: str = Field(..., description="Processing state: UPLOADED, PROCESSING, READY, FAILED")
+    quality_score: Optional[float] = Field(None, description="Quality score (0-1)")
+    error_message: Optional[str] = Field(None, description="Error message if FAILED")
+    created_at: datetime
+
+
+class PersonListResponse(BaseModel):
+    """Schema for list persons response."""
+
+    persons: list[PersonResponse]
+
+
+class PersonDetailResponse(BaseModel):
+    """Schema for person detail response with photos."""
+
+    person: PersonResponse
+    photos: list[PersonPhotoResponse]

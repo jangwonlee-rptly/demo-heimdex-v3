@@ -50,12 +50,18 @@ class TaskQueue:
         # Import the canonical actors from shared tasks module
         # The API service only uses .send() - the function body never executes here
         # Import inside method to avoid circular dependency and import-time actor registration
-        from libs.tasks import process_video, export_scene_as_short, process_highlight_export
+        from libs.tasks import (
+            process_video,
+            export_scene_as_short,
+            process_highlight_export,
+            process_reference_photo,
+        )
 
         # Store actor references (actors are now registered with the broker)
         self._process_video = process_video
         self._export_scene_as_short = export_scene_as_short
         self._process_highlight_export = process_highlight_export
+        self._process_reference_photo = process_reference_photo
 
         self._initialized = True
         logger.info(f"TaskQueue initialized with Redis broker: {self._redis_url}")
@@ -138,6 +144,28 @@ class TaskQueue:
         self._process_highlight_export.send(str(job_id))
 
         logger.info(f"Successfully enqueued highlight export job_id={job_id}")
+
+    def enqueue_reference_photo_processing(self, photo_id: UUID) -> None:
+        """
+        Enqueue a reference photo processing task.
+
+        Uses the shared process_reference_photo actor to send a job to the worker.
+
+        Args:
+            photo_id: ID of the person reference photo to process
+
+        Returns:
+            None: This function does not return a value.
+        """
+        self._ensure_broker()
+
+        logger.info(f"Enqueueing reference photo processing task for photo_id={photo_id}")
+
+        # Use the shared actor's .send() method to enqueue the job
+        # The function body never executes in the API context - only in the worker
+        self._process_reference_photo.send(str(photo_id))
+
+        logger.info(f"Successfully enqueued photo_id={photo_id}")
 
     def close(self) -> None:
         """Close the Redis broker connection.

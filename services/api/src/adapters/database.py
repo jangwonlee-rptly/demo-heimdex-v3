@@ -16,6 +16,8 @@ from ..domain.models import (
     OutputQuality,
     HighlightExportJob,
     HighlightJobStatus,
+    Person,
+    PersonReferencePhoto,
 )
 
 logger = logging.getLogger(__name__)
@@ -1459,6 +1461,445 @@ class Database:
             progress=row.get("progress"),
             output=row.get("output"),
             error=row.get("error"),
+            created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        )
+
+    # ========================================================================
+    # PERSON OPERATIONS
+    # ========================================================================
+
+    def create_person(
+        self,
+        owner_id: UUID,
+        display_name: Optional[str] = None,
+    ) -> Person:
+        """Create a new person record.
+
+        Args:
+            owner_id: UUID of the owning user.
+            display_name: Optional display name for the person.
+
+        Returns:
+            Person: The created person.
+        """
+        data = {
+            "owner_id": str(owner_id),
+            "display_name": display_name,
+            "status": "active",
+        }
+
+        response = self.client.table("persons").insert(data).execute()
+
+        if not response.data:
+            raise ValueError("Failed to create person")
+
+        return self._map_person_row(response.data[0])
+
+    def get_person(self, person_id: UUID, owner_id: UUID) -> Optional[Person]:
+        """Get person by ID (tenant-scoped).
+
+        Args:
+            person_id: UUID of the person.
+            owner_id: UUID of the owning user (for tenant isolation).
+
+        Returns:
+            Optional[Person]: The person if found and owned by user, otherwise None.
+        """
+        response = (
+            self.client.table("persons")
+            .select("*")
+            .eq("id", str(person_id))
+            .eq("owner_id", str(owner_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return self._map_person_row(response.data[0])
+
+    def list_persons(self, owner_id: UUID) -> list[Person]:
+        """List all persons for owner.
+
+        Args:
+            owner_id: UUID of the owning user.
+
+        Returns:
+            list[Person]: List of persons.
+        """
+        response = (
+            self.client.table("persons")
+            .select("*")
+            .eq("owner_id", str(owner_id))
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        return [self._map_person_row(row) for row in response.data]
+
+    def update_person_query_embedding(
+        self,
+        person_id: UUID,
+        embedding: list[float],
+    ) -> None:
+        """Update aggregate query embedding for person.
+
+        Args:
+            person_id: UUID of the person.
+            embedding: 512-dimensional CLIP embedding.
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        self.client.table("persons").update({
+            "query_embedding": embedding_str,
+        }).eq("id", str(person_id)).execute()
+
+    def delete_person(self, person_id: UUID, owner_id: UUID) -> None:
+        """Delete person and cascade to photos.
+
+        Args:
+            person_id: UUID of the person.
+            owner_id: UUID of the owning user (for tenant isolation).
+        """
+        self.client.table("persons").delete().eq("id", str(person_id)).eq("owner_id", str(owner_id)).execute()
+
+    # ========================================================================
+    # PERSON REFERENCE PHOTO OPERATIONS
+    # ========================================================================
+
+    def create_person_reference_photo(
+        self,
+        owner_id: UUID,
+        person_id: UUID,
+        storage_path: str,
+    ) -> PersonReferencePhoto:
+        """Create a reference photo record in UPLOADED state.
+
+        Args:
+            owner_id: UUID of the owning user.
+            person_id: UUID of the person.
+            storage_path: Storage path in Supabase storage.
+
+        Returns:
+            PersonReferencePhoto: The created photo record.
+        """
+        data = {
+            "owner_id": str(owner_id),
+            "person_id": str(person_id),
+            "storage_path": storage_path,
+            "state": "UPLOADED",
+        }
+
+        response = self.client.table("person_reference_photos").insert(data).execute()
+
+        if not response.data:
+            raise ValueError("Failed to create person reference photo")
+
+        return self._map_person_photo_row(response.data[0])
+
+    def get_person_reference_photo(self, photo_id: UUID) -> Optional[PersonReferencePhoto]:
+        """Get photo by ID.
+
+        Args:
+            photo_id: UUID of the photo.
+
+        Returns:
+            Optional[PersonReferencePhoto]: The photo if found, otherwise None.
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("*")
+            .eq("id", str(photo_id))
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return self._map_person_photo_row(response.data[0])
+
+    def list_person_photos(self, person_id: UUID) -> list[PersonReferencePhoto]:
+        """List all photos for a person.
+
+        Args:
+            person_id: UUID of the person.
+
+        Returns:
+            list[PersonReferencePhoto]: List of photos.
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("*")
+            .eq("person_id", str(person_id))
+            .order("created_at", desc=False)
+            .execute()
+        )
+
+        return [self._map_person_photo_row(row) for row in response.data]
+
+    def update_person_photo_state(
+        self,
+        photo_id: UUID,
+        state: str,
+    ) -> None:
+        """Update photo state (UPLOADED, PROCESSING, READY, FAILED).
+
+        Args:
+            photo_id: UUID of the photo.
+            state: New state.
+        """
+        self.client.table("person_reference_photos").update({
+            "state": state,
+        }).eq("id", str(photo_id)).execute()
+
+    def update_person_photo_embedding(
+        self,
+        photo_id: UUID,
+        embedding: list[float],
+        quality_score: float,
+        state: str = "READY",
+    ) -> None:
+        """Update photo with embedding after processing.
+
+        Args:
+            photo_id: UUID of the photo.
+            embedding: 512-dimensional CLIP embedding.
+            quality_score: Quality score (0-1).
+            state: New state (default: READY).
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        self.client.table("person_reference_photos").update({
+            "embedding": embedding_str,
+            "quality_score": quality_score,
+            "state": state,
+            "error_message": None,  # Clear any previous error
+        }).eq("id", str(photo_id)).execute()
+
+    def update_person_photo_failed(
+        self,
+        photo_id: UUID,
+        error_message: str,
+    ) -> None:
+        """Mark photo as failed.
+
+        Args:
+            photo_id: UUID of the photo.
+            error_message: Error message.
+        """
+        self.client.table("person_reference_photos").update({
+            "state": "FAILED",
+            "error_message": error_message[:500],  # Truncate
+        }).eq("id", str(photo_id)).execute()
+
+    def get_ready_photo_embeddings(self, person_id: UUID) -> list[list[float]]:
+        """Get all READY photo embeddings for aggregation.
+
+        Args:
+            person_id: UUID of the person.
+
+        Returns:
+            list[list[float]]: List of embeddings.
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("embedding")
+            .eq("person_id", str(person_id))
+            .eq("state", "READY")
+            .not_.is_("embedding", "null")
+            .execute()
+        )
+
+        embeddings = []
+        for row in response.data:
+            if row.get("embedding"):
+                embeddings.append(row["embedding"])
+
+        return embeddings
+
+    # ========================================================================
+    # PERSON SEARCH RPC
+    # ========================================================================
+
+    def search_scenes_by_person_clip_embedding(
+        self,
+        query_embedding: list[float],
+        user_id: UUID,
+        video_id: Optional[UUID] = None,
+        match_count: int = 200,
+        threshold: float = 0.3,
+    ) -> list[tuple[str, int, float]]:
+        """Search scenes by person CLIP embedding.
+
+        Calls the search_scenes_by_person_clip_embedding RPC function.
+
+        Args:
+            query_embedding: 512-dimensional CLIP embedding.
+            user_id: UUID of the user (for tenant isolation).
+            video_id: Optional video ID to filter results.
+            match_count: Number of results to return.
+            threshold: Minimum similarity threshold.
+
+        Returns:
+            list[tuple[str, int, float]]: List of (scene_id, rank, similarity).
+        """
+        if not query_embedding or len(query_embedding) != 512:
+            logger.warning(f"Invalid person embedding dimension: {len(query_embedding) if query_embedding else 0}")
+            return []
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        params = {
+            "query_embedding": embedding_str,
+            "match_threshold": threshold,
+            "match_count": match_count,
+            "filter_video_id": str(video_id) if video_id else None,
+            "filter_user_id": str(user_id),
+        }
+
+        response = self.client.rpc("search_scenes_by_person_clip_embedding", params).execute()
+
+        results = []
+        for rank, row in enumerate(response.data, start=1):
+            scene_id = row["scene_id"]
+            similarity = float(row["similarity"])
+            results.append((scene_id, rank, similarity))
+
+        if self.search_debug:
+            logger.info(
+                f"Person search: query_dim={len(query_embedding)}, "
+                f"threshold={threshold}, user_id={user_id}, "
+                f"video_id={video_id}, results={len(results)}"
+            )
+
+        return results
+
+    # ========================================================================
+    # SCENE PERSON EMBEDDINGS
+    # ========================================================================
+
+    def create_scene_person_embedding(
+        self,
+        owner_id: UUID,
+        video_id: UUID,
+        scene_id: UUID,
+        embedding: list[float],
+        kind: str = "thumbnail",
+        ordinal: int = 0,
+    ) -> None:
+        """Create or update scene person embedding (upsert on unique constraint).
+
+        Args:
+            owner_id: UUID of the owning user.
+            video_id: UUID of the video.
+            scene_id: UUID of the scene.
+            embedding: 512-dimensional CLIP embedding.
+            kind: Embedding kind (default: thumbnail).
+            ordinal: Ordinal within kind (default: 0).
+        """
+        if not embedding or len(embedding) != 512:
+            raise ValueError(f"Invalid embedding dimension: {len(embedding) if embedding else 0}")
+
+        # Convert to pgvector format
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        data = {
+            "owner_id": str(owner_id),
+            "video_id": str(video_id),
+            "scene_id": str(scene_id),
+            "kind": kind,
+            "ordinal": ordinal,
+            "embedding": embedding_str,
+        }
+
+        # Upsert: insert or update on conflict
+        self.client.table("scene_person_embeddings").upsert(
+            data,
+            on_conflict="scene_id,kind,ordinal"
+        ).execute()
+
+    def get_scene_person_embedding(
+        self,
+        scene_id: UUID,
+        kind: str = "thumbnail",
+        ordinal: int = 0,
+    ) -> Optional[dict]:
+        """Check if scene has person embedding.
+
+        Args:
+            scene_id: UUID of the scene.
+            kind: Embedding kind (default: thumbnail).
+            ordinal: Ordinal within kind (default: 0).
+
+        Returns:
+            Optional[dict]: Embedding record if exists, otherwise None.
+        """
+        response = (
+            self.client.table("scene_person_embeddings")
+            .select("id,created_at")
+            .eq("scene_id", str(scene_id))
+            .eq("kind", kind)
+            .eq("ordinal", ordinal)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data[0]
+
+    # ========================================================================
+    # MAPPING HELPERS
+    # ========================================================================
+
+    def _map_person_row(self, row: dict) -> Person:
+        """Map database row to Person model.
+
+        Args:
+            row: Database row dict.
+
+        Returns:
+            Person: Mapped person model.
+        """
+        return Person(
+            id=UUID(row["id"]),
+            owner_id=UUID(row["owner_id"]),
+            display_name=row.get("display_name"),
+            query_embedding=row.get("query_embedding"),  # Already a list from Supabase
+            status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        )
+
+    def _map_person_photo_row(self, row: dict) -> PersonReferencePhoto:
+        """Map database row to PersonReferencePhoto model.
+
+        Args:
+            row: Database row dict.
+
+        Returns:
+            PersonReferencePhoto: Mapped photo model.
+        """
+        return PersonReferencePhoto(
+            id=UUID(row["id"]),
+            owner_id=UUID(row["owner_id"]),
+            person_id=UUID(row["person_id"]),
+            storage_path=row["storage_path"],
+            state=row["state"],
+            embedding=row.get("embedding"),  # Already a list from Supabase
+            quality_score=row.get("quality_score"),
+            face_bbox=row.get("face_bbox"),
+            error_message=row.get("error_message"),
             created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
             updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
         )

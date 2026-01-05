@@ -42,6 +42,22 @@ class SupabaseStorage:
 
         return response["signed_url"], storage_path
 
+    def create_signed_upload_url(self, storage_path: str, expires_in: int = 7200) -> str:
+        """
+        Create a signed upload URL for a specific storage path.
+
+        Args:
+            storage_path: Path where the file will be stored (e.g., "persons/{owner_id}/{person_id}/refs/{photo_id}.jpg")
+            expires_in: Expiration time in seconds (default: 7200 = 2 hours)
+
+        Returns:
+            str: Signed upload URL
+        """
+        response = self.client.storage.from_(self.bucket_name).create_signed_upload_url(
+            storage_path
+        )
+        return response["signed_url"]
+
     def get_public_url(self, storage_path: str) -> str:
         """
         Get public URL for a stored file.
