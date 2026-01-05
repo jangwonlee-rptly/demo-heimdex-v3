@@ -909,8 +909,13 @@ class Database:
 
         embeddings = []
         for row in response.data:
-            if row.get("embedding"):
-                embeddings.append(row["embedding"])
+            embedding = row.get("embedding")
+            if embedding:
+                # Handle both string (JSON) and list formats
+                if isinstance(embedding, str):
+                    import json
+                    embedding = json.loads(embedding)
+                embeddings.append(embedding)
 
         return embeddings
 

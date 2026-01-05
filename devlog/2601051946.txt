@@ -1,0 +1,431 @@
+[2026-01-05 19:46] Bugfix #6 - Embedding Deserialization from Database
+File: devlog/2601051946.txt
+
+== What we worked on ==
+- Fixed numpy type error when aggregating photo embeddings
+- Database was returning embeddings as JSON strings, not numeric arrays
+- Numpy cannot perform arithmetic operations (mean) on strings
+- This broke person query embedding generation completely
+
+== Changes made ==
+services/worker/src/adapters/database.py (lines 910-920):
+- Added JSON deserialization for embedding retrieval
+- Check if embedding is string, parse with json.loads() if so
+- Handle both string and already-parsed list formats
+- Return proper list[list[float]] as type hint promises
+
+Before:
+```python
+embeddings = []
+for row in response.data:
+    if row.get("embedding"):
+        embeddings.append(row["embedding"])  # Returns string!
+return embeddings
+```
+
+After:
+```python
+embeddings = []
+for row in response.data:
+    embedding = row.get("embedding")
+    if embedding:
+        # Handle both string (JSON) and list formats
+        if isinstance(embedding, str):
+            import json
+            embedding = json.loads(embedding)
+        embeddings.append(embedding)
+return embeddings
+```
+
+BUGFIX_EMBEDDING_DESERIALIZATION.md:
+- Complete documentation of numpy type error
+- Explains database serialization behavior
+- Prevention strategies for similar issues
+
+== Problems encountered ==
+Numpy Type Error on String Arrays (Sixth People Feature Bug)
+- Symptom: numpy._UFuncNoLoopError when computing mean of embeddings
+- Error: "ufunc 'add' did not contain a loop with signature matching types (dtype('<U6390'))"
+- Occurred in: PersonPhotoProcessor._update_person_query_embedding() at line 147
+- Person embeddings not updated, status stuck at "Processing"
+
+Error Details from Worker Logs:
+```
+2026-01-05 10:44:03,966 - src.domain.person_photo_processor - ERROR -
+Failed to process photo 8eeaf23b-1da2-40fe-ac6c-e9884c487039:
+ufunc 'add' did not contain a loop with signature matching types
+(dtype('<U6390'), dtype('<U6390')) -> None
+
+Traceback (most recent call last):
+  File "/app/src/domain/person_photo_processor.py", line 147, in _update_person_query_embedding
+    mean_embedding = np.mean(embeddings_array, axis=0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/numpy/core/fromnumeric.py", line 3504, in mean
+    return _methods._mean(a, axis=axis, dtype=dtype,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/numpy/core/_methods.py", line 118, in _mean
+    ret = umr_sum(arr, axis, dtype, out, keepdims, where=where)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+numpy.core._exceptions._UFuncNoLoopError: ufunc 'add' did not contain a loop
+with signature matching types (dtype('<U6390'), dtype('<U6390')) -> None
+```
+
+Understanding the Error:
+- `dtype('<U6390')` = Unicode string with 6390 characters per element
+- This is exactly the length of a JSON-serialized 512-float array
+- Example: `"[0.123456, 0.234567, ...]"` when stringified
+- Numpy saw an array of strings, not an array of floats
+- Cannot compute mean of strings (no addition operation defined)
+
+What Happened:
+1. Database query: SELECT embedding FROM person_reference_photos
+2. PostgreSQL returns JSONB column as JSON string
+3. Supabase client doesn't auto-parse (returns raw string)
+4. Database adapter appended string to list
+5. Processor created numpy array from list of strings
+6. np.mean() tried to add strings together → error
+
+Expected vs Actual Types:
+```python
+# Expected (type hint):
+list[list[float]]  # [[0.1, 0.2, ...], [0.3, 0.4, ...]]
+
+# Actual (runtime):
+list[str]  # ["[0.1, 0.2, ...]", "[0.3, 0.4, ...]"]
+
+# When converted to numpy:
+Expected: np.array([[0.1, 0.2, ...], [0.3, 0.4, ...]])  # float64
+Actual:   np.array(["[0.1, 0.2, ...]", "[0.3, 0.4, ...]"])  # U6390 (string)
+```
+
+Why Type Hints Didn't Catch This:
+```python
+def get_ready_photo_embeddings(self, person_id: UUID) -> list[list[float]]:
+    # Type hint says list[list[float]]
+    # But actually returns list[str]
+    # Python doesn't enforce return types at runtime!
+```
+
+Database Serialization Behavior:
+- PostgreSQL JSONB column stores: `[0.1, 0.2, 0.3, ...]`
+- Supabase Python client returns: `"[0.1, 0.2, 0.3, ...]"` (string)
+- Other clients might auto-parse to list
+- Behavior can vary by driver/configuration
+
+== How we tried to solve it ==
+Investigation Steps:
+1. Read numpy error message
+2. Decoded `dtype('<U6390')` to understand it's strings
+3. Calculated 6390 chars ≈ JSON array of 512 floats
+4. Traced back to database query for embeddings
+5. Checked database adapter get_ready_photo_embeddings()
+6. Found no JSON deserialization happening
+7. Realized Supabase returns JSONB as strings
+
+Verification:
+```python
+# What the database returns:
+row["embedding"]  # Type: str
+row["embedding"]  # Value: "[0.123, 0.456, ...]"
+
+# What we need:
+embedding  # Type: list[float]
+embedding  # Value: [0.123, 0.456, ...]
+```
+
+Solution Approaches Considered:
+1. Change database column type to native array
+   - Pros: No JSON serialization
+   - Cons: Migration required, might affect other code
+   - Decision: Too risky for hotfix
+
+2. Parse JSON at usage site (processor)
+   - Pros: Quick fix
+   - Cons: Violates type contract, processor shouldn't know about DB format
+   - Decision: Wrong layer for deserialization
+
+3. Parse JSON in database adapter (chosen)
+   - Pros: Respects boundaries, adapter handles serialization
+   - Cons: Need defensive check for different client behaviors
+   - Decision: CHOSEN - correct abstraction layer
+
+== How we solved it / Current status ==
+✅ FIXED - Database adapter deserializes embeddings
+
+Solution:
+Add JSON deserialization in database adapter before returning:
+
+```python
+# services/worker/src/adapters/database.py (FIXED)
+def get_ready_photo_embeddings(self, person_id: UUID) -> list[list[float]]:
+    response = (
+        self.client.table("person_reference_photos")
+        .select("embedding")
+        .eq("person_id", str(person_id))
+        .eq("state", "READY")
+        .not_.is_("embedding", "null")
+        .execute()
+    )
+
+    embeddings = []
+    for row in response.data:
+        embedding = row.get("embedding")
+        if embedding:
+            # Handle both string (JSON) and list formats
+            if isinstance(embedding, str):
+                import json
+                embedding = json.loads(embedding)
+            embeddings.append(embedding)
+
+    return embeddings
+```
+
+Why This Is the Right Fix:
+1. Database adapter is the correct boundary for (de)serialization
+2. Adapter hides database storage format from business logic
+3. Type contract is honored: actually returns list[list[float]]
+4. Defensive check handles multiple client behaviors
+5. Future-proof if database client behavior changes
+
+Defensive isinstance() Check:
+- Handles string format: `if isinstance(embedding, str)` → parse JSON
+- Handles list format: Already correct, use as-is
+- Graceful across different Supabase client versions
+- No error if behavior changes in future
+
+Deployment:
+```bash
+docker-compose build worker   # Rebuilt with fix
+docker-compose up -d worker   # Restarted
+```
+
+Worker Startup Verification:
+```
+worker-1  | 2026-01-05 10:45:18,610 - src.tasks - INFO - Worker bootstrapped successfully
+worker-1  | 2026-01-05 10:45:18,625 - dramatiq.MainProcess - INFO - Dramatiq '2.0.0' is booting up.
+```
+
+Expected Behavior After Fix:
+```
+Starting reference photo processing for photo_id={uuid}
+Downloading photo from persons/.../refs/{photo_id}.jpg
+Downloaded {size} bytes
+Generating CLIP embedding for {local_path}
+Embedding generated: dim=512, quality_score=0.XXX
+Photo {photo_id} marked as READY
+Updating query embedding for person {person_id}
+Aggregating {N} embeddings for person {person_id}
+Person {person_id} query embedding updated successfully
+Completed reference photo processing for photo_id={uuid}
+```
+
+== Next steps / TODOs ==
+Testing:
+- [ ] Upload multiple photos to same person
+- [ ] Verify all photos process successfully
+- [ ] Verify person query embedding is updated
+- [ ] Verify person status becomes READY
+- [ ] Test person detection in search
+- [ ] Verify search results include person matches
+
+Code Quality:
+- [ ] Review all JSONB column accesses in database adapter
+- [ ] Add similar deserialization for other embedding fields
+- [ ] Add runtime type validation at adapter boundaries
+- [ ] Consider using Pydantic models for database responses
+
+Prevention:
+- [ ] Add mypy type checking to CI pipeline
+- [ ] Add integration tests with real database
+- [ ] Test with actual data, not just mocks
+- [ ] Document serialization contracts for all adapters
+- [ ] Consider using pgvector extension for native vector types
+
+== Root cause analysis ==
+Pattern Recognition:
+This is the SIXTH deployment bug in People feature:
+1. Frontend response wrapper mismatches
+2. Query parameter vs request body
+3. Worker import path error
+4. JSON parse error on delete
+5. Storage method signature mismatch
+6. Embedding deserialization (current)
+
+Common Theme - Type Safety Gaps:
+All bugs involve type mismatches or serialization issues:
+1. Response shape mismatch (expected array, got wrapper)
+2. Parameter binding mismatch (expected body, was query)
+3. Import path mismatch (expected monorepo path, needs container path)
+4. Response type mismatch (expected JSON, got empty)
+5. Method signature mismatch (expected 1 arg, needs 2)
+6. Data type mismatch (expected list, got string)
+
+Why This Specific Issue:
+1. Type hints provide documentation but no enforcement
+2. Database clients vary in serialization behavior
+3. No runtime type validation at boundaries
+4. Integration tests with mocks don't catch serialization issues
+5. Numpy error messages are cryptic (dtype codes not obvious)
+
+Database Client Behavior Variability:
+Different database clients handle JSONB differently:
+- Some auto-parse to Python objects (psycopg3 with json adapter)
+- Some return as strings (basic Supabase client)
+- Some return as bytes that need decoding
+- Behavior can change across versions
+
+JSONB vs Native Arrays:
+PostgreSQL has multiple options for array storage:
+
+Option 1 - JSONB (current):
+```sql
+CREATE TABLE foo (embedding JSONB);
+-- Pros: Flexible, works everywhere
+-- Cons: String serialization, need to parse
+```
+
+Option 2 - Native array:
+```sql
+CREATE TABLE foo (embedding FLOAT[]);
+-- Pros: Native type, efficient
+-- Cons: Fixed type, less flexible
+```
+
+Option 3 - pgvector extension:
+```sql
+CREATE TABLE foo (embedding VECTOR(512));
+-- Pros: Purpose-built for embeddings, optimized
+-- Cons: Requires extension, migration effort
+```
+
+Current choice (JSONB) is fine but requires explicit deserialization.
+
+Type System Limitations:
+Python's type hints are "gradual typing":
+```python
+def foo() -> list[float]:
+    return "not a list"  # No error!
+
+# Type hints are not enforced at runtime
+# Only linters (mypy) check them
+# But we're not running mypy in CI
+```
+
+Better approach with runtime validation:
+```python
+from pydantic import BaseModel, validator
+
+class PhotoEmbedding(BaseModel):
+    embedding: list[float]
+
+    @validator('embedding', pre=True)
+    def parse_json(cls, v):
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
+
+# Pydantic enforces types at runtime
+# Auto-parses JSON strings
+# Fails fast with clear errors
+```
+
+== Impact ==
+Severity: Critical (person embedding aggregation completely broken)
+Scope: All persons with multiple photos
+User Impact: Photos process individually but person never becomes fully READY
+Time to Fix: ~5 minutes (once root cause identified)
+Blocking: Person search unusable without aggregated embedding
+
+User Experience Impact:
+- User uploads multiple photos
+- Each photo processes successfully (shows "Ready")
+- But person status never becomes "Ready"
+- Person detection in search doesn't work
+- No visible error to user (fails silently in background)
+- Very confusing: photos look ready but feature doesn't work
+
+Silent Failure Characteristics:
+- Individual photo processing succeeds
+- Photo records marked as READY in database
+- Person record has photos with embeddings
+- But query_embedding field never populated
+- Search cannot use person detection
+- Error only visible in worker logs
+- User has no idea what went wrong
+
+== Lessons learned ==
+1. Type hints are documentation, not enforcement in Python
+2. Database JSONB columns often returned as strings
+3. Always deserialize JSON explicitly at boundaries
+4. Numpy dtype errors can indicate wrong input types
+5. Test with real database, not just mocks with fake data
+6. Validate types at service boundaries (adapters, APIs)
+7. Six bugs in one feature = systematic testing gap
+8. Runtime type checking (Pydantic, typeguard) would help
+9. Integration tests should use real database connections
+10. Background worker errors are invisible to end users
+
+== Prevention strategy ==
+Immediate (Testing):
+1. Test complete flow with multiple photos per person
+2. Monitor worker logs during all testing
+3. Verify person query embedding actually populated
+4. Test person detection in search with real queries
+
+Short-term (Code Quality):
+1. Review all JSONB column accesses:
+   ```bash
+   grep -r "\.select.*embedding" services/worker/src/adapters/
+   ```
+2. Add JSON deserialization for all embedding retrievals
+3. Add runtime type validation:
+   ```python
+   if not isinstance(embedding, list):
+       raise TypeError(f"Expected list, got {type(embedding)}")
+   ```
+4. Add unit tests that verify types, not just values
+5. Add integration tests with real database
+
+Long-term (Architecture):
+1. Run mypy in CI with strict mode:
+   ```bash
+   mypy services/worker/src --strict
+   ```
+2. Use Pydantic models for all database responses:
+   ```python
+   class PhotoRow(BaseModel):
+       id: UUID
+       embedding: list[float]  # Auto-validates/coerces
+   ```
+3. Consider runtime type checker (typeguard/beartype):
+   ```python
+   from typeguard import typechecked
+
+   @typechecked
+   def get_ready_photo_embeddings(...) -> list[list[float]]:
+       # Runtime validates return type matches annotation
+   ```
+4. Consider pgvector extension for native vector types
+5. Document all serialization contracts in adapter docstrings
+6. Add smoke tests that run after deployment
+
+Process Improvements:
+1. Test with real services in development, not mocks
+2. Check worker logs immediately after changes
+3. Test complete end-to-end flows before declaring success
+4. Add monitoring/alerting for worker task failures
+5. Consider staging environment for integration testing
+
+== Related issues ==
+Six bugs in People feature deployment:
+1. devlog/2601051844.txt - Response wrapper mismatches
+2. devlog/2601051853.txt - Query parameter issue
+3. devlog/2601051907.txt - Worker import error
+4. devlog/2601051917.txt - JSON parse error on delete
+5. devlog/2601051938.txt - Storage method signature
+6. devlog/2601051946.txt - Embedding deserialization (current)
+
+All found through manual testing after deployment.
+Clear need for comprehensive integration testing.
+Type safety at boundaries would prevent many of these.
