@@ -326,46 +326,35 @@ export default function SearchPage() {
             <div className="relative flex-1">
               {/* Overlay technique for inline highlighting */}
               <div className="relative">
-                {/* Styled overlay layer (non-interactive) */}
-                <div
-                  aria-hidden="true"
-                  className="absolute inset-0 pl-12 pr-4 py-3 pointer-events-none overflow-hidden whitespace-pre-wrap break-words"
-                  style={{
-                    fontFamily: 'inherit',
-                    fontSize: 'inherit',
-                    lineHeight: 'inherit',
-                    color: query ? 'transparent' : 'rgb(148, 163, 184)', // Placeholder color when empty
-                  }}
-                >
-                  {query ? (
-                    // Render highlighted text when query exists
-                    detectedPerson ? (
-                      <>
-                        {query.substring(0, detectedPerson.matchStart)}
-                        <span className="bg-accent-cyan/20 text-accent-cyan rounded-md px-1 shadow-[0_0_8px_rgba(34,211,238,0.35)]">
-                          {query.substring(detectedPerson.matchStart, detectedPerson.matchEnd)}
-                        </span>
-                        {query.substring(detectedPerson.matchEnd)}
-                      </>
-                    ) : (
-                      // No detection - just mirror the text
-                      query
-                    )
-                  ) : (
-                    // Show placeholder when empty
-                    t.search.searchPlaceholder
-                  )}
-                </div>
+                {/* Styled overlay layer (non-interactive) - only visible when person detected */}
+                {detectedPerson && (
+                  <div
+                    aria-hidden="true"
+                    className="absolute inset-0 pl-12 pr-4 py-3 pointer-events-none overflow-hidden whitespace-pre-wrap break-words text-surface-200"
+                    style={{
+                      fontFamily: 'inherit',
+                      fontSize: 'inherit',
+                      lineHeight: 'inherit',
+                    }}
+                  >
+                    {query.substring(0, detectedPerson.matchStart)}
+                    <span className="bg-accent-cyan/20 text-accent-cyan rounded-md px-1 shadow-[0_0_8px_rgba(34,211,238,0.35)]">
+                      {query.substring(detectedPerson.matchStart, detectedPerson.matchEnd)}
+                    </span>
+                    {query.substring(detectedPerson.matchEnd)}
+                  </div>
+                )}
 
-                {/* Actual input (transparent text, visible caret) */}
+                {/* Actual input */}
                 <input
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={t.search.searchPlaceholder}
-                  className="input pl-12 relative z-10 bg-transparent caret-accent-cyan"
+                  className="input pl-12 relative z-10 caret-accent-cyan"
                   style={{
-                    color: query ? 'transparent' : 'inherit',
+                    backgroundColor: detectedPerson ? 'transparent' : undefined,
+                    color: detectedPerson ? 'transparent' : undefined,
                   }}
                 />
               </div>
