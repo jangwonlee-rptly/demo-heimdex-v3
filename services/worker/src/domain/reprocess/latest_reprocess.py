@@ -561,9 +561,19 @@ class ReprocessRunner:
                     progress.scenes_skipped += 1
                     continue
 
-                # Convert URL to storage path (remove base URL if present)
-                # thumbnail_url is typically a full Supabase URL, we need the storage path
-                storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
+                # Convert URL to storage path (remove base URL and bucket name)
+                # thumbnail_url format: https://xxx.supabase.co/storage/v1/object/public/videos/user_id/video_id/thumbnails/scene_X.jpg
+                # We need: user_id/video_id/thumbnails/scene_X.jpg (without the bucket name "videos")
+                if "/storage/v1/object/public/videos/" in thumbnail_url:
+                    storage_path = thumbnail_url.split("/storage/v1/object/public/videos/")[1]
+                elif "/storage/v1/object/public/" in thumbnail_url:
+                    # Fallback: take everything after public/ and remove leading bucket name if present
+                    storage_path = thumbnail_url.split("/storage/v1/object/public/")[1]
+                    if storage_path.startswith("videos/"):
+                        storage_path = storage_path[7:]  # Remove "videos/" prefix
+                else:
+                    # Already a storage path
+                    storage_path = thumbnail_url
 
                 # Log the parsed storage path for debugging
                 logger.debug(f"Parsed storage path for scene {scene_id}: {storage_path}")
@@ -655,8 +665,19 @@ class ReprocessRunner:
                     progress.scenes_skipped += 1
                     continue
 
-                # Convert URL to storage path (remove base URL if present)
-                storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
+                # Convert URL to storage path (remove base URL and bucket name)
+                # thumbnail_url format: https://xxx.supabase.co/storage/v1/object/public/videos/user_id/video_id/thumbnails/scene_X.jpg
+                # We need: user_id/video_id/thumbnails/scene_X.jpg (without the bucket name "videos")
+                if "/storage/v1/object/public/videos/" in thumbnail_url:
+                    storage_path = thumbnail_url.split("/storage/v1/object/public/videos/")[1]
+                elif "/storage/v1/object/public/" in thumbnail_url:
+                    # Fallback: take everything after public/ and remove leading bucket name if present
+                    storage_path = thumbnail_url.split("/storage/v1/object/public/")[1]
+                    if storage_path.startswith("videos/"):
+                        storage_path = storage_path[7:]  # Remove "videos/" prefix
+                else:
+                    # Already a storage path
+                    storage_path = thumbnail_url
 
                 # Log the parsed storage path for debugging
                 logger.debug(f"Parsed storage path for scene person embedding {scene_id}: {storage_path}")
