@@ -889,11 +889,18 @@ async def search_scenes(
 
         # Add fusion metadata if available
         if 'fusion_metadata' in locals() and fusion_metadata:
-            channels_active_response = [map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch) for ch in fusion_metadata.active_channels]
-            channels_empty_response = [map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch) for ch in fusion_metadata.empty_channels]
+            # Map internal channel names to user-facing names (e.g., "dense_transcript" -> "transcript")
+            channels_active_response = [
+                list(map_to_user_keys({ch: 1}).keys())[0] if map_to_user_keys({ch: 1}) else ch.replace("dense_", "")
+                for ch in fusion_metadata.active_channels
+            ]
+            channels_empty_response = [
+                list(map_to_user_keys({ch: 1}).keys())[0] if map_to_user_keys({ch: 1}) else ch.replace("dense_", "")
+                for ch in fusion_metadata.empty_channels
+            ]
             if fusion_metadata.channel_score_ranges:
                 channel_score_ranges_response = {
-                    map_to_user_keys({ch: 1}).get(ch.replace("dense_", ""), ch): ranges
+                    list(map_to_user_keys({ch: 1}).keys())[0] if map_to_user_keys({ch: 1}) else ch.replace("dense_", ""): ranges
                     for ch, ranges in fusion_metadata.channel_score_ranges.items()
                 }
 
