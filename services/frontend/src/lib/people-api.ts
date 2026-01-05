@@ -6,18 +6,34 @@
 import { apiRequest } from './supabase';
 import type {
   Person,
+  PersonDisplayStatus,
   CreatePersonRequest,
   PersonPhotoUploadUrl,
   CompletePhotoUploadRequest,
 } from '@/types';
 
 /**
+ * Compute display status from person data.
+ * Backend returns "active" or "archived", but UI needs semantic status.
+ */
+export function getPersonDisplayStatus(person: Person): PersonDisplayStatus {
+  if (person.total_photos_count === 0) {
+    return 'NEEDS_PHOTOS';
+  }
+  if (person.has_query_embedding && person.ready_photos_count > 0) {
+    return 'READY';
+  }
+  return 'PROCESSING';
+}
+
+/**
  * List all persons for the current user.
  */
 export async function listPersons(): Promise<Person[]> {
-  return apiRequest<Person[]>('/persons', {
+  const response = await apiRequest<{ persons: Person[] }>('/persons', {
     method: 'GET',
   });
+  return response.persons;
 }
 
 /**
@@ -35,9 +51,16 @@ export async function createPerson(displayName: string): Promise<Person> {
  * Get detailed information about a specific person.
  */
 export async function getPerson(personId: string): Promise<Person> {
-  return apiRequest<Person>(`/persons/${personId}`, {
+  const response = await apiRequest<{
+    person: Omit<Person, 'photos'>;
+    photos: Person['photos'];
+  }>(`/persons/${personId}`, {
     method: 'GET',
   });
+  return {
+    ...response.person,
+    photos: response.photos,
+  };
 }
 
 /**

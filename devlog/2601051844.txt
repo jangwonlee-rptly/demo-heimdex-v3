@@ -1,0 +1,143 @@
+[2026-01-05 18:44] Bugfix - People Frontend API Response Type Mismatches
+File: devlog/2601051844.txt
+
+== What we worked on ==
+- Fixed critical runtime error in People frontend after deployment
+- Browser console showed "TypeError: e.map is not a function"
+- Root cause: Frontend expecting direct arrays, backend returning wrapped objects
+- Multiple type mismatches between frontend expectations and backend API contract
+
+== Changes made ==
+services/frontend/src/lib/people-api.ts:
+- Added getPersonDisplayStatus() helper function to compute UI status from backend data
+- Fixed listPersons() to extract persons array from {persons: [...]} response wrapper
+- Fixed getPerson() to merge {person: {...}, photos: [...]} into single Person object
+- Added proper TypeScript types for response wrappers
+
+services/frontend/src/types/index.ts:
+- Changed PersonStatus from 'NEEDS_PHOTOS'|'PROCESSING'|'READY' to 'active'|'archived'
+- Added PersonDisplayStatus type for UI-computed status values
+- Removed owner_id field from Person interface (backend doesn't return it for security)
+
+services/frontend/src/app/people/page.tsx:
+- Imported and used getPersonDisplayStatus() helper in PersonCard component
+- Updated PersonDetailsModal to use computed display status instead of person.status
+- All status rendering now uses computed values based on photo counts and embedding state
+
+BUGFIX_PEOPLE_FRONTEND.md:
+- Created comprehensive documentation of bug, root cause, and fixes
+- Includes backend API contract examples for reference
+- Documents display status computation logic
+
+== Problems encountered ==
+1. API Response Wrapper Mismatch
+   - Backend: GET /v1/persons returns {persons: Person[]}
+   - Frontend: Expected Person[] directly
+   - Symptom: .map() called on undefined object, causing TypeError
+
+2. Person Detail Response Structure
+   - Backend: GET /v1/persons/{id} returns {person: {...}, photos: [...]}
+   - Frontend: Expected Person object with photos embedded
+   - Would have caused similar runtime error when viewing person details
+
+3. Status Enum Mismatch
+   - Backend: Uses "active" or "archived" for person.status field
+   - Frontend: Expected "NEEDS_PHOTOS", "PROCESSING", or "READY"
+   - Status pills would have shown wrong values or crashed
+
+4. Missing Field in Response
+   - Frontend Person type included owner_id: string
+   - Backend doesn't return owner_id (security decision - inferred from auth)
+   - TypeScript would have allowed code expecting this field
+
+== How we tried to solve it ==
+Initial Investigation:
+1. Analyzed browser console error stack trace
+2. Located error source: people.map() call in people page
+3. Checked backend API implementation in services/api/src/routes/persons.py
+4. Found PersonListResponse schema wraps array in {persons: [...]}
+
+Response Strategy:
+1. Could modify backend to return unwrapped arrays (breaking change, risky)
+2. Could modify frontend to handle wrapped responses (correct approach)
+3. Chose option 2: Fix frontend to match backend contract
+
+Type Analysis:
+- Examined all backend response schemas in domain/schemas.py
+- Compared with frontend type definitions in types/index.ts
+- Found 4 mismatches: response wrappers, status enum, owner_id field, detail structure
+
+== How we solved it / Current status ==
+✅ FIXED - All type mismatches resolved
+
+Solution 1 - Response Wrapper Handling:
+- Updated listPersons() to unwrap {persons: [...]} before returning
+- Updated getPerson() to merge {person: {...}, photos: [...]} into single object
+- Used proper TypeScript types for intermediate response objects
+
+Solution 2 - Status Computation:
+- Changed PersonStatus type to match backend: 'active' | 'archived'
+- Added new PersonDisplayStatus type for UI values
+- Created getPersonDisplayStatus() helper that computes display status:
+  * NEEDS_PHOTOS if total_photos_count === 0
+  * READY if has_query_embedding && ready_photos_count > 0
+  * PROCESSING otherwise
+- Updated all UI code to use computed display status
+
+Solution 3 - Type Alignment:
+- Removed owner_id from Person interface (backend doesn't provide it)
+- Frontend never actually used owner_id field anyway
+- TypeScript now accurately represents backend contract
+
+Testing Approach:
+- Verified TypeScript compilation would pass (no more type errors)
+- Documented expected backend responses in BUGFIX_PEOPLE_FRONTEND.md
+- Created manual test checklist for post-deployment validation
+
+== Next steps / TODOs ==
+Deployment & Validation:
+- [ ] Rebuild frontend: docker-compose build frontend
+- [ ] Deploy frontend: docker-compose up -d frontend
+- [ ] Test /people page loads without console errors
+- [ ] Test creating person (should show NEEDS_PHOTOS status)
+- [ ] Test uploading photos (should transition PROCESSING → READY)
+- [ ] Test person detection in search page
+- [ ] Verify all status pills show correct colors and labels
+
+Future Improvements (Optional):
+- Add runtime validation of API responses (e.g., zod schemas)
+- Create TypeScript types shared between frontend/backend
+- Add integration tests that verify API contract matches
+- Consider using OpenAPI/Swagger for type generation
+
+== Root cause analysis ==
+Why did this happen?
+1. Backend API was implemented first (Phases 1-11 complete)
+2. Frontend implementation happened after, based on assumptions
+3. No shared type definitions between frontend and backend
+4. No integration tests verifying API contract
+5. Types were inferred from documentation instead of actual responses
+
+Prevention strategies:
+1. Use OpenAPI/Swagger to generate frontend types from backend
+2. Add contract tests that verify response shapes
+3. Test against real backend during development (not mocks)
+4. Use runtime validation libraries (zod, yup) to catch mismatches early
+5. Review backend implementation before writing frontend types
+
+== Impact ==
+Severity: Critical (complete feature broken)
+Scope: All People frontend functionality
+User Impact: TypeError on page load, no functionality accessible
+Time to Fix: ~30 minutes (detection + fix + documentation)
+Risk of Recurrence: Moderate (other endpoints might have similar issues)
+
+== Lessons learned ==
+1. Always verify API responses match type definitions
+2. Don't assume backend structure - check actual implementation
+3. Backend response wrappers are common (for pagination, metadata)
+4. Status enums should match database values, compute display values separately
+5. Security-sensitive fields (owner_id) often omitted from responses
+6. TypeScript types should represent reality, not wishful thinking
+7. Manual testing against real backend catches type mismatches
+8. Documentation is crucial when types diverge from intuition

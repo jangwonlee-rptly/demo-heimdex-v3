@@ -212,9 +212,14 @@ export interface SceneExport {
 }
 
 /**
- * Person status enum.
+ * Person status enum (from backend: "active" or "archived").
  */
-export type PersonStatus = 'NEEDS_PHOTOS' | 'PROCESSING' | 'READY';
+export type PersonStatus = 'active' | 'archived';
+
+/**
+ * Computed display status for UI purposes.
+ */
+export type PersonDisplayStatus = 'NEEDS_PHOTOS' | 'PROCESSING' | 'READY';
 
 /**
  * Person photo state enum.
@@ -240,7 +245,6 @@ export interface PersonPhoto {
  */
 export interface Person {
   id: string;
-  owner_id: string;
   display_name: string;
   status: PersonStatus;
   ready_photos_count: number;

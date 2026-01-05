@@ -18,6 +18,7 @@ import {
   getPersonPhotoUploadUrl,
   uploadPhotoToStorage,
   completePersonPhotoUpload,
+  getPersonDisplayStatus,
 } from '@/lib/people-api';
 import type { Person, PersonPhoto } from '@/types';
 import { useLanguage } from '@/lib/i18n';
@@ -224,6 +225,7 @@ function PersonCard({
   onDelete: () => void;
   t: any;
 }) {
+  const displayStatus = getPersonDisplayStatus(person);
   const statusConfig = {
     READY: { label: t.people.status.READY, color: 'bg-green-500/10 text-green-400' },
     PROCESSING: {
@@ -233,7 +235,7 @@ function PersonCard({
     NEEDS_PHOTOS: { label: t.people.status.NEEDS_PHOTOS, color: 'bg-red-500/10 text-red-400' },
   };
 
-  const status = statusConfig[person.status];
+  const status = statusConfig[displayStatus];
 
   return (
     <div className="card p-6 hover:border-accent-cyan/30 transition-colors">
@@ -428,14 +430,14 @@ function PersonDetailsModal({
             <h2 className="text-2xl font-bold text-surface-50 mb-2">{person.display_name}</h2>
             <span
               className={`status-badge ${
-                person.status === 'READY'
+                getPersonDisplayStatus(person) === 'READY'
                   ? 'bg-green-500/10 text-green-400'
-                  : person.status === 'PROCESSING'
+                  : getPersonDisplayStatus(person) === 'PROCESSING'
                   ? 'bg-yellow-500/10 text-yellow-400'
                   : 'bg-red-500/10 text-red-400'
               }`}
             >
-              {t.people.status[person.status]}
+              {t.people.status[getPersonDisplayStatus(person)]}
             </span>
           </div>
           <button onClick={onClose} className="text-surface-400 hover:text-surface-200">
