@@ -565,6 +565,9 @@ class ReprocessRunner:
                 # thumbnail_url is typically a full Supabase URL, we need the storage path
                 storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
 
+                # Log the parsed storage path for debugging
+                logger.debug(f"Parsed storage path for scene {scene_id}: {storage_path}")
+
                 # Download thumbnail to temporary location
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
@@ -598,10 +601,22 @@ class ReprocessRunner:
                         progress.scenes_processed += 1
                         logger.info(f"Regenerated CLIP embedding for scene {scene_id} (dim={len(embedding_visual_clip)})")
 
+                except Exception as download_error:
+                    # Handle storage download errors (e.g., 404 for missing thumbnails)
+                    error_str = str(download_error)
+                    if "404" in error_str or "not_found" in error_str or "Object not found" in error_str:
+                        logger.warning(f"Thumbnail not found in storage for scene {scene_id} at path {storage_path}, skipping CLIP embedding")
+                        progress.scenes_skipped += 1
+                    else:
+                        logger.error(f"Failed to download thumbnail for scene {scene_id}: {download_error}")
+                        progress.scenes_failed += 1
+                    continue
+
                 finally:
                     # Clean up temporary file
                     try:
-                        tmp_path.unlink()
+                        if tmp_path.exists():
+                            tmp_path.unlink()
                     except Exception as e:
                         logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
 
@@ -643,6 +658,9 @@ class ReprocessRunner:
                 # Convert URL to storage path (remove base URL if present)
                 storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
 
+                # Log the parsed storage path for debugging
+                logger.debug(f"Parsed storage path for scene person embedding {scene_id}: {storage_path}")
+
                 # Download thumbnail to temporary location
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
@@ -673,10 +691,22 @@ class ReprocessRunner:
                         progress.scenes_processed += 1
                         logger.info(f"Regenerated scene person embedding for scene {scene_id}")
 
+                except Exception as download_error:
+                    # Handle storage download errors (e.g., 404 for missing thumbnails)
+                    error_str = str(download_error)
+                    if "404" in error_str or "not_found" in error_str or "Object not found" in error_str:
+                        logger.warning(f"Thumbnail not found in storage for scene {scene_id} at path {storage_path}, skipping scene person embedding")
+                        progress.scenes_skipped += 1
+                    else:
+                        logger.error(f"Failed to download thumbnail for scene {scene_id}: {download_error}")
+                        progress.scenes_failed += 1
+                    continue
+
                 finally:
                     # Clean up temporary file
                     try:
-                        tmp_path.unlink()
+                        if tmp_path.exists():
+                            tmp_path.unlink()
                     except Exception as e:
                         logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
 
