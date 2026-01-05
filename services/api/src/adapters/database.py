@@ -1871,11 +1871,17 @@ class Database:
         Returns:
             Person: Mapped person model.
         """
+        # Deserialize query_embedding if it's a JSON string
+        query_embedding = row.get("query_embedding")
+        if query_embedding and isinstance(query_embedding, str):
+            import json
+            query_embedding = json.loads(query_embedding)
+
         return Person(
             id=UUID(row["id"]),
             owner_id=UUID(row["owner_id"]),
             display_name=row.get("display_name"),
-            query_embedding=row.get("query_embedding"),  # Already a list from Supabase
+            query_embedding=query_embedding,
             status=row["status"],
             created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
             updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,

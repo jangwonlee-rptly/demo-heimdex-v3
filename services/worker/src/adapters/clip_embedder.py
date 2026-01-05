@@ -175,11 +175,14 @@ class ClipEmbedder:
             cache_dir = Path(self._settings.clip_cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
+            # Force QuickGELU to match OpenAI pretrained weights
+            # See: https://github.com/mlfoundations/open_clip/issues/251
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name=self._settings.clip_model_name,
                 pretrained=self._settings.clip_pretrained,
                 device=self._device,
                 cache_dir=str(cache_dir),
+                force_quick_gelu=True,  # Match OpenAI pretrained weights
             )
 
             # Set to eval mode
