@@ -251,12 +251,15 @@ def _hydrate_scenes(
     fused_results: list[FusedCandidate],
     db: Database,
     include_debug: bool = False,
+    display_score_map: Optional[dict[str, float]] = None,
 ) -> tuple[list[VideoSceneResponse], int]:
     """Fetch full scene data for fused results.
 
     Args:
         fused_results: List of fused candidates from fusion.
         include_debug: If True, include debug fields (raw/norm scores, ranks).
+        display_score_map: Optional mapping of scene_id -> calibrated display_score.
+                           If provided, adds display_score to each result.
 
     Returns:
         tuple: (list of VideoSceneResponse objects, elapsed time in ms)
@@ -308,6 +311,8 @@ def _hydrate_scenes(
             "score_type": fused.score_type.value,
             # Legacy field for backward compatibility
             "similarity": fused.score,
+            # Display score (calibrated for UI, if enabled)
+            "display_score": display_score_map.get(str(scene.id)) if display_score_map else None,
         }
 
         # Add debug fields if enabled
@@ -772,11 +777,41 @@ async def search_scenes(
             detail="Failed to process search query",
         )
 
+    # Apply display score calibration if enabled (post-fusion, pre-hydration)
+    display_score_map: dict[str, float] = {}
+    if settings.enable_display_score_calibration and fused_results:
+        from ..domain.search.display_score import calibrate_display_scores
+
+        # Extract fused scores in result order
+        fused_scores = [r.score for r in fused_results]
+
+        # Calibrate for display (preserves ranking order)
+        display_scores = calibrate_display_scores(
+            fused_scores,
+            method=settings.display_score_method,
+            max_cap=settings.display_score_max_cap,
+            alpha=settings.display_score_alpha,
+        )
+
+        # Build scene_id -> display_score mapping
+        display_score_map = {
+            r.scene_id: display_scores[i]
+            for i, r in enumerate(fused_results)
+        }
+
+        if settings.search_debug:
+            logger.info(
+                f"Display score calibration: method={settings.display_score_method}, "
+                f"max_cap={settings.display_score_max_cap}, alpha={settings.display_score_alpha}, "
+                f"range=[{min(display_scores):.4f}, {max(display_scores):.4f}]"
+            )
+
     # Hydrate scenes with debug info if enabled
     scene_responses, hydrate_ms = _hydrate_scenes(
         fused_results,
         db,
         include_debug=settings.search_debug,
+        display_score_map=display_score_map if display_score_map else None,
     )
 
     # Calculate total latency

@@ -466,9 +466,9 @@ export default function SearchPage() {
                           <span className="text-xs text-surface-600">
                             {scene.start_s.toFixed(1)}s - {scene.end_s.toFixed(1)}s
                           </span>
-                          {scene.similarity && (
+                          {(scene.display_score ?? scene.similarity) && (
                             <span className="badge badge-accent text-[10px] py-0.5">
-                              {(scene.similarity * 100).toFixed(0)}% {t.search.match}
+                              {((scene.display_score ?? scene.similarity ?? 0) * 100).toFixed(0)}% {t.search.match}
                             </span>
                           )}
                         </div>

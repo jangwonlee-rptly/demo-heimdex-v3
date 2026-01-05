@@ -120,6 +120,14 @@ class Settings(BaseSettings):
     max_visual_weight: float = 0.8  # Cap visual weight (prevent sparse match over-reliance)
     min_lexical_weight: float = 0.05  # Minimum lexical weight (preserve keyword signal)
 
+    # Display score calibration (UI confidence metric, does not affect ranking)
+    # When enabled, adds a 'display_score' field to search results that is calibrated
+    # per-query to avoid overconfident "100%" displays on mediocre matches.
+    enable_display_score_calibration: bool = False
+    display_score_method: str = "exp_squash"  # Options: "exp_squash", "pctl_ceiling"
+    display_score_max_cap: float = 0.97  # Maximum display score (typically 0.95-0.97)
+    display_score_alpha: float = 3.0  # Exponential squashing parameter (2.0-5.0, higher = more aggressive)
+
     def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
         """Validate and redistribute multi-dense channel weights.
 

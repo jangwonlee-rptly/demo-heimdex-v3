@@ -231,6 +231,15 @@ class VideoSceneResponse(BaseModel):
         description="DEPRECATED: Use 'score' field instead. Kept for backward compatibility."
     )
 
+    # Display score field (calibrated for UI, does not affect ranking)
+    display_score: Optional[float] = Field(
+        None,
+        description="Per-query calibrated score for UI display (0..1, typically capped at 0.95-0.97). "
+                    "This is derived from 'score' using exponential squashing to avoid overconfident "
+                    "100% displays on mediocre matches. Only present if ENABLE_DISPLAY_SCORE_CALIBRATION=true. "
+                    "Use this for displaying confidence % to users. Ranking still uses 'score'."
+    )
+
     # Debug fields (only present when SEARCH_DEBUG=true)
     dense_score_raw: Optional[float] = Field(
         None,
