@@ -364,4 +364,54 @@ export interface Translations {
     retry: string;
     progressOf: string;
   };
+
+  // People
+  people: {
+    title: string;
+    subtitle: string;
+    addPerson: string;
+    managePeople: string;
+    noPeople: string;
+    addFirstPerson: string;
+    personName: string;
+    personNamePlaceholder: string;
+    personNameRequired: string;
+    createPerson: string;
+    creating: string;
+    created: string;
+    deletePerson: string;
+    deleteConfirm: string;
+    deleting: string;
+    deleted: string;
+    deleteError: string;
+    photos: string;
+    addPhotos: string;
+    uploadingPhotos: string;
+    photoUploadSuccess: string;
+    photoUploadError: string;
+    readyPhotos: string;
+    totalPhotos: string;
+    viewDetails: string;
+    personDetails: string;
+    photoList: string;
+    noPhotos: string;
+    uploadFirstPhoto: string;
+    status: {
+      NEEDS_PHOTOS: string;
+      PROCESSING: string;
+      READY: string;
+    };
+    photoState: {
+      UPLOADED: string;
+      PROCESSING: string;
+      READY: string;
+      FAILED: string;
+    };
+    personDetected: string;
+    notReadyWarning: string;
+    photosReady: string;
+    qualityScore: string;
+    selectPhotos: string;
+    close: string;
+  };
 }

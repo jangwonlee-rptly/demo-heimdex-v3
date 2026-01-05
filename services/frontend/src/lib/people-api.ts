@@ -1,0 +1,103 @@
+/**
+ * People API client module.
+ * Provides type-safe wrappers for person management endpoints.
+ */
+
+import { apiRequest } from './supabase';
+import type {
+  Person,
+  CreatePersonRequest,
+  PersonPhotoUploadUrl,
+  CompletePhotoUploadRequest,
+} from '@/types';
+
+/**
+ * List all persons for the current user.
+ */
+export async function listPersons(): Promise<Person[]> {
+  return apiRequest<Person[]>('/persons', {
+    method: 'GET',
+  });
+}
+
+/**
+ * Create a new person profile.
+ */
+export async function createPerson(displayName: string): Promise<Person> {
+  const body: CreatePersonRequest = { display_name: displayName };
+  return apiRequest<Person>('/persons', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Get detailed information about a specific person.
+ */
+export async function getPerson(personId: string): Promise<Person> {
+  return apiRequest<Person>(`/persons/${personId}`, {
+    method: 'GET',
+  });
+}
+
+/**
+ * Get a signed upload URL for uploading a person photo.
+ */
+export async function getPersonPhotoUploadUrl(
+  personId: string
+): Promise<PersonPhotoUploadUrl> {
+  return apiRequest<PersonPhotoUploadUrl>(
+    `/persons/${personId}/photos/upload-url`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+/**
+ * Mark a photo upload as complete after uploading to storage.
+ */
+export async function completePersonPhotoUpload(
+  personId: string,
+  photoId: string,
+  storagePath: string
+): Promise<void> {
+  const body: CompletePhotoUploadRequest = { storage_path: storagePath };
+  await apiRequest<void>(
+    `/persons/${personId}/photos/${photoId}/complete`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+/**
+ * Delete a person and all associated photos.
+ */
+export async function deletePerson(personId: string): Promise<void> {
+  await apiRequest<void>(`/persons/${personId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Upload a photo file directly to the signed URL.
+ * This bypasses the apiRequest wrapper since we're uploading directly to storage.
+ */
+export async function uploadPhotoToStorage(
+  uploadUrl: string,
+  file: File
+): Promise<void> {
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: {
+      'Content-Type': file.type,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.statusText}`);
+  }
+}

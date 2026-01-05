@@ -15,8 +15,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, apiRequest } from '@/lib/supabase';
-import type { SearchResult, VideoScene, Video } from '@/types';
+import type { SearchResult, VideoScene, Video, Person } from '@/types';
 import { useLanguage } from '@/lib/i18n';
+import { listPersons } from '@/lib/people-api';
 import { SearchWeightControls, type Weights, type WeightState } from '@/components/SearchWeightControls';
 import { FileToggleBar } from '@/components/FileToggleBar';
 import { SelectionTray } from '@/components/SelectionTray';
@@ -63,15 +64,57 @@ export default function SearchPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [highlightJob, setHighlightJob] = useState<HighlightJob | null>(null);
 
+  // People detection state
+  const [people, setPeople] = useState<Person[]>([]);
+  const [detectedPerson, setDetectedPerson] = useState<Person | null>(null);
+
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         router.push('/login');
+        return;
+      }
+
+      // Load people for detection
+      try {
+        const peopleData = await listPersons();
+        setPeople(peopleData);
+      } catch (error) {
+        console.error('Failed to load people:', error);
       }
     };
     checkAuth();
   }, [router]);
+
+  // Detect person in query (longest-match-first, case-insensitive, word-boundary safe)
+  useEffect(() => {
+    if (!query.trim() || people.length === 0) {
+      setDetectedPerson(null);
+      return;
+    }
+
+    const normalizedQuery = query.toLowerCase().trim();
+
+    // Sort people by name length (longest first) for greedy matching
+    const sortedPeople = [...people].sort(
+      (a, b) => b.display_name.length - a.display_name.length
+    );
+
+    // Find the first person whose name appears at the start of the query
+    const detected = sortedPeople.find((person) => {
+      const normalizedName = person.display_name.toLowerCase();
+      // Check if query starts with person name
+      if (!normalizedQuery.startsWith(normalizedName)) {
+        return false;
+      }
+      // Ensure word boundary after name (space or end of string)
+      const charAfter = normalizedQuery[normalizedName.length];
+      return !charAfter || /\s/.test(charAfter);
+    });
+
+    setDetectedPerson(detected || null);
+  }, [query, people]);
 
   const handleWeightChange = (state: WeightState) => {
     setUseSavedPreferences(state.useSaved);
@@ -320,6 +363,45 @@ export default function SearchPage() {
               )}
             </button>
           </form>
+
+          {/* Person Detection Feedback */}
+          {detectedPerson && (
+            <div className="mt-3 flex items-start gap-2">
+              <div className="flex items-center gap-2 flex-1">
+                <span className="status-badge bg-accent-cyan/10 text-accent-cyan text-xs flex items-center gap-1">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                    />
+                  </svg>
+                  {t.people.personDetected}: {detectedPerson.display_name}
+                </span>
+                {(!detectedPerson.has_query_embedding ||
+                  detectedPerson.ready_photos_count === 0) && (
+                  <span className="text-xs text-yellow-400 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                      />
+                    </svg>
+                    {detectedPerson.display_name} {t.people.notReadyWarning} ({detectedPerson.ready_photos_count}/{detectedPerson.total_photos_count} {t.people.photosReady})
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => router.push('/people')}
+                className="text-xs text-accent-cyan hover:text-accent-cyan/80 underline whitespace-nowrap"
+              >
+                {t.people.managePeople}
+              </button>
+            </div>
+          )}
 
           {results && (
             <div className="mt-4 flex items-center gap-4 text-sm">

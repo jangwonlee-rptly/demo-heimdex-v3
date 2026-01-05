@@ -617,3 +617,216 @@ ALTER PUBLICATION supabase_realtime ADD TABLE videos;
 - Migration must be applied before frontend deployment
 - Works with existing Supabase free tier
 - No additional costs for Realtime (included in Supabase plans)
+
+---
+
+## 2026-01-05: People Frontend Implementation (Phases 1-4)
+
+### Overview
+Implemented frontend UI for Heimdex's new "People" capability, enabling users to create person profiles with reference photos for face-based search. The feature feels like implicit NLP magic, automatically detecting person names in search queries without forcing users to learn special syntax.
+
+### Architecture Decisions
+
+**Product Principle:** People is a *search primitive* that "just works" when users type names naturally, not a separate heavyweight feature requiring training or syntax.
+
+**Key Design Goals:**
+1. **Implicit detection**: Search automatically recognizes person names without `person:` prefix
+2. **Graceful degradation**: Search works even if person profile isn't ready yet
+3. **Minimal UI footprint**: Lightweight management without feeling like a separate product
+4. **Backend-driven**: Frontend trusts backend for person parsing and fusion logic
+
+### Implementation Phases
+
+#### Phase 1: API Client Wrappers
+**File:** `services/frontend/src/lib/people-api.ts`
+
+Created type-safe API client following existing patterns from `supabase.ts`:
+- `listPersons()` - Get all person profiles
+- `createPerson(displayName)` - Create new profile
+- `getPerson(personId)` - Get details with photos
+- `getPersonPhotoUploadUrl(personId)` - Get signed upload URL
+- `uploadPhotoToStorage(uploadUrl, file)` - Direct upload to Supabase Storage
+- `completePersonPhotoUpload(personId, photoId, storagePath)` - Mark upload complete
+- `deletePerson(personId)` - Delete profile and photos
+
+**Type Definitions Added to `types/index.ts`:**
+```typescript
+PersonStatus = 'NEEDS_PHOTOS' | 'PROCESSING' | 'READY'
+PersonPhotoState = 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED'
+Person, PersonPhoto, CreatePersonRequest, PersonPhotoUploadUrl, CompletePhotoUploadRequest
+```
+
+#### Phase 2: People Management UI
+**File:** `services/frontend/src/app/people/page.tsx`
+
+Full-featured management page with:
+- **Person cards grid**: Shows status, photo counts, actions
+- **Create modal**: Simple name input form
+- **Detail modal**: Photo list, upload, real-time status polling
+- **Status indicators**: Color-coded pills (NEEDS_PHOTOS=red, PROCESSING=yellow, READY=green)
+- **Photo state tracking**: Individual photo states with quality scores
+- **Polling logic**: Auto-refresh when photos are PROCESSING/UPLOADED (every 3s)
+
+**Components:**
+- `PersonCard` - Grid item with status and quick actions
+- `CreatePersonModal` - Name input with validation
+- `PersonDetailsModal` - Photo management with upload flow
+
+**Upload Flow:**
+1. User selects files → `getPersonPhotoUploadUrl()` for each
+2. Direct PUT to Supabase Storage via signed URL
+3. Call `completePersonPhotoUpload()` to trigger backend processing
+4. Poll `getPerson()` every 3s until photos reach stable state
+
+**I18n Support:** Added `people` section to `lib/i18n/types.ts` and `translations.ts` (English + Korean)
+
+#### Phase 3: Search Page Integration
+**File:** `services/frontend/src/app/search/page.tsx`
+
+Added implicit person detection with UI feedback:
+
+**Detection Logic:**
+- Load `listPersons()` on page mount
+- On query change: Longest-match-first, case-insensitive, word-boundary-safe matching
+- Only detect names at start of query (prefix matching)
+- Example: "j lee doing push ups" → detects "J Lee" if profile exists
+
+**UI Feedback:**
+- **Cyan badge**: "Person detected: J Lee"
+- **Yellow warning**: If person not ready (no embedding or photos still processing)
+  - Shows: "J Lee profile is still processing (2/5 photos ready). Results may not be boosted yet."
+- **Manage link**: Quick jump to `/people` page
+
+**Backend Trust:** Frontend sends query as-is (no rewriting). Backend parses and applies person fusion automatically.
+
+#### Phase 4: Dashboard Affordance
+**File:** `services/frontend/src/app/dashboard/page.tsx`
+
+Added subtle feature card above stats overview:
+- Gradient card with people icon
+- Description: "Add face profiles to boost person-based search results"
+- Action button: "Add Person" → navigates to `/people`
+- Non-intrusive, dismissable by scrolling
+
+### Technical Details
+
+**State Management:**
+- Local React state (useState) for all UI state
+- Real-time polling for async operations (photo processing)
+- No global state library needed
+
+**Error Handling:**
+- Try-catch with user-facing notifications
+- Console logging for debugging
+- Graceful fallbacks (e.g., search works even if person detection fails)
+
+**Auth Integration:**
+- Session checks via `supabase.auth.getSession()`
+- Automatic JWT token injection via `apiRequest()` wrapper
+- Redirect to `/login` if unauthenticated
+
+**Styling:**
+- Reused existing `.card`, `.btn`, `.badge`, `.status-badge` classes
+- Dark theme with accent colors (cyan/violet)
+- Responsive grid layouts
+- Inline SVG icons (no icon library dependency)
+
+### Files Changed
+
+**New Files:**
+- `services/frontend/src/lib/people-api.ts` (API client)
+- `services/frontend/src/app/people/page.tsx` (People management page)
+
+**Modified Files:**
+- `services/frontend/src/types/index.ts` (Person types)
+- `services/frontend/src/lib/i18n/types.ts` (People i18n types)
+- `services/frontend/src/lib/i18n/translations.ts` (EN/KO translations)
+- `services/frontend/src/app/search/page.tsx` (Detection UI)
+- `services/frontend/src/app/dashboard/page.tsx` (Feature card)
+
+### Edge Cases Handled
+
+1. **Empty state**: No people → shows empty state with CTA
+2. **No photos**: Person exists but no photos → shows "Needs Photos" status
+3. **Processing photos**: Real-time polling until stable state
+4. **Failed photos**: Shows error message in photo list
+5. **Person not ready**: Search shows warning but doesn't block
+6. **Ambiguous names**: Longest-match-first prevents "Ann" matching "Annabelle"
+7. **Word boundaries**: "j lee home" matches "J Lee", "jlee" doesn't
+8. **Case insensitive**: "j lee" matches "J Lee", "J LEE", etc.
+
+### Docker Development Workflow
+
+All development assumes Docker environment:
+```bash
+# Frontend dev server
+docker-compose up frontend
+
+# Build and test
+docker-compose run frontend npm run build
+docker-compose run frontend npm run lint
+```
+
+### Manual Test Checklist
+
+#### People Management (`/people`):
+- [ ] Page loads without auth → redirects to login
+- [ ] Empty state shows when no people exist
+- [ ] "Add Person" modal opens and accepts name
+- [ ] New person appears in grid with "Needs Photos" status
+- [ ] Click "View Details" opens modal with photo list
+- [ ] "Add Photos" allows multi-select upload
+- [ ] Upload progress shows, then photos appear in list
+- [ ] Photos transition: UPLOADED → PROCESSING → READY
+- [ ] Polling stops when all photos reach stable state
+- [ ] Failed photos show error message
+- [ ] Delete person removes from list (with confirmation)
+- [ ] Korean translations work correctly
+
+#### Search Integration (`/search`):
+- [ ] Search page loads without error
+- [ ] Type "j lee doing push ups" → person badge appears
+- [ ] Badge shows "Person detected: J Lee"
+- [ ] If person not ready → yellow warning with photo count
+- [ ] Click "Manage people" → navigates to `/people`
+- [ ] Search works normally with detected person
+- [ ] Search works if no person detected
+- [ ] Query with multiple words matches longest name first
+- [ ] Case variations match correctly ("J LEE", "j lee", "J Lee")
+
+#### Dashboard Affordance (`/dashboard`):
+- [ ] Feature card appears below header
+- [ ] Card has gradient styling and icon
+- [ ] "Add Person" button navigates to `/people`
+- [ ] Card doesn't interfere with other dashboard features
+
+### Future Enhancements
+
+**Phase 5 (Potential):**
+- Show person badge in search results if backend returns fusion info
+- Person autocomplete in search input
+- Batch photo upload with progress bars
+- Photo preview thumbnails
+- Edit person name
+- Person stats (search count, last used)
+
+### Deployment Notes
+
+- No backend changes required (backend Phases 1-11 already deployed)
+- No database migrations needed (person tables already exist)
+- Frontend build includes all new routes automatically
+- No environment variables added
+- No new dependencies (reused existing packages)
+
+### Breaking Changes
+
+None. Feature is fully additive and backward-compatible.
+
+### Known Limitations
+
+1. Person detection only works at query start (prefix matching)
+2. No fuzzy matching (must match exact name spelling)
+3. No person merge/dedup logic in UI
+4. Photo upload limited to browser memory (no chunked uploads)
+5. No photo cropping/editing tools
+6. Polling continues indefinitely if backend stuck in PROCESSING

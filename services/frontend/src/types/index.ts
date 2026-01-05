@@ -210,3 +210,66 @@ export interface SceneExport {
   completed_at?: string;
   expires_at: string;
 }
+
+/**
+ * Person status enum.
+ */
+export type PersonStatus = 'NEEDS_PHOTOS' | 'PROCESSING' | 'READY';
+
+/**
+ * Person photo state enum.
+ */
+export type PersonPhotoState = 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED';
+
+/**
+ * Person photo interface.
+ */
+export interface PersonPhoto {
+  id: string;
+  person_id: string;
+  storage_path: string;
+  state: PersonPhotoState;
+  quality_score?: number;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Person profile interface.
+ */
+export interface Person {
+  id: string;
+  owner_id: string;
+  display_name: string;
+  status: PersonStatus;
+  ready_photos_count: number;
+  total_photos_count: number;
+  has_query_embedding: boolean;
+  photos?: PersonPhoto[];
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Request to create a new person.
+ */
+export interface CreatePersonRequest {
+  display_name: string;
+}
+
+/**
+ * Response when requesting a photo upload URL.
+ */
+export interface PersonPhotoUploadUrl {
+  upload_url: string;
+  storage_path: string;
+  photo_id: string;
+}
+
+/**
+ * Request to complete a photo upload.
+ */
+export interface CompletePhotoUploadRequest {
+  storage_path: string;
+}
