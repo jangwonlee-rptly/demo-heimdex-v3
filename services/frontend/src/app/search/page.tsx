@@ -472,8 +472,8 @@ export default function SearchPage() {
                             </span>
                           )}
                           {scene.match_quality === 'best_guess' && (
-                            <span className="badge badge-warning text-[10px] py-0.5" title={t.search.bestGuessHint || 'No exact matches found. Showing semantic approximations.'}>
-                              {t.search.bestGuess || 'Best guess'}
+                            <span className="badge badge-warning text-[10px] py-0.5" title="No exact matches found. Showing semantic approximations.">
+                              Best guess
                             </span>
                           )}
                         </div>
