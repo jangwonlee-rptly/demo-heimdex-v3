@@ -1107,7 +1107,7 @@ class Database:
             self.client.table("video_scenes")
             .select("*")
             .eq("video_id", str(video_id))
-            .order("scene_number", desc=False)
+            .order("index", desc=False)
             .execute()
         )
         return response.data if response.data else []

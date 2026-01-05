@@ -581,8 +581,8 @@ class ReprocessRunner:
                     continue
 
                 # Generate thumbnail embedding
-                scene_number = scene.get("scene_number", 0)
-                thumbnail_path = self.storage.get_scene_thumbnail_path(video_id, scene_number)
+                scene_index = scene.get("index", 0)
+                thumbnail_path = self.storage.get_scene_thumbnail_path(video_id, scene_index)
 
                 if not thumbnail_path:
                     logger.warning(f"No thumbnail found for scene {scene_id}")
