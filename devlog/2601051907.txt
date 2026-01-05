@@ -1,0 +1,258 @@
+[2026-01-05 19:07] Bugfix #3 - Worker Import Error for Reference Photo Task
+File: devlog/2601051907.txt
+
+== What we worked on ==
+- Fixed critical import error in reference photo processing task
+- Worker was failing with ModuleNotFoundError when processing uploaded photos
+- Error occurred at task execution time, not at worker startup
+- This was blocking all photo uploads for the People feature
+
+== Changes made ==
+libs/tasks/reference_photo.py (lines 42-43):
+- Changed incorrect absolute import: `from services.worker.src.tasks`
+- To correct relative import: `from src.tasks`
+- Changed incorrect: `from services.worker.src.domain.person_photo_processor`
+- To correct: `from src.domain.person_photo_processor`
+
+BUGFIX_WORKER_IMPORTS.md:
+- Comprehensive documentation of the import error and fix
+- Explains Python path resolution in Docker worker environment
+- Documents correct import pattern used by all other tasks
+- Includes deployment and testing instructions
+
+== Problems encountered ==
+Worker ModuleNotFoundError (Third Critical Bug in People Feature)
+- Symptom: Task failed with "ModuleNotFoundError: No module named 'services'"
+- Logs showed: Error at line 42 in reference_photo.py during task execution
+- Task retried once (20s backoff) then gave up
+- Photos stuck in UPLOADED state forever
+
+Error Details from Worker Logs:
+```
+2026-01-05 10:05:03,399 - dramatiq.worker.WorkerThread - ERROR - Failed to process message
+process_reference_photo('ecfcd3db-36dc-4973-ba6a-f9bd6fb2097b') with unhandled exception.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/dramatiq/worker.py", line 540, in process_message
+    res = actor(*message.args, **message.kwargs)
+  File "/usr/local/lib/python3.11/site-packages/dramatiq/actor.py", line 193, in __call__
+    return self.fn(*args, **kwargs)
+  File "/app/libs/tasks/reference_photo.py", line 42, in process_reference_photo
+    from services.worker.src.tasks import get_worker_context
+ModuleNotFoundError: No module named 'services'
+```
+
+Why This Import Failed:
+1. Worker Docker container has `/app` as working directory
+2. Python sys.path includes `/app` but not monorepo root
+3. Inside container, directory structure is:
+   ```
+   /app/
+     src/              # Worker source code
+       tasks.py
+       domain/
+         person_photo_processor.py
+     libs/             # Shared task definitions
+       tasks/
+         reference_photo.py
+   ```
+4. From Python's perspective, `services.worker.src` doesn't exist
+5. Only `src` exists (as `/app/src`)
+
+Correct Import Pattern:
+- All other task files use: `from src.tasks import get_worker_context`
+- This works because Python resolves relative to `/app` (in sys.path)
+- `/app/src/tasks.py` exists and can be imported
+
+Why This Wasn't Caught Earlier:
+- Worker starts successfully (tasks registered, broker connected)
+- Import error only occurs when task executes (lazy import)
+- No smoke tests that actually run task code
+- No integration tests for worker task execution
+
+== How we tried to solve it ==
+Investigation Steps:
+1. Read worker logs showing ModuleNotFoundError
+2. Located error source: line 42 in libs/tasks/reference_photo.py
+3. Examined incorrect import: `from services.worker.src.tasks`
+4. Checked worker Dockerfile to understand Python path setup
+5. Verified working directory is `/app` inside container
+6. Examined other task files for correct pattern
+7. Found all use `from src.*` imports
+
+Verification:
+```bash
+# Check all task imports
+grep -n "from src" libs/tasks/*.py
+
+# Results showed correct pattern in all other files:
+libs/tasks/highlight_export.py:47:    from src.tasks import get_worker_context
+libs/tasks/scene_export.py:35:    from src.tasks import get_worker_context
+libs/tasks/video_processing.py:48:    from src.tasks import get_worker_context
+libs/tasks/video_processing.py:49:    from src.domain.video_processor import VideoProcessor
+
+# Only reference_photo.py had wrong import
+```
+
+== How we solved it / Current status ==
+✅ FIXED - Import paths corrected
+
+Solution:
+Changed imports from absolute monorepo path to container-relative path:
+
+Before:
+```python
+from services.worker.src.tasks import get_worker_context
+from services.worker.src.domain.person_photo_processor import PersonPhotoProcessor
+```
+
+After:
+```python
+from src.tasks import get_worker_context
+from src.domain.person_photo_processor import PersonPhotoProcessor
+```
+
+This matches the pattern used by all other task files and works because:
+- Python resolves imports relative to sys.path
+- Worker container has `/app` in sys.path
+- `/app/src/` contains the modules we need
+
+Deployment:
+```bash
+docker-compose build worker   # Rebuild with fixed imports
+docker-compose up -d worker   # Restart worker
+```
+
+Worker Startup Verification:
+```
+worker-1  | 2026-01-05 10:07:04,659 - src.tasks - INFO - Worker bootstrapped successfully
+worker-1  | 2026-01-05 10:07:04,673 - dramatiq.MainProcess - INFO - Dramatiq '2.0.0' is booting up.
+```
+
+== Next steps / TODOs ==
+Testing & Validation:
+- [ ] Test photo upload flow end-to-end
+- [ ] Upload reference photo for a person
+- [ ] Check worker logs for successful processing:
+      Expected: "Starting reference photo processing for photo_id={uuid}"
+      Expected: "Completed reference photo processing for photo_id={uuid}"
+- [ ] Verify photo transitions: UPLOADED → PROCESSING → READY
+- [ ] Verify person.has_query_embedding becomes true
+- [ ] Verify person.query_embedding is populated (aggregated from photos)
+- [ ] Test person detection in search with ready person profile
+
+Prevention & Improvements:
+- [ ] Add smoke tests that import and instantiate each task
+- [ ] Document correct import pattern in libs/tasks/README.md
+- [ ] Add CI job that builds and tests worker before deployment
+- [ ] Consider adding runtime import validation at worker startup
+- [ ] Review all task files for consistency
+
+Documentation:
+- [ ] Update worker development docs with import pattern guidelines
+- [ ] Add troubleshooting section for ModuleNotFoundError
+- [ ] Document Docker container Python path setup
+
+== Root cause analysis ==
+Pattern Recognition:
+This is the THIRD critical bug in People feature after deployment:
+1. First: Frontend response wrapper mismatches
+2. Second: Query parameter vs request body
+3. Third: Worker import path error (current)
+
+Common Theme - Integration Issues:
+All three bugs were integration/deployment issues, not logic bugs:
+1. Contract mismatches between services
+2. Runtime environment differences (Docker vs local)
+3. Python path resolution in containers
+
+Why This Specific Issue:
+1. Reference photo task was last one implemented for People feature
+2. Likely copied import from somewhere and adapted incorrectly
+3. All other task files use correct pattern
+4. No integration tests verify tasks can actually run
+5. Worker starts successfully even with bad imports (lazy import)
+6. Error only surfaces when task executes
+
+Import Pattern Confusion:
+In monorepo development:
+- Editor/IDE shows: `services/worker/src/tasks.py`
+- Developer might write: `from services.worker.src.tasks import ...`
+- This works in IDE but fails at runtime in container
+
+Inside worker container:
+- Working directory: `/app`
+- Python path: `/app` (via Docker COPY)
+- Must use: `from src.tasks import ...`
+
+Best Practice Violated:
+Should have matched pattern from existing task files:
+```python
+# Good - All other tasks use this
+from src.tasks import get_worker_context
+
+# Bad - Monorepo absolute path
+from services.worker.src.tasks import get_worker_context
+```
+
+== Impact ==
+Severity: Critical (photo processing completely broken)
+Scope: All reference photo uploads
+User Impact: Photos stuck in UPLOADED state forever, feature unusable
+Time to Fix: ~5 minutes (straightforward import fix once identified)
+Blocking: Complete photo upload flow broken without this fix
+
+User Experience Impact:
+- User uploads photo
+- Photo shows as "Uploaded" in UI
+- Never transitions to "Processing" or "Ready"
+- Person status stays "Needs Photos"
+- Person search doesn't work (no embedding)
+- No visible error in frontend (fails silently in background)
+
+== Lessons learned ==
+1. Match import patterns from existing code in same directory
+2. Container Python paths differ from monorepo structure
+3. Worker startup success doesn't mean tasks will run
+4. Lazy imports delay errors to runtime (task execution time)
+5. Integration tests for worker tasks are essential
+6. Three deployment bugs suggest need for better testing strategy
+7. Import errors in workers can fail silently to end users
+8. Check worker logs after deployment, don't just trust startup
+9. Smoke tests should actually execute task code, not just import modules
+10. Docker COPY affects Python import resolution significantly
+
+== Prevention strategy ==
+Immediate (Testing):
+1. Test complete photo upload flow with real worker
+2. Monitor worker logs during testing for any errors
+3. Verify all photos transition to READY state
+4. Test person search with embedded person profiles
+
+Short-term (Code Quality):
+1. Add smoke test that executes each task with mock data
+2. Document correct import pattern in libs/tasks/README.md
+3. Add linting rule to catch `from services.worker.*` imports
+4. Create task template with correct imports for future tasks
+
+Long-term (Architecture):
+1. Add integration test suite for worker tasks
+2. Run worker tests in CI pipeline before deployment
+3. Add runtime import validation at worker startup
+4. Consider shared package for common worker imports
+5. Add worker smoke test endpoint that attempts to run each task
+6. Implement better error propagation from worker to API
+
+Process Improvements:
+1. Deploy + test incrementally (don't batch multiple fixes)
+2. Check logs immediately after deployment
+3. Test end-to-end flows, not just happy path
+4. Add monitoring for worker task failures
+5. Consider staging environment for integration testing
+
+== Related issues ==
+Three bugs in People feature deployment:
+1. devlog/2601051844.txt - Frontend API response mismatches
+2. devlog/2601051853.txt - Photo upload query parameter issue
+3. devlog/2601051907.txt - Worker import error (current)
+
+Common root cause: Integration testing gap between services

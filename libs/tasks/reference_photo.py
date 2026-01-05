@@ -39,8 +39,8 @@ def process_reference_photo(photo_id: str) -> None:
         Exception: Any processing error (logged and saved to photo record)
     """
     # Lazy import to avoid import-time side effects
-    from services.worker.src.tasks import get_worker_context
-    from services.worker.src.domain.person_photo_processor import PersonPhotoProcessor
+    from src.tasks import get_worker_context
+    from src.domain.person_photo_processor import PersonPhotoProcessor
 
     ctx = get_worker_context()
     db = ctx.db
