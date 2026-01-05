@@ -1,0 +1,364 @@
+[2026-01-05 19:38] Bugfix #5 - Photo Download Method Signature Mismatch
+File: devlog/2601051938.txt
+
+== What we worked on ==
+- Fixed TypeError in reference photo processing task
+- Worker was calling storage.download_file() with wrong arguments
+- Method requires both storage_path and local_path, but only storage_path was passed
+- This broke all photo processing attempts
+
+== Changes made ==
+services/worker/src/domain/person_photo_processor.py (lines 64-70):
+- Fixed download_file() call to include both required arguments
+- Removed manual bytes writing (adapter handles this)
+- Simplified code by using adapter's built-in file writing
+
+Before:
+```python
+photo_data = self.storage.download_file(storage_path)
+local_path.write_bytes(photo_data)
+```
+
+After:
+```python
+self.storage.download_file(storage_path, local_path)
+```
+
+BUGFIX_PHOTO_DOWNLOAD.md:
+- Complete documentation of method signature mismatch
+- Explains storage adapter API design
+- Includes testing procedures and prevention strategies
+
+== Problems encountered ==
+Method Signature Mismatch (Fifth People Feature Bug)
+- Symptom: TypeError when worker processes reference photo
+- Error: "SupabaseStorage.download_file() missing 1 required positional argument: 'local_path'"
+- Occurred in: PersonPhotoProcessor.process_photo() at line 69
+- Photos stuck in PROCESSING state
+
+Error Details from Worker Logs:
+```
+2026-01-05 10:36:22,916 - src.domain.person_photo_processor - ERROR -
+Failed to process photo c7bbc7c2-29f7-412a-bc7b-03d3a24270c2:
+SupabaseStorage.download_file() missing 1 required positional argument: 'local_path'
+
+Traceback (most recent call last):
+  File "/app/src/domain/person_photo_processor.py", line 69, in process_photo
+    photo_data = self.storage.download_file(storage_path)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: SupabaseStorage.download_file() missing 1 required positional argument: 'local_path'
+```
+
+Storage Adapter Actual Signature:
+```python
+# services/worker/src/adapters/supabase.py
+def download_file(self, storage_path: str, local_path: Path) -> None:
+    """
+    Download file from storage to local path.
+
+    Args:
+        storage_path: Path to the file in storage
+        local_path: Local file path to save to
+
+    Returns:
+        None: This function does not return a value.
+    """
+    logger.info(f"Downloading {storage_path} to {local_path}")
+    file_bytes = self.client.storage.from_(self.bucket_name).download(storage_path)
+    local_path.write_bytes(file_bytes)
+    logger.info(f"Downloaded {len(file_bytes)} bytes")
+```
+
+Incorrect Usage Pattern:
+```python
+# PersonPhotoProcessor (WRONG)
+with TemporaryDirectory() as tmpdir:
+    local_path = Path(tmpdir) / f"photo_{photo_id}.jpg"
+
+    # ❌ Only passing storage_path, missing local_path
+    photo_data = self.storage.download_file(storage_path)
+
+    # ❌ Trying to manually write bytes
+    local_path.write_bytes(photo_data)
+```
+
+Why This Pattern Was Wrong:
+1. Assumed download_file() returns bytes (it doesn't, returns None)
+2. Tried to write bytes manually (adapter already does this)
+3. Missing required local_path argument
+4. Didn't check actual method signature before calling
+5. Didn't follow existing patterns from video processor
+
+Expected API Contract:
+- Method name: download_file()
+- Arguments: storage_path (str), local_path (Path)
+- Returns: None (writes file as side effect)
+- Behavior: Downloads from storage, writes to local file, logs progress
+
+What Developer Assumed:
+- Arguments: storage_path (str)
+- Returns: bytes (raw file data)
+- Behavior: Just downloads and returns bytes
+
+This is a common pattern mismatch between different storage libraries.
+
+== How we tried to solve it ==
+Investigation Steps:
+1. Read worker logs showing TypeError
+2. Located error at line 69 in person_photo_processor.py
+3. Checked actual storage adapter implementation
+4. Found download_file() requires two arguments
+5. Compared with how video processor uses storage adapter
+
+Verification:
+```bash
+# Check storage adapter signature
+grep -A 15 "def download_file" services/worker/src/adapters/supabase.py
+
+# Result: Requires storage_path AND local_path
+```
+
+Pattern Comparison:
+- Video processor: Likely uses storage.download_file(path, local) correctly
+- Photo processor: Used storage.download_file(path) incorrectly
+- Should have checked video processor first for established pattern
+
+== How we solved it / Current status ==
+✅ FIXED - Method called with correct arguments
+
+Solution:
+Pass both required arguments to download_file():
+
+```python
+# services/worker/src/domain/person_photo_processor.py (FIXED)
+with TemporaryDirectory() as tmpdir:
+    local_path = Path(tmpdir) / f"photo_{photo_id}.jpg"
+
+    logger.info(f"Downloading photo from {storage_path}")
+    # ✅ Pass both storage_path and local_path
+    self.storage.download_file(storage_path, local_path)
+
+    # File is already written by adapter, continue with processing
+    embedding, metadata = self.clip_embedder.create_visual_embedding(
+        image_path=local_path,
+        timeout_s=5.0,
+    )
+```
+
+Why This Is Better:
+1. Uses adapter API correctly (both required args)
+2. Cleaner code (no manual byte handling)
+3. Adapter handles file I/O safely
+4. Consistent with how other processors work
+5. Respects API contract and design
+
+Deployment:
+```bash
+docker-compose build worker   # Rebuilt with fix
+docker-compose up -d worker   # Restarted
+```
+
+Worker Startup Verification:
+```
+worker-1  | 2026-01-05 10:37:40,359 - src.tasks - INFO - Worker bootstrapped successfully
+worker-1  | 2026-01-05 10:37:40,374 - dramatiq.MainProcess - INFO - Dramatiq '2.0.0' is booting up.
+```
+
+Expected Behavior After Fix:
+```
+Starting reference photo processing for photo_id={uuid}
+Downloading photo from persons/.../refs/{photo_id}.jpg
+Downloaded {size} bytes
+Generating CLIP embedding for {local_path}
+Computed quality score: 0.XX
+Photo {photo_id} marked as READY
+Updated person {person_id} query embedding (aggregated from N photos)
+Completed reference photo processing for photo_id={uuid}
+```
+
+== Next steps / TODOs ==
+Testing:
+- [ ] Upload reference photo for person
+- [ ] Monitor worker logs for successful processing
+- [ ] Verify photo transitions: UPLOADED → PROCESSING → READY
+- [ ] Verify person.has_query_embedding becomes true
+- [ ] Test person detection in search
+- [ ] Test with multiple photos (aggregation)
+- [ ] Test photo quality scoring
+
+Code Quality:
+- [ ] Add type checking (mypy) to worker CI
+- [ ] Add unit tests for PersonPhotoProcessor
+- [ ] Mock storage adapter in tests
+- [ ] Verify correct method calls and arguments
+- [ ] Check video processor for similar patterns
+
+Prevention:
+- [ ] Review all storage adapter usages in codebase
+- [ ] Document storage adapter API in docstrings
+- [ ] Add integration test that processes real photo
+- [ ] Run smoke tests before deployment
+- [ ] Consider adding runtime type validation
+
+== Root cause analysis ==
+Pattern Recognition:
+This is the FIFTH deployment bug in People feature:
+1. Frontend response wrapper mismatches
+2. Query parameter vs request body
+3. Worker import path error
+4. JSON parse error on delete
+5. Storage method signature mismatch (current)
+
+Common Theme - Assumptions Without Verification:
+All bugs from making assumptions instead of checking:
+1. Assumed response format without checking backend
+2. Assumed request format without checking backend
+3. Assumed import paths without checking runtime environment
+4. Assumed all responses have JSON
+5. Assumed storage API without checking actual signature
+
+Why This Specific Issue:
+1. Storage adapters vary widely between libraries
+2. Some return bytes: `bytes = storage.download(path)`
+3. Some write files: `storage.download(path, local_path)`
+4. Developer assumed bytes-returning pattern
+5. Didn't check actual implementation before using
+6. Didn't follow existing patterns from video processor
+
+API Design Patterns:
+Two common patterns for download methods:
+
+Pattern A - Return bytes:
+```python
+def download_file(self, storage_path: str) -> bytes:
+    return self.client.download(storage_path)
+
+# Usage:
+bytes_data = storage.download_file(path)
+local_path.write_bytes(bytes_data)
+```
+
+Pattern B - Write file (our adapter):
+```python
+def download_file(self, storage_path: str, local_path: Path) -> None:
+    bytes_data = self.client.download(storage_path)
+    local_path.write_bytes(bytes_data)
+
+# Usage:
+storage.download_file(path, local_path)
+```
+
+Our adapter uses Pattern B, but developer assumed Pattern A.
+
+Why Pattern B Is Better:
+1. Encapsulates file I/O in adapter
+2. Single responsibility (adapter handles storage)
+3. Easier to mock in tests
+4. Consistent error handling
+5. Better logging at adapter level
+
+Type Hints Would Help:
+```python
+# If using mypy with strict mode:
+def download_file(self, storage_path: str, local_path: Path) -> None:
+    ...
+
+# This call would fail type checking:
+photo_data = self.storage.download_file(storage_path)
+# Error: Too few arguments for "download_file"
+# Error: "None" is not assignable to "bytes"
+```
+
+But we're not running mypy in CI currently.
+
+== Impact ==
+Severity: Critical (photo processing completely broken)
+Scope: All reference photo uploads
+User Impact: Photos stuck in PROCESSING state forever, person profiles unusable
+Time to Fix: ~2 minutes (simple argument fix once identified)
+Blocking: Complete People feature broken without this fix
+
+User Experience Impact:
+- User uploads photo successfully
+- Photo shows "Processing..." status
+- Never transitions to "Ready"
+- Person status stays "Needs Photos"
+- Person search doesn't work (no embedding)
+- No error visible in frontend (fails in background worker)
+
+Silent Failure Mode:
+- Frontend thinks upload succeeded (it did)
+- Backend queues task successfully
+- Worker processes task but fails
+- Error only visible in worker logs
+- User has no indication anything is wrong
+- Very poor UX - user doesn't know what to do
+
+== Lessons learned ==
+1. Check method signatures before calling them
+2. Read actual implementation, don't assume based on naming
+3. Follow existing patterns in codebase (check video processor)
+4. Type hints help but need to be enforced with mypy
+5. Different storage libraries have different API patterns
+6. File I/O encapsulation in adapters is cleaner
+7. Unit tests with mocks would catch this immediately
+8. Integration tests are essential for background workers
+9. Worker errors often invisible to end users (silent failures)
+10. Five bugs in one feature suggests systematic testing gap
+
+== Prevention strategy ==
+Immediate (Testing):
+1. Test photo upload end-to-end with real photos
+2. Monitor worker logs during testing
+3. Verify all state transitions work correctly
+4. Test person detection in search
+
+Short-term (Code Quality):
+1. Add mypy type checking to CI pipeline:
+   ```bash
+   mypy services/worker/src --strict
+   ```
+2. Add unit tests for PersonPhotoProcessor:
+   ```python
+   def test_process_photo_downloads_from_storage(mock_storage):
+       processor = PersonPhotoProcessor(...)
+       processor.process_photo(photo_id)
+       mock_storage.download_file.assert_called_once_with(
+           storage_path, local_path
+       )
+   ```
+3. Review all storage adapter usages for consistency
+4. Document storage adapter API patterns
+
+Long-term (Architecture):
+1. Run type checking in CI for all Python services
+2. Add integration tests that run worker tasks
+3. Add smoke tests for each task type
+4. Consider contract testing for adapters
+5. Add runtime type validation where critical
+6. Improve error visibility from worker to frontend
+7. Add worker health checks and monitoring
+
+Documentation:
+1. Document storage adapter API in module docstrings
+2. Add examples of correct usage
+3. Create pattern guide for common operations
+4. Document differences from other storage libraries
+
+Process Improvements:
+1. Check existing similar code before implementing new code
+2. Run mypy locally before committing
+3. Write unit tests alongside implementation
+4. Test with real data in development environment
+5. Review PRs for API usage patterns
+
+== Related issues ==
+Five bugs in People feature deployment:
+1. devlog/2601051844.txt - Response wrapper mismatches
+2. devlog/2601051853.txt - Query parameter issue
+3. devlog/2601051907.txt - Worker import error
+4. devlog/2601051917.txt - JSON parse error on delete
+5. devlog/2601051938.txt - Storage method signature (current)
+
+All found through manual testing after deployment.
+Systematic need for automated integration testing.

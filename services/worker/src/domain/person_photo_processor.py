@@ -66,8 +66,7 @@ class PersonPhotoProcessor:
                 local_path = Path(tmpdir) / f"photo_{photo_id}.jpg"
 
                 logger.info(f"Downloading photo from {storage_path}")
-                photo_data = self.storage.download_file(storage_path)
-                local_path.write_bytes(photo_data)
+                self.storage.download_file(storage_path, local_path)
 
                 # Generate CLIP embedding
                 logger.info(f"Generating CLIP embedding for {local_path}")
