@@ -1238,7 +1238,20 @@ class Database:
             scene: Scene record dict
         """
         if self.opensearch:
-            self._index_scene_to_opensearch(scene)
+            self._index_scene_to_opensearch(
+                scene_id=UUID(scene["id"]),
+                video_id=UUID(scene["video_id"]),
+                owner_id=scene.get("owner_id"),
+                index=scene["index"],
+                start_s=scene["start_s"],
+                end_s=scene["end_s"],
+                transcript_segment=scene.get("transcript_segment"),
+                visual_summary=scene.get("visual_summary"),
+                visual_description=scene.get("visual_description"),
+                combined_text=scene.get("combined_text"),
+                tags=scene.get("tags"),
+                thumbnail_url=scene.get("thumbnail_url"),
+            )
 
 
 # No global database instance - Database should be created via dependency injection

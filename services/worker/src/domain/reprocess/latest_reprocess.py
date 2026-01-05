@@ -547,16 +547,68 @@ class ReprocessRunner:
 
         for scene in scenes:
             try:
+                scene_id = UUID(scene["id"])
+
                 # Skip if embedding exists and not forcing
                 if not request.force and scene.get("embedding_visual_clip") is not None:
+                    progress.scenes_skipped += 1
                     continue
 
-                # Regenerate using SidecarBuilder
-                self.sidecar_builder._add_clip_embedding(scene)
+                # Get thumbnail URL
+                thumbnail_url = scene.get("thumbnail_url")
+                if not thumbnail_url:
+                    logger.warning(f"No thumbnail URL for scene {scene_id}, skipping CLIP embedding")
+                    progress.scenes_skipped += 1
+                    continue
+
+                # Convert URL to storage path (remove base URL if present)
+                # thumbnail_url is typically a full Supabase URL, we need the storage path
+                storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
+
+                # Download thumbnail to temporary location
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+                    tmp_path = Path(tmp_file.name)
+
+                try:
+                    self.storage.download_file(storage_path, tmp_path)
+
+                    # Generate CLIP embedding
+                    embedding_visual_clip, clip_metadata = self.clip_embedder.create_visual_embedding(
+                        image_path=tmp_path,
+                        quality_info=None,
+                        timeout_s=30,
+                    )
+
+                    if embedding_visual_clip is None:
+                        error = clip_metadata.error if clip_metadata else "unknown_error"
+                        logger.warning(f"CLIP embedding generation failed for scene {scene_id}: {error}")
+                        progress.scenes_failed += 1
+                    else:
+                        # Update scene in database
+                        def to_pgvector(emb: list[float]) -> str:
+                            return "[" + ",".join(str(x) for x in emb) + "]"
+
+                        update_data = {
+                            "embedding_visual_clip": to_pgvector(embedding_visual_clip),
+                            "visual_clip_metadata": clip_metadata.to_dict() if clip_metadata else None,
+                        }
+
+                        self.db.client.table("video_scenes").update(update_data).eq("id", str(scene_id)).execute()
+                        progress.scenes_processed += 1
+                        logger.info(f"Regenerated CLIP embedding for scene {scene_id} (dim={len(embedding_visual_clip)})")
+
+                finally:
+                    # Clean up temporary file
+                    try:
+                        tmp_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
 
             except Exception as e:
                 scene_id = scene.get("id", "unknown")
                 logger.error(f"Failed to regenerate CLIP embedding for scene {scene_id}: {e}")
+                progress.scenes_failed += 1
 
     def _regenerate_scene_person_embeddings(
         self,
@@ -578,33 +630,60 @@ class ReprocessRunner:
                 # Check if embedding exists
                 existing = self.db.get_scene_person_embeddings(scene_id)
                 if not request.force and existing:
+                    progress.scenes_skipped += 1
                     continue
 
-                # Generate thumbnail embedding
-                scene_index = scene.get("index", 0)
-                thumbnail_path = self.storage.get_scene_thumbnail_path(video_id, scene_index)
-
-                if not thumbnail_path:
-                    logger.warning(f"No thumbnail found for scene {scene_id}")
+                # Get thumbnail URL from scene
+                thumbnail_url = scene.get("thumbnail_url")
+                if not thumbnail_url:
+                    logger.warning(f"No thumbnail URL for scene {scene_id}, skipping person embedding")
+                    progress.scenes_skipped += 1
                     continue
 
-                # Download thumbnail
-                thumbnail_bytes = self.storage.download_file(thumbnail_path)
+                # Convert URL to storage path (remove base URL if present)
+                storage_path = thumbnail_url.split("/storage/v1/object/public/")[-1] if "/storage/v1/object/public/" in thumbnail_url else thumbnail_url
 
-                # Generate embedding
-                embedding = self.clip_embedder.create_visual_embedding(thumbnail_bytes)
+                # Download thumbnail to temporary location
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+                    tmp_path = Path(tmp_file.name)
 
-                # Store in scene_person_embeddings
-                self.db.upsert_scene_person_embedding(
-                    scene_id=scene_id,
-                    kind="thumbnail",
-                    ordinal=0,
-                    embedding=embedding,
-                )
+                try:
+                    self.storage.download_file(storage_path, tmp_path)
+
+                    # Generate embedding
+                    embedding, metadata = self.clip_embedder.create_visual_embedding(
+                        image_path=tmp_path,
+                        quality_info=None,
+                        timeout_s=30,
+                    )
+
+                    if embedding is None:
+                        error = metadata.error if metadata else "unknown_error"
+                        logger.warning(f"Person embedding generation failed for scene {scene_id}: {error}")
+                        progress.scenes_failed += 1
+                    else:
+                        # Store in scene_person_embeddings
+                        self.db.upsert_scene_person_embedding(
+                            scene_id=scene_id,
+                            kind="thumbnail",
+                            ordinal=0,
+                            embedding=embedding,
+                        )
+                        progress.scenes_processed += 1
+                        logger.info(f"Regenerated scene person embedding for scene {scene_id}")
+
+                finally:
+                    # Clean up temporary file
+                    try:
+                        tmp_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
 
             except Exception as e:
                 scene_id_str = scene.get("id", "unknown")
                 logger.error(f"Failed to regenerate scene person embedding for scene {scene_id_str}: {e}")
+                progress.scenes_failed += 1
 
     def _regenerate_person_photo_embeddings(
         self,
