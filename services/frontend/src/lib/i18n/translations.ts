@@ -384,6 +384,7 @@ export const translations: Record<'en' | 'ko', Translations> = {
       qualityScore: 'Quality',
       selectPhotos: 'Select Photos',
       close: 'Close',
+      autoBoostHint: 'Results will be automatically boosted',
     },
   },
   ko: {
@@ -769,6 +770,7 @@ export const translations: Record<'en' | 'ko', Translations> = {
       qualityScore: '품질',
       selectPhotos: '사진 선택',
       close: '닫기',
+      autoBoostHint: '결과가 자동으로 향상됩니다',
     },
   },
 };

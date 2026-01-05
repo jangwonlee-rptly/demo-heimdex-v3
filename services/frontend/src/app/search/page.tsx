@@ -38,6 +38,11 @@ import {
   isSceneSelected,
   buildExportPayload,
 } from '@/components/highlightReelUtils';
+import {
+  detectPersonInQuery,
+  transformQueryForBackend,
+  type PersonDetectionResult,
+} from '@/lib/person-detection';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +71,7 @@ export default function SearchPage() {
 
   // People detection state
   const [people, setPeople] = useState<Person[]>([]);
-  const [detectedPerson, setDetectedPerson] = useState<Person | null>(null);
+  const [detectedPerson, setDetectedPerson] = useState<PersonDetectionResult | null>(null);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -87,33 +92,10 @@ export default function SearchPage() {
     checkAuth();
   }, [router]);
 
-  // Detect person in query (longest-match-first, case-insensitive, word-boundary safe)
+  // Detect person anywhere in query (longest-match-first, case-insensitive, word-boundary safe)
   useEffect(() => {
-    if (!query.trim() || people.length === 0) {
-      setDetectedPerson(null);
-      return;
-    }
-
-    const normalizedQuery = query.toLowerCase().trim();
-
-    // Sort people by name length (longest first) for greedy matching
-    const sortedPeople = [...people].sort(
-      (a, b) => b.display_name.length - a.display_name.length
-    );
-
-    // Find the first person whose name appears at the start of the query
-    const detected = sortedPeople.find((person) => {
-      const normalizedName = person.display_name.toLowerCase();
-      // Check if query starts with person name
-      if (!normalizedQuery.startsWith(normalizedName)) {
-        return false;
-      }
-      // Ensure word boundary after name (space or end of string)
-      const charAfter = normalizedQuery[normalizedName.length];
-      return !charAfter || /\s/.test(charAfter);
-    });
-
-    setDetectedPerson(detected || null);
+    const detection = detectPersonInQuery(query, people);
+    setDetectedPerson(detection);
   }, [query, people]);
 
   const handleWeightChange = (state: WeightState) => {
@@ -129,9 +111,21 @@ export default function SearchPage() {
     setSearching(true);
 
     try {
+      // Transform query if person detected
+      let searchQuery = query.trim();
+      if (detectedPerson) {
+        searchQuery = transformQueryForBackend(searchQuery, detectedPerson);
+        // Log for debugging (gated by env)
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Person Detection] Original query:', query.trim());
+          console.log('[Person Detection] Transformed query:', searchQuery);
+          console.log('[Person Detection] Detected:', detectedPerson.person.display_name);
+        }
+      }
+
       // Build search payload with weight configuration
       const payload: any = {
-        query: query.trim(),
+        query: searchQuery,
         limit: 20,
         threshold: 0.2,
         use_saved_preferences: useSavedPreferences,
@@ -330,14 +324,54 @@ export default function SearchPage() {
 
           <form onSubmit={handleSearch} className="flex gap-3">
             <div className="relative flex-1">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={t.search.searchPlaceholder}
-                className="input pl-12"
-              />
-              <svg className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              {/* Overlay technique for inline highlighting */}
+              <div className="relative">
+                {/* Styled overlay layer (non-interactive) */}
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 pl-12 pr-4 py-3 pointer-events-none overflow-hidden whitespace-pre-wrap break-words"
+                  style={{
+                    fontFamily: 'inherit',
+                    fontSize: 'inherit',
+                    lineHeight: 'inherit',
+                    color: query ? 'transparent' : 'rgb(148, 163, 184)', // Placeholder color when empty
+                  }}
+                >
+                  {query ? (
+                    // Render highlighted text when query exists
+                    detectedPerson ? (
+                      <>
+                        {query.substring(0, detectedPerson.matchStart)}
+                        <span className="bg-accent-cyan/20 text-accent-cyan rounded-md px-1 shadow-[0_0_8px_rgba(34,211,238,0.35)]">
+                          {query.substring(detectedPerson.matchStart, detectedPerson.matchEnd)}
+                        </span>
+                        {query.substring(detectedPerson.matchEnd)}
+                      </>
+                    ) : (
+                      // No detection - just mirror the text
+                      query
+                    )
+                  ) : (
+                    // Show placeholder when empty
+                    t.search.searchPlaceholder
+                  )}
+                </div>
+
+                {/* Actual input (transparent text, visible caret) */}
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={t.search.searchPlaceholder}
+                  className="input pl-12 relative z-10 bg-transparent caret-accent-cyan"
+                  style={{
+                    color: query ? 'transparent' : 'inherit',
+                  }}
+                />
+              </div>
+
+              {/* Search icon */}
+              <svg className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-500 z-20 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="8" />
                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
@@ -367,7 +401,7 @@ export default function SearchPage() {
           {/* Person Detection Feedback */}
           {detectedPerson && (
             <div className="mt-3 flex items-start gap-2">
-              <div className="flex items-center gap-2 flex-1">
+              <div className="flex items-center gap-2 flex-1 flex-wrap">
                 <span className="status-badge bg-accent-cyan/10 text-accent-cyan text-xs flex items-center gap-1">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -377,10 +411,10 @@ export default function SearchPage() {
                       d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
                     />
                   </svg>
-                  {t.people.personDetected}: {detectedPerson.display_name}
+                  {t.people.personDetected}: {detectedPerson.person.display_name}
                 </span>
-                {(!detectedPerson.has_query_embedding ||
-                  detectedPerson.ready_photos_count === 0) && (
+                {(!detectedPerson.person.has_query_embedding ||
+                  detectedPerson.person.ready_photos_count === 0) && (
                   <span className="text-xs text-yellow-400 flex items-center gap-1">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
@@ -390,7 +424,21 @@ export default function SearchPage() {
                         d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                       />
                     </svg>
-                    {detectedPerson.display_name} {t.people.notReadyWarning} ({detectedPerson.ready_photos_count}/{detectedPerson.total_photos_count} {t.people.photosReady})
+                    {detectedPerson.person.display_name} {t.people.notReadyWarning} ({detectedPerson.person.ready_photos_count}/{detectedPerson.person.total_photos_count} {t.people.photosReady})
+                  </span>
+                )}
+                {detectedPerson.person.has_query_embedding &&
+                  detectedPerson.person.ready_photos_count > 0 && (
+                  <span className="text-xs text-surface-400 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M13 10V3L4 14h7v7l9-11h-7z"
+                      />
+                    </svg>
+                    {t.people.autoBoostHint}
                   </span>
                 )}
               </div>

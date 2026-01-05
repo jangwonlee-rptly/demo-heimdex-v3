@@ -413,5 +413,6 @@ export interface Translations {
     qualityScore: string;
     selectPhotos: string;
     close: string;
+    autoBoostHint: string;
   };
 }

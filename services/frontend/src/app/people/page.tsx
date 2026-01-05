@@ -117,8 +117,14 @@ export default function PeoplePage() {
   }
 
   return (
-    <div className="min-h-screen p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-surface-950 pt-20 pb-12">
+      {/* Background Effects */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-0 right-1/4 w-[600px] h-[600px] bg-accent-cyan/5 rounded-full blur-[150px]" />
+        <div className="absolute bottom-0 left-1/4 w-[500px] h-[500px] bg-accent-violet/5 rounded-full blur-[120px]" />
+      </div>
+
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-surface-50 mb-2">{t.people.title}</h1>
@@ -351,6 +357,12 @@ function PersonDetailsModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // State for instant preview during upload
+  const [uploadingPreviews, setUploadingPreviews] = useState<Record<string, string>>({});
+
+  // State for signed URLs (cached)
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
+
   // Poll for person updates when there are processing photos
   useEffect(() => {
     const hasProcessingPhotos =
@@ -379,13 +391,67 @@ function PersonDetailsModal({
     };
   }, [person]);
 
+  // Generate signed URLs for persisted photos
+  useEffect(() => {
+    const generateSignedUrls = async () => {
+      if (!person.photos) return;
+
+      const newUrls: Record<string, string> = {};
+
+      for (const photo of person.photos) {
+        // Skip if we already have a URL
+        if (signedUrls[photo.id]) continue;
+
+        try {
+          // Generate signed URL (valid for 1 hour)
+          const { data, error } = await supabase.storage
+            .from('videos')
+            .createSignedUrl(photo.storage_path, 3600);
+
+          if (error) throw error;
+          if (data?.signedUrl) {
+            newUrls[photo.id] = data.signedUrl;
+          }
+        } catch (error) {
+          console.error(`Failed to generate signed URL for photo ${photo.id}:`, error);
+        }
+      }
+
+      if (Object.keys(newUrls).length > 0) {
+        setSignedUrls((prev) => ({ ...prev, ...newUrls }));
+      }
+    };
+
+    generateSignedUrls();
+  }, [person.photos]);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(uploadingPreviews).forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+    };
+  }, [uploadingPreviews]);
+
   const handlePhotoUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
     setUploading(true);
+
+    // Create instant previews for all files
+    const previews: Record<string, string> = {};
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const tempId = `temp-${Date.now()}-${i}`;
+      previews[tempId] = URL.createObjectURL(file);
+    }
+    setUploadingPreviews(previews);
+
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        const tempId = `temp-${Date.now()}-${i}`;
 
         // Get upload URL
         const { upload_url, storage_path, photo_id } = await getPersonPhotoUploadUrl(person.id);
@@ -395,6 +461,16 @@ function PersonDetailsModal({
 
         // Mark as complete
         await completePersonPhotoUpload(person.id, photo_id, storage_path);
+
+        // Remove temp preview
+        if (previews[tempId]) {
+          URL.revokeObjectURL(previews[tempId]);
+          setUploadingPreviews((prev) => {
+            const updated = { ...prev };
+            delete updated[tempId];
+            return updated;
+          });
+        }
       }
 
       // Refresh person details
@@ -406,6 +482,7 @@ function PersonDetailsModal({
       alert(t.people.photoUploadError);
     } finally {
       setUploading(false);
+      setUploadingPreviews({});
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -473,41 +550,90 @@ function PersonDetailsModal({
             />
           </div>
 
+          {/* Uploading Previews */}
+          {Object.entries(uploadingPreviews).length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+              {Object.entries(uploadingPreviews).map(([tempId, previewUrl]) => (
+                <div
+                  key={tempId}
+                  className="relative aspect-square rounded-lg overflow-hidden bg-surface-900/50 border border-surface-700/30"
+                >
+                  <img
+                    src={previewUrl}
+                    alt="Uploading..."
+                    className="w-full h-full object-cover opacity-50"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-8 h-8 spinner" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Persisted Photos */}
           {person.photos && person.photos.length > 0 ? (
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {person.photos.map((photo) => {
                 const state = photoStateConfig[photo.state];
+                const thumbnailUrl = signedUrls[photo.id];
+
                 return (
                   <div
                     key={photo.id}
-                    className="flex items-center justify-between p-3 bg-surface-900/50 rounded-lg"
+                    className="relative aspect-square rounded-lg overflow-hidden bg-surface-900/50 border border-surface-700/30"
                   >
-                    <div className="flex-1">
-                      <div className="text-sm text-surface-300 truncate">
-                        {photo.storage_path.split('/').pop()}
+                    {thumbnailUrl ? (
+                      <img
+                        src={thumbnailUrl}
+                        alt={photo.storage_path.split('/').pop()}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-surface-600">
+                        <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.5}
+                            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                          />
+                        </svg>
                       </div>
-                      {photo.quality_score !== undefined && photo.quality_score !== null && (
-                        <div className="text-xs text-surface-400 mt-1">
-                          {t.people.qualityScore}: {photo.quality_score.toFixed(2)}
-                        </div>
-                      )}
-                      {photo.error_message && (
-                        <div className="text-xs text-red-400 mt-1">{photo.error_message}</div>
-                      )}
+                    )}
+
+                    {/* Status Badge Overlay */}
+                    <div className="absolute top-2 right-2">
+                      <span className={`status-badge ${state.color} text-xs`}>
+                        {state.label}
+                      </span>
                     </div>
-                    <span className={`status-badge ${state.color} text-xs ml-3`}>
-                      {state.label}
-                    </span>
+
+                    {/* Quality Score */}
+                    {photo.quality_score !== undefined && photo.quality_score !== null && (
+                      <div className="absolute bottom-2 left-2">
+                        <span className="text-xs bg-black/70 text-white px-2 py-1 rounded">
+                          {t.people.qualityScore}: {photo.quality_score.toFixed(2)}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Error Message */}
+                    {photo.error_message && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-2">
+                        <p className="text-xs text-red-400 text-center">{photo.error_message}</p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          ) : (
+          ) : !uploading && Object.entries(uploadingPreviews).length === 0 ? (
             <div className="text-center py-8 text-surface-400">
               <p className="mb-2">{t.people.noPhotos}</p>
               <p className="text-sm">{t.people.uploadFirstPhoto}</p>
             </div>
-          )}
+          ) : null}
         </div>
 
         <button onClick={onClose} className="btn btn-primary w-full">

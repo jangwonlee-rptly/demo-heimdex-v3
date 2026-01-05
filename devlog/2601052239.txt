@@ -1,0 +1,219 @@
+[2026-01-05 22:39] Systematic Embedding Serialization Investigation & Fix
+File: devlog/2601052239.txt
+
+== What we worked on ==
+- Conducted comprehensive root-cause investigation of pgvector embedding serialization
+- Moved from whack-a-mole bug fixes (bugs #6, #7) to systematic solution
+- Investigated why embeddings return as JSON strings vs lists from Supabase/PostgREST
+- Implemented durable fix with reusable helper, validation, and comprehensive tests
+- Created detailed investigation report and minimal reproduction scripts
+
+== Changes made ==
+services/api/src/adapters/database.py:
+- Added deserialize_embedding() helper function (lines 27-69)
+- Updated _map_person_row() with helper + dimension validation (line 1920)
+- Updated _map_person_photo_row() with helper + validation (line 1952)
+- Updated get_ready_photo_embeddings() with helper + validation (line 1770)
+- Added json import and typing.Any
+
+services/worker/src/adapters/database.py:
+- Added deserialize_embedding() helper function (lines 15-57)
+- Updated get_ready_photo_embeddings() with helper + validation (line 957)
+- Added typing.Any
+
+tests/unit/test_embedding_deserialization.py (NEW):
+- 11 comprehensive tests for deserialize_embedding() helper
+- Tests cover None, list, string, invalid JSON, wrong types, edge cases
+- All tests passing
+
+tests/unit/test_person_mappers.py (NEW):
+- 9 integration tests for person/photo mappers
+- Tests string/list/None inputs, validation logging
+- All tests passing
+
+scripts/run_embedding_repro.sh (NEW):
+- Dockerized minimal reproduction script
+- Tests all query patterns (select('*'), select('col'), maybe_single())
+- Confirms consistent behavior (always returns JSON strings)
+
+scripts/repro_embedding_serialization.py (NEW):
+- Standalone Python reproduction script
+- Comprehensive test cases for investigation
+
+EMBEDDING_SERIALIZATION_INVESTIGATION.md (NEW):
+- 500+ line investigation report
+- Answers all 16 questions with evidence
+- Detailed technical analysis, reproduction instructions, fix rationale
+
+devlog/2601052132_embedding_serialization_systematic_fix.md (NEW):
+- Concise devlog entry summarizing investigation and fix
+- Documents root cause, fix characteristics, testing instructions
+
+== Problems encountered ==
+Previous Bug Pattern (Whack-a-mole):
+- Bug #6: Worker photo embeddings returned as strings (local fix applied)
+- Bug #7: API person embeddings returned as strings (local fix applied)
+- Pattern: Same issue, different locations, no systematic understanding
+- Risk: More locations might have same bug
+
+Root Cause Unknown:
+- Why do embeddings sometimes return as strings, sometimes as lists?
+- Is this a Supabase bug? PostgREST issue? Client library problem?
+- Is behavior inconsistent or are we missing something?
+- What's the durable fix that prevents future occurrences?
+
+Investigation Needed:
+- Exact Postgres column types (vector? jsonb? float8[]?)
+- pgvector extension version and behavior
+- Raw JSON returned by Supabase client in different scenarios
+- Differences between select patterns (select('*') vs select('col') vs maybe_single())
+- RPC function response format vs table selects
+- Client library versions and auto-deserialization behavior
+- Database storage format (native vector vs text)
+- Write path analysis (are we storing wrong format?)
+
+== How we tried to solve it ==
+Investigation Methodology:
+1. Examined database schema migrations (024_add_person_search.sql)
+   - Confirmed all columns use vector(512) type
+   - Verified pgvector extension enabled
+   - Checked HNSW indexes (proves native vector storage)
+
+2. Created minimal reproduction script
+   - Built scripts/run_embedding_repro.sh (dockerized)
+   - Tested all query patterns: select('*'), select('col'), maybe_single()
+   - Ran inside production API container with real Supabase connection
+
+3. Tested serialization behavior systematically
+   - persons.query_embedding: ALWAYS string (~6390 chars)
+   - person_reference_photos.embedding: ALWAYS string (~6390 chars)
+   - scene_person_embeddings.embedding: ALWAYS string (when present)
+   - No differences between query patterns
+   - RPC functions accept parsed arrays as input
+
+4. Verified client library versions
+   - supabase: 2.27.0
+   - postgrest: 2.27.0
+   - Confirmed no auto-deserialization in these versions
+
+5. Analyzed write paths
+   - Worker sends strings in pgvector text format: "[0.1,0.2,...]"
+   - PostgREST parses string -> native vector(512) in DB
+   - Postgres stores as efficient binary pgvector
+   - PostgREST reads native vector -> serializes to JSON string for transport
+   - Python client returns JSON string (no auto-parse)
+
+6. Evaluated alternative solutions
+   - Server-side casting to float8[]: rejected (breaks HNSW indexes, adds overhead)
+   - RPC returning embeddings: not needed (RPCs only return IDs/scores)
+   - Client-side deserialization: chosen (simple, efficient, consistent)
+
+== How we solved it / Current status ==
+Root Cause Identified:
+- Embeddings ALWAYS return as JSON strings from PostgREST (CONSISTENT behavior)
+- This is NOT a bug - it's how PostgREST serializes custom types for HTTP transport
+- Supabase/postgrest-py client does NOT auto-deserialize JSONB/pgvector columns
+- Perceived inconsistency was due to some code paths already having deserialization
+
+Systemic Fix Implemented:
+1. Created reusable deserialize_embedding() helper (in both API and worker adapters)
+   - Handles None -> None
+   - Handles list[float] -> list[float] (already deserialized)
+   - Handles str (JSON) -> list[float] (PostgREST format)
+   - Raises clear errors for unexpected types
+
+2. Updated all embedding access points (4 total)
+   - API: _map_person_row(), _map_person_photo_row(), get_ready_photo_embeddings()
+   - Worker: get_ready_photo_embeddings()
+
+3. Added validation at mapper boundaries
+   - Dimension check: must be 512 for CLIP embeddings
+   - Finite value check: no inf/nan values
+   - Logging: warnings for invalid data (no crashes, graceful degradation)
+
+4. Comprehensive test coverage (20 tests, all passing)
+   - test_embedding_deserialization.py: 11 tests for helper isolation
+   - test_person_mappers.py: 9 tests for mapper integration
+   - Covers None/list/string inputs, invalid JSON, wrong types, edge cases
+   - Validates dimension checking and logging behavior
+
+5. Created reproduction and documentation
+   - Dockerized reproduction script confirms consistent behavior
+   - Investigation report answers all 16 questions with evidence
+   - Devlog documents fix for future reference
+
+Testing Results:
+✓ All 20 unit tests passing
+✓ Reproduction script confirms consistent string serialization
+✓ No breaking changes (handles both string and list inputs)
+✓ Validation logs warnings without crashing
+
+Why This Fix is Durable:
+- Single source of truth (helper function, not copy-paste)
+- Defensive coding (handles multiple input formats)
+- Comprehensive tests (prevents regressions)
+- Clear documentation (explains WHY for future developers)
+- Validation catches malformed data early
+- No whack-a-mole: all embedding access points use same pattern
+
+== Next steps / TODOs ==
+Immediate (for deployment):
+- [ ] Rebuild API and worker services with updated code
+- [ ] Deploy to production/staging
+- [ ] Monitor logs for validation warnings (indicates malformed data)
+- [ ] Verify person search continues to work correctly
+
+Short-term code quality:
+- [ ] Consider extending helper to libs/ for reuse across services
+- [ ] Check if any other JSONB columns need similar deserialization
+- [ ] Add integration tests with real Supabase (if test environment available)
+- [ ] Document pgvector serialization behavior in project README
+
+Long-term architectural improvements:
+- [ ] Evaluate Pydantic validators for automatic deserialization at model level
+- [ ] Consider runtime type checking (beartype or similar) for extra safety
+- [ ] Add pre-commit hook to ensure new embedding access uses helper
+
+Documentation:
+- [x] Investigation report: EMBEDDING_SERIALIZATION_INVESTIGATION.md
+- [x] Devlog entries: 2601052132, 2601052239
+- [x] Reproduction scripts: run_embedding_repro.sh
+- [x] Test coverage: 20 passing tests
+
+== Impact ==
+Severity: Preventative (stops future bugs before they happen)
+Scope: All embedding operations (API + worker)
+User Impact: No user-visible changes (fix maintains existing behavior)
+Developer Impact: Future embedding code must use helper (enforced by tests)
+Code Quality: Moved from local fixes (bugs #6, #7) to systematic solution
+
+== Lessons learned ==
+1. Root cause investigation beats whack-a-mole bug fixes
+2. PostgREST serialization is deterministic (not a bug, it's the design)
+3. Reproduction scripts provide evidence and enable testing
+4. Reusable helpers prevent copy-paste bugs
+5. Validation at boundaries (mappers) catches malformed data early
+6. Comprehensive tests (20 cases) prevent regressions
+7. Documentation explains WHY for future developers
+8. Server-side casting often NOT the right solution (breaks indexes, adds overhead)
+
+== Related files ==
+Bug history:
+- BUGFIX_EMBEDDING_DESERIALIZATION.md (Bug #6 - worker photos)
+- BUGFIX_PERSON_QUERY_EMBEDDING.md (Bug #7 - API persons)
+- devlog/2601052104.txt (Bug #7 devlog)
+
+This investigation:
+- EMBEDDING_SERIALIZATION_INVESTIGATION.md (full technical report)
+- devlog/2601052132_embedding_serialization_systematic_fix.md (detailed devlog)
+- devlog/2601052239.txt (this file - concise session log)
+
+Code changes:
+- services/api/src/adapters/database.py (helper + 3 call sites)
+- services/worker/src/adapters/database.py (helper + 1 call site)
+- tests/unit/test_embedding_deserialization.py (11 tests)
+- tests/unit/test_person_mappers.py (9 tests)
+
+Scripts:
+- scripts/run_embedding_repro.sh (dockerized reproduction)
+- scripts/repro_embedding_serialization.py (standalone Python)
