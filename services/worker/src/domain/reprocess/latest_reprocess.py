@@ -416,13 +416,15 @@ class ReprocessRunner:
 
         for video in videos:
             try:
-                self._execute_video_steps(video.id, request, spec, progress)
+                video_id = UUID(video["id"])
+                self._execute_video_steps(video_id, request, spec, progress)
                 progress.videos_processed += 1
             except Exception as e:
-                logger.error(f"Failed to reprocess video {video.id}: {e}", exc_info=True)
+                video_id_str = str(video.get("id", "unknown"))
+                logger.error(f"Failed to reprocess video {video_id_str}: {e}", exc_info=True)
                 progress.videos_failed += 1
                 progress.errors.append({
-                    "video_id": str(video.id),
+                    "video_id": video_id_str,
                     "error": str(e),
                     "type": type(e).__name__,
                 })
@@ -447,13 +449,15 @@ class ReprocessRunner:
 
         for video in videos:
             try:
-                self._execute_video_steps(video.id, request, spec, progress)
+                video_id = UUID(video["id"])
+                self._execute_video_steps(video_id, request, spec, progress)
                 progress.videos_processed += 1
             except Exception as e:
-                logger.error(f"Failed to reprocess video {video.id}: {e}", exc_info=True)
+                video_id_str = str(video.get("id", "unknown"))
+                logger.error(f"Failed to reprocess video {video_id_str}: {e}", exc_info=True)
                 progress.videos_failed += 1
                 progress.errors.append({
-                    "video_id": str(video.id),
+                    "video_id": video_id_str,
                     "error": str(e),
                     "type": type(e).__name__,
                 })
@@ -515,7 +519,7 @@ class ReprocessRunner:
         for scene in scenes:
             try:
                 # Skip if embeddings exist and not forcing
-                if not request.force and scene.embedding_transcript is not None:
+                if not request.force and scene.get("embedding_transcript") is not None:
                     progress.scenes_skipped += 1
                     continue
 
@@ -524,7 +528,8 @@ class ReprocessRunner:
                 progress.scenes_processed += 1
 
             except Exception as e:
-                logger.error(f"Failed to regenerate text embeddings for scene {scene.id}: {e}")
+                scene_id = scene.get("id", "unknown")
+                logger.error(f"Failed to regenerate text embeddings for scene {scene_id}: {e}")
                 progress.scenes_failed += 1
 
     def _regenerate_scene_clip_embeddings(
@@ -543,14 +548,15 @@ class ReprocessRunner:
         for scene in scenes:
             try:
                 # Skip if embedding exists and not forcing
-                if not request.force and scene.embedding_visual_clip is not None:
+                if not request.force and scene.get("embedding_visual_clip") is not None:
                     continue
 
                 # Regenerate using SidecarBuilder
                 self.sidecar_builder._add_clip_embedding(scene)
 
             except Exception as e:
-                logger.error(f"Failed to regenerate CLIP embedding for scene {scene.id}: {e}")
+                scene_id = scene.get("id", "unknown")
+                logger.error(f"Failed to regenerate CLIP embedding for scene {scene_id}: {e}")
 
     def _regenerate_scene_person_embeddings(
         self,
@@ -567,16 +573,19 @@ class ReprocessRunner:
 
         for scene in scenes:
             try:
+                scene_id = UUID(scene["id"])
+
                 # Check if embedding exists
-                existing = self.db.get_scene_person_embeddings(scene.id)
+                existing = self.db.get_scene_person_embeddings(scene_id)
                 if not request.force and existing:
                     continue
 
                 # Generate thumbnail embedding
-                thumbnail_path = self.storage.get_scene_thumbnail_path(video_id, scene.scene_number)
+                scene_number = scene.get("scene_number", 0)
+                thumbnail_path = self.storage.get_scene_thumbnail_path(video_id, scene_number)
 
                 if not thumbnail_path:
-                    logger.warning(f"No thumbnail found for scene {scene.id}")
+                    logger.warning(f"No thumbnail found for scene {scene_id}")
                     continue
 
                 # Download thumbnail
@@ -587,14 +596,15 @@ class ReprocessRunner:
 
                 # Store in scene_person_embeddings
                 self.db.upsert_scene_person_embedding(
-                    scene_id=scene.id,
+                    scene_id=scene_id,
                     kind="thumbnail",
                     ordinal=0,
                     embedding=embedding,
                 )
 
             except Exception as e:
-                logger.error(f"Failed to regenerate scene person embedding for scene {scene.id}: {e}")
+                scene_id_str = scene.get("id", "unknown")
+                logger.error(f"Failed to regenerate scene person embedding for scene {scene_id_str}: {e}")
 
     def _regenerate_person_photo_embeddings(
         self,
@@ -613,25 +623,29 @@ class ReprocessRunner:
             return
 
         # Get all persons for owner
-        persons = self.db.get_persons_for_owner(video.owner_id)
+        owner_id = UUID(video["owner_id"])
+        persons = self.db.get_persons_for_owner(owner_id)
 
         for person in persons:
             # Get photos for person
-            photos = self.db.get_person_photos(person.id)
+            person_id = UUID(person["id"])
+            photos = self.db.get_person_photos(person_id)
             progress.person_photos_total += len(photos)
 
             for photo in photos:
                 try:
                     # Skip if embedding exists and not forcing
-                    if not request.force and photo.embedding is not None:
+                    if not request.force and photo.get("embedding") is not None:
                         continue
 
                     # Regenerate using PersonPhotoProcessor
-                    self.person_processor.process_photo(photo.id)
+                    photo_id = UUID(photo["id"])
+                    self.person_processor.process_photo(photo_id)
                     progress.person_photos_processed += 1
 
                 except Exception as e:
-                    logger.error(f"Failed to regenerate photo embedding for photo {photo.id}: {e}")
+                    photo_id_str = photo.get("id", "unknown")
+                    logger.error(f"Failed to regenerate photo embedding for photo {photo_id_str}: {e}")
                     progress.person_photos_failed += 1
 
     def _regenerate_person_query_embeddings(
@@ -647,20 +661,24 @@ class ReprocessRunner:
             return
 
         # Get all persons for owner
-        persons = self.db.get_persons_for_owner(video.owner_id)
+        owner_id = UUID(video["owner_id"])
+        persons = self.db.get_persons_for_owner(owner_id)
         progress.persons_total = len(persons)
 
         for person in persons:
             try:
+                person_id = UUID(person["id"])
+
                 # Get all READY photos
-                photos = self.db.get_person_photos_ready(person.id)
+                photos = self.db.get_person_photos_ready(person_id)
 
                 if not photos:
-                    logger.info(f"No READY photos for person {person.id}")
+                    logger.info(f"No READY photos for person {person_id}")
                     continue
 
                 # Compute mean embedding
-                embeddings = [photo.embedding for photo in photos if photo.embedding]
+                # Note: photos are already deserialized with embeddings by get_person_photos_ready
+                embeddings = [photo.get("embedding") for photo in photos if photo.get("embedding")]
 
                 if not embeddings:
                     continue
@@ -670,11 +688,12 @@ class ReprocessRunner:
                 mean_embedding = mean_embedding / np.linalg.norm(mean_embedding)
 
                 # Update person query_embedding
-                self.db.update_person_query_embedding(person.id, mean_embedding.tolist())
+                self.db.update_person_query_embedding(person_id, mean_embedding.tolist())
                 progress.persons_processed += 1
 
             except Exception as e:
-                logger.error(f"Failed to regenerate query embedding for person {person.id}: {e}")
+                person_id_str = person.get("id", "unknown")
+                logger.error(f"Failed to regenerate query embedding for person {person_id_str}: {e}")
                 progress.persons_failed += 1
 
     def _reindex_opensearch(
@@ -696,4 +715,5 @@ class ReprocessRunner:
                 self.db.index_scene_to_opensearch(scene)
 
             except Exception as e:
-                logger.error(f"Failed to reindex scene {scene.id} to OpenSearch: {e}")
+                scene_id = scene.get("id", "unknown")
+                logger.error(f"Failed to reindex scene {scene_id} to OpenSearch: {e}")
