@@ -19,8 +19,18 @@ import sys
 from pathlib import Path
 
 # Add libs to path for shared constants
-libs_path = Path(__file__).resolve().parents[5] / "libs"
-if str(libs_path) not in sys.path:
+# Try multiple paths to support both Docker and development environments
+# Docker: /app/src/domain/reprocess/latest_reprocess.py -> /app/libs
+# Dev: .../services/worker/src/domain/reprocess/latest_reprocess.py -> .../libs
+current_file = Path(__file__).resolve()
+
+# Try Docker path first (most common in production)
+libs_path = current_file.parents[3] / "libs"
+if not libs_path.exists():
+    # Fall back to development monorepo structure
+    libs_path = current_file.parents[5] / "libs"
+
+if libs_path.exists() and str(libs_path) not in sys.path:
     sys.path.insert(0, str(libs_path))
 
 from shared_constants import LATEST_EMBEDDING_SPEC_VERSION

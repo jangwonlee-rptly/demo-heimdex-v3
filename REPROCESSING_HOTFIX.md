@@ -1,14 +1,18 @@
-# Reprocessing Pipeline Hotfix - ModuleNotFoundError
+# Reprocessing Pipeline Hotfix - Import Errors
 
-## Issue
+## Issues
 
-When deploying to production, the admin reprocess endpoint failed with:
-
+### Issue 1: ModuleNotFoundError
 ```
 ModuleNotFoundError: No module named 'src.domain.reprocess'
 ```
+**Root Cause:** The API service was trying to import from worker's domain module.
 
-**Root Cause:** The API service was trying to import `LATEST_EMBEDDING_SPEC_VERSION` from `src.domain.reprocess`, which only exists in the worker service. The API and worker services have separate codebases and cannot import from each other's domain modules.
+### Issue 2: IndexError (after first fix)
+```
+IndexError: 4
+```
+**Root Cause:** Incorrect parent directory navigation - used `parents[4]` instead of `parents[2]` for API, and `parents[5]` instead of `parents[3]` for worker.
 
 ## Solution
 
@@ -22,15 +26,15 @@ Created a shared constants module in `libs/` that both services can access.
 
 2. **`services/worker/src/domain/reprocess/latest_reprocess.py`** (MODIFIED)
    - Changed to import `LATEST_EMBEDDING_SPEC_VERSION` from `shared_constants`
-   - Added path manipulation to include `libs/` directory
+   - Added path manipulation: `parents[3] / "libs"` (Docker path: `/app/src/domain/reprocess/latest_reprocess.py`)
 
 3. **`services/worker/src/domain/reprocess/__init__.py`** (MODIFIED)
    - Imports and re-exports `LATEST_EMBEDDING_SPEC_VERSION` from `shared_constants`
-   - Added path manipulation to include `libs/` directory
+   - Added path manipulation: `parents[3] / "libs"` (Docker path: `/app/src/domain/reprocess/__init__.py`)
 
 4. **`services/api/src/routes/admin.py`** (MODIFIED)
    - Changed import from `src.domain.reprocess` to `shared_constants`
-   - Added path manipulation to include `libs/` directory (lazy import inside endpoint)
+   - Added path manipulation: `parents[2] / "libs"` (Docker path: `/app/src/routes/admin.py`, lazy import inside endpoint)
 
 ### Why This Works
 
