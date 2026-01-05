@@ -130,6 +130,7 @@ export interface VideoScene {
   thumbnail_url?: string;
   similarity?: number; // Present only in search results (DEPRECATED: use display_score or score)
   display_score?: number; // Calibrated score for UI display (0..1, capped at ~0.97)
+  match_quality?: 'supported' | 'best_guess' | string; // Match quality hint for lookup queries
   created_at: string;
   // Sidecar v2 metadata fields
   sidecar_version?: string;

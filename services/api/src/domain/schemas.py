@@ -240,6 +240,15 @@ class VideoSceneResponse(BaseModel):
                     "Use this for displaying confidence % to users. Ranking still uses 'score'."
     )
 
+    # Match quality hint (for lookup queries with soft lexical gating)
+    match_quality: Optional[str] = Field(
+        None,
+        description="Match quality hint for UI labeling. Values: "
+                    "'supported' = lexical hits existed and this result is lexically supported (likely precise/exact); "
+                    "'best_guess' = no lexical hits found, results are embedding-based approximations. "
+                    "Only present when ENABLE_LOOKUP_SOFT_GATING=true and query is detected as 'lookup' intent."
+    )
+
     # Debug fields (only present when SEARCH_DEBUG=true)
     dense_score_raw: Optional[float] = Field(
         None,

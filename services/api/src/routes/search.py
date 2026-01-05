@@ -26,6 +26,7 @@ from ..domain.search.fusion import (
     ScoreType,
 )
 from ..domain.search.rerank import rerank_with_clip
+from ..domain.search.intent import detect_query_intent
 from ..domain.visual_router import get_visual_intent_router
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ def _run_multi_dense_search(
     opensearch_client: OpenSearchClient,
     settings: Settings,
     query_embedding_clip: Optional[list[float]] = None,
+    allowlist_scene_ids: Optional[set[str]] = None,
 ) -> tuple[dict[str, list[Candidate]], dict[str, int]]:
     """Run multi-channel dense + lexical search in parallel with timeouts.
 
@@ -141,6 +143,8 @@ def _run_multi_dense_search(
         video_id: Optional video ID filter.
         query: Original query text for BM25.
         query_embedding_clip: Optional CLIP text query embedding (512d) for visual channel.
+        allowlist_scene_ids: Optional set of scene IDs to filter results (for lookup soft gating).
+                            If provided, only candidates with scene_id in this set are kept.
 
     Returns:
         tuple: (channel_candidates dict, timing_ms dict)
@@ -244,6 +248,20 @@ def _run_multi_dense_search(
                 channel_candidates[channel_name] = []
                 timing_ms[channel_name] = 0
 
+    # Apply allowlist filtering if provided (for lookup soft gating)
+    if allowlist_scene_ids:
+        filtered_count_before = sum(len(cands) for cands in channel_candidates.values())
+        for channel_name, candidates in channel_candidates.items():
+            # Filter to only candidates in allowlist
+            filtered_candidates = [c for c in candidates if c.scene_id in allowlist_scene_ids]
+            channel_candidates[channel_name] = filtered_candidates
+        filtered_count_after = sum(len(cands) for cands in channel_candidates.values())
+        logger.info(
+            f"Lookup soft gating: Allowlist filtering applied - "
+            f"{filtered_count_before} -> {filtered_count_after} candidates "
+            f"(allowlist size={len(allowlist_scene_ids)})"
+        )
+
     return channel_candidates, timing_ms
 
 
@@ -252,6 +270,8 @@ def _hydrate_scenes(
     db: Database,
     include_debug: bool = False,
     display_score_map: Optional[dict[str, float]] = None,
+    match_quality: Optional[str] = None,
+    allowlist_ids: Optional[set[str]] = None,
 ) -> tuple[list[VideoSceneResponse], int]:
     """Fetch full scene data for fused results.
 
@@ -260,6 +280,10 @@ def _hydrate_scenes(
         include_debug: If True, include debug fields (raw/norm scores, ranks).
         display_score_map: Optional mapping of scene_id -> calibrated display_score.
                            If provided, adds display_score to each result.
+        match_quality: Optional match quality label for all results (e.g., 'supported', 'best_guess').
+                      Used for lookup soft gating to indicate result reliability.
+        allowlist_ids: Optional set of allowlisted scene IDs. If provided and match_quality is None,
+                      scenes in the allowlist get 'supported', others get None.
 
     Returns:
         tuple: (list of VideoSceneResponse objects, elapsed time in ms)
@@ -313,6 +337,11 @@ def _hydrate_scenes(
             "similarity": fused.score,
             # Display score (calibrated for UI, if enabled)
             "display_score": display_score_map.get(str(scene.id)) if display_score_map else None,
+            # Match quality (for lookup soft gating)
+            "match_quality": (
+                match_quality if match_quality
+                else ("supported" if allowlist_ids and str(scene.id) in allowlist_ids else None)
+            ),
         }
 
         # Add debug fields if enabled
@@ -403,9 +432,13 @@ async def search_scenes(
     user_profile = db.get_user_profile(user_id)
     user_language = user_profile.preferred_language if user_profile else "ko"
 
+    # Detect query intent for soft lexical gating (lookup vs semantic)
+    query_intent = detect_query_intent(request.query, language=user_language)
+
     logger.info(
         f"Search request from user {user_id} (language: {user_language}): "
         f"query='{request.query}', video_id={request.video_id}, limit={request.limit}, "
+        f"intent={query_intent}, "
         f"hybrid_enabled={settings.hybrid_search_enabled}, "
         f"fusion_method={fusion_method}, weights=({weight_dense:.2f}/{weight_lexical:.2f})"
     )
@@ -502,6 +535,60 @@ async def search_scenes(
     actual_score_type: ScoreType = ScoreType.MINMAX_MEAN  # Will be updated based on path taken
     multi_dense_timings: dict[str, int] = {}
 
+    # Soft lexical gating for lookup queries
+    lookup_allowlist_ids: set[str] = set()  # Scene IDs from lexical hits (for allowlisting)
+    lookup_used_allowlist: bool = False     # Whether we used allowlist filtering
+    lookup_fallback_used: bool = False      # Whether we fell back to dense best guess
+    lexical_hits_count: int = 0             # Number of lexical hits found
+    match_quality: Optional[str] = None     # Match quality label for response
+
+    # If soft gating enabled AND query is lookup intent, run lexical first to check hits
+    if (
+        settings.enable_lookup_soft_gating
+        and query_intent == "lookup"
+        and opensearch_client.is_available()
+    ):
+        logger.info(f"Lookup soft gating: Running early lexical check for query intent={query_intent}")
+
+        try:
+            lexical_start = time.time()
+            lexical_results = opensearch_client.bm25_search(
+                query=request.query,
+                user_id=user_id,
+                video_id=request.video_id,
+                limit=settings.candidate_k_lexical,
+            )
+            lexical_check_ms = int((time.time() - lexical_start) * 1000)
+            lexical_hits_count = len(lexical_results)
+
+            logger.info(
+                f"Lookup soft gating: Lexical check found {lexical_hits_count} hits "
+                f"(threshold={settings.lookup_lexical_min_hits}, elapsed_ms={lexical_check_ms})"
+            )
+
+            # If we have enough lexical hits, use allowlist mode
+            if lexical_hits_count >= settings.lookup_lexical_min_hits:
+                lookup_allowlist_ids = {str(sid) for sid, _, _ in lexical_results}
+                lookup_used_allowlist = True
+                match_quality = "supported"
+                logger.info(
+                    f"Lookup soft gating: ALLOWLIST MODE - Filtering dense channels to "
+                    f"{len(lookup_allowlist_ids)} lexically-supported scene IDs"
+                )
+            else:
+                # Fallback to dense best guess
+                lookup_fallback_used = True
+                match_quality = "best_guess"
+                logger.info(
+                    f"Lookup soft gating: FALLBACK MODE - No lexical hits, proceeding with "
+                    f"dense retrieval (results will be labeled as best_guess)"
+                )
+
+        except Exception as e:
+            logger.warning(f"Lookup soft gating: Lexical check failed, proceeding normally: {e}")
+            # On error, proceed normally (no gating)
+            pass
+
     if use_multi_dense:
         # Multi-dense mode: run N dense channels + lexical in parallel
         logger.debug("Running multi-dense search (transcript + visual + summary + lexical)")
@@ -576,6 +663,7 @@ async def search_scenes(
             opensearch_client,
             settings,
             query_embedding_clip=clip_for_retrieval,
+            allowlist_scene_ids=lookup_allowlist_ids if lookup_allowlist_ids else None,
         )
 
         # Check if we got any results at all
@@ -812,6 +900,8 @@ async def search_scenes(
         db,
         include_debug=settings.search_debug,
         display_score_map=display_score_map if display_score_map else None,
+        match_quality=match_quality if match_quality else None,
+        allowlist_ids=lookup_allowlist_ids if lookup_allowlist_ids else None,
     )
 
     # Calculate total latency
@@ -951,5 +1041,24 @@ async def search_scenes(
 
     # Reset OpenSearch availability cache for next request
     opensearch_client.reset_availability_cache()
+
+    # Structured logging for lookup soft gating metrics (for tuning)
+    if settings.enable_lookup_soft_gating and query_intent == "lookup":
+        # Get top scores for analysis
+        top_scores = scene_responses[:3] if scene_responses else []
+        top_display_scores = [s.display_score for s in top_scores if s.display_score is not None]
+        top_raw_scores = [s.score for s in top_scores if s.score is not None]
+
+        logger.info(
+            f"Lookup soft gating metrics: "
+            f"query='{request.query}', intent={query_intent}, "
+            f"lexical_hits={lexical_hits_count}, "
+            f"used_allowlist={lookup_used_allowlist}, "
+            f"fallback_used={lookup_fallback_used}, "
+            f"match_quality={match_quality}, "
+            f"results_count={len(scene_responses)}, "
+            f"top_raw_scores={top_raw_scores[:3]}, "
+            f"top_display_scores={top_display_scores[:3]}"
+        )
 
     return response

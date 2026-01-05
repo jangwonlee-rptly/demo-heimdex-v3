@@ -471,6 +471,11 @@ export default function SearchPage() {
                               {((scene.display_score ?? scene.similarity ?? 0) * 100).toFixed(0)}% {t.search.match}
                             </span>
                           )}
+                          {scene.match_quality === 'best_guess' && (
+                            <span className="badge badge-warning text-[10px] py-0.5" title={t.search.bestGuessHint || 'No exact matches found. Showing semantic approximations.'}>
+                              {t.search.bestGuess || 'Best guess'}
+                            </span>
+                          )}
                         </div>
                         {scene.video_filename && (
                           <div className="mb-1.5">

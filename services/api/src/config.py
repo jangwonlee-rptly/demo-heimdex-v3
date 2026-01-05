@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     display_score_max_cap: float = 0.97  # Maximum display score (typically 0.95-0.97)
     display_score_alpha: float = 3.0  # Exponential squashing parameter (2.0-5.0, higher = more aggressive)
 
+    # Lookup soft lexical gating (reduces false positives for brand/name queries)
+    # When enabled, detects lookup-like queries (brands, proper nouns) and prefers
+    # lexical matches when available. If lexical has no hits, falls back to dense
+    # retrieval but labels results as "best guess" in the UI.
+    enable_lookup_soft_gating: bool = False
+    lookup_lexical_min_hits: int = 1  # Minimum lexical hits to trigger allowlist mode
+    lookup_fallback_mode: str = "dense_best_guess"  # Future-proof: fallback strategy
+    lookup_label_mode: str = "api_field"  # How to communicate match quality (api_field | message)
+
     def validate_multi_dense_weights(self) -> tuple[bool, str, dict[str, float]]:
         """Validate and redistribute multi-dense channel weights.
 
