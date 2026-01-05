@@ -257,6 +257,7 @@ class ReprocessRunner:
         opensearch,
         openai,
         clip_embedder,
+        ffmpeg,
         settings,
     ):
         """
@@ -268,6 +269,7 @@ class ReprocessRunner:
             opensearch: OpenSearch client
             openai: OpenAI client
             clip_embedder: CLIP embedder adapter
+            ffmpeg: FFmpeg adapter
             settings: Settings object
         """
         from src.domain.sidecar_builder import SidecarBuilder
@@ -278,22 +280,24 @@ class ReprocessRunner:
         self.opensearch = opensearch
         self.openai = openai
         self.clip_embedder = clip_embedder
+        self.ffmpeg = ffmpeg
         self.settings = settings
 
-        # Create domain processors
+        # Create domain processors with correct parameters
+        # SidecarBuilder doesn't take db, only storage, ffmpeg, openai, clip_embedder, settings
         self.sidecar_builder = SidecarBuilder(
-            db=db,
             storage=storage,
+            ffmpeg=ffmpeg,
             openai=openai,
             clip_embedder=clip_embedder,
             settings=settings,
         )
 
+        # PersonPhotoProcessor takes db, storage, clip_embedder (no settings parameter)
         self.person_processor = PersonPhotoProcessor(
             db=db,
             storage=storage,
             clip_embedder=clip_embedder,
-            settings=settings,
         )
 
     def run_reprocess(self, request: ReprocessRequest) -> ReprocessProgress:

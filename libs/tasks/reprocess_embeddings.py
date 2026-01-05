@@ -60,6 +60,7 @@ def reprocess_embeddings(
         opensearch=ctx.opensearch,
         openai=ctx.openai,
         clip_embedder=ctx.clip_embedder,
+        ffmpeg=ctx.ffmpeg,
         settings=ctx.settings,
     )
 
