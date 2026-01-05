@@ -55,6 +55,7 @@ class TaskQueue:
             export_scene_as_short,
             process_highlight_export,
             process_reference_photo,
+            reprocess_embeddings,
         )
 
         # Store actor references (actors are now registered with the broker)
@@ -62,6 +63,7 @@ class TaskQueue:
         self._export_scene_as_short = export_scene_as_short
         self._process_highlight_export = process_highlight_export
         self._process_reference_photo = process_reference_photo
+        self._reprocess_embeddings = reprocess_embeddings
 
         self._initialized = True
         logger.info(f"TaskQueue initialized with Redis broker: {self._redis_url}")
@@ -166,6 +168,54 @@ class TaskQueue:
         self._process_reference_photo.send(str(photo_id))
 
         logger.info(f"Successfully enqueued photo_id={photo_id}")
+
+    def enqueue_reprocess_embeddings(
+        self,
+        scope: str,
+        video_id: Optional[UUID] = None,
+        owner_id: Optional[UUID] = None,
+        force: bool = False,
+        since: Optional[datetime] = None,
+    ) -> None:
+        """
+        Enqueue an embedding reprocessing task.
+
+        Uses the shared reprocess_embeddings actor to send a job to the worker.
+        This is the single entry point for all reprocessing operations (admin button, CLI, etc.)
+
+        Args:
+            scope: "video", "owner", or "all"
+            video_id: Optional video ID (required for scope="video")
+            owner_id: Optional owner ID (required for scope="owner")
+            force: Force regeneration even if embeddings exist
+            since: Optional datetime (only reprocess videos updated after this)
+
+        Returns:
+            None: This function does not return a value.
+        """
+        self._ensure_broker()
+
+        logger.info(
+            f"Enqueueing reprocess embeddings task: scope={scope}, "
+            f"video_id={video_id}, owner_id={owner_id}, force={force}"
+        )
+
+        # Convert parameters to strings for Dramatiq
+        video_id_str = str(video_id) if video_id else None
+        owner_id_str = str(owner_id) if owner_id else None
+        since_str = since.isoformat() if since else None
+
+        # Use the shared actor's .send() method to enqueue the job
+        # The function body never executes in the API context - only in the worker
+        self._reprocess_embeddings.send(
+            scope=scope,
+            video_id=video_id_str,
+            owner_id=owner_id_str,
+            force=force,
+            since=since_str,
+        )
+
+        logger.info(f"Successfully enqueued reprocess embeddings: scope={scope}")
 
     def close(self) -> None:
         """Close the Redis broker connection.

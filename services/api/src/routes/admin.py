@@ -30,6 +30,8 @@ from ..domain.admin_schemas import (
     EnhancedThroughputDataPoint,
     # Admin actions
     ReprocessAllResponse,
+    ReprocessEmbeddingsRequest,
+    ReprocessEmbeddingsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -541,3 +543,113 @@ async def reprocess_all_videos(
     except Exception as e:
         logger.error(f"Failed to execute reprocess-all: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to execute reprocess-all operation")
+
+
+@router.post("/reprocess-embeddings", response_model=ReprocessEmbeddingsResponse, status_code=202)
+async def reprocess_embeddings(
+    request: ReprocessEmbeddingsRequest,
+    admin: User = Depends(require_admin),
+    db: Database = Depends(get_db),
+    task_queue: TaskQueue = Depends(get_queue),
+):
+    """
+    Reprocess embeddings using the latest embedding methods.
+
+    This admin-only endpoint enqueues a job that will regenerate embeddings
+    using the current pipeline without deleting existing data. It's idempotent
+    and safe to re-run.
+
+    Supports three scopes:
+    - "all": Reprocess all videos in the system (admin only)
+    - "owner": Reprocess all videos for a specific owner_id
+    - "video": Reprocess a single video
+
+    The reprocessing uses the latest embedding spec version, which includes:
+    - Scene text embeddings (transcript, visual, summary channels)
+    - Scene CLIP visual embeddings
+    - Scene person embeddings (thumbnail-based)
+    - Person reference photo embeddings
+    - Person query embeddings (aggregated)
+    - OpenSearch reindexing
+
+    Query parameters:
+    - force: Force regeneration even if embeddings already exist
+
+    Returns status and estimated video count.
+
+    Requires admin privileges.
+    """
+    # Import the spec version constant
+    # This is a lazy import to avoid import-time dependencies
+    from src.domain.reprocess import LATEST_EMBEDDING_SPEC_VERSION
+
+    logger.info(
+        f"Admin {admin.user_id} triggered reprocess-embeddings: scope={request.scope}, "
+        f"video_id={request.video_id}, owner_id={request.owner_id}, force={request.force}"
+    )
+
+    try:
+        # Validate scope-specific requirements
+        video_id = None
+        owner_id = None
+        video_count = None
+
+        if request.scope == "video":
+            if not request.video_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="video_id is required when scope='video'"
+                )
+            video_id = UUID(request.video_id)
+            video_count = 1
+
+        elif request.scope == "owner":
+            if not request.owner_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="owner_id is required when scope='owner'"
+                )
+            owner_id = UUID(request.owner_id)
+            # Get video count for this owner
+            videos = db.get_videos_for_owner_reprocess(owner_id)
+            video_count = len(videos)
+
+        elif request.scope == "all":
+            # Get all videos count
+            videos = db.get_all_videos_for_reprocess()
+            video_count = len(videos)
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid scope: {request.scope}. Must be 'video', 'owner', or 'all'"
+            )
+
+        # Enqueue reprocessing job
+        task_queue.enqueue_reprocess_embeddings(
+            scope=request.scope,
+            video_id=video_id,
+            owner_id=owner_id,
+            force=request.force,
+        )
+
+        message = f"Queued embedding reprocessing for {video_count} video(s) using spec version {LATEST_EMBEDDING_SPEC_VERSION}"
+
+        logger.info(
+            f"Reprocess-embeddings queued: scope={request.scope}, "
+            f"video_count={video_count}, spec_version={LATEST_EMBEDDING_SPEC_VERSION}"
+        )
+
+        return ReprocessEmbeddingsResponse(
+            status="queued",
+            spec_version=LATEST_EMBEDDING_SPEC_VERSION,
+            scope=request.scope,
+            video_count=video_count,
+            message=message,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to execute reprocess-embeddings: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to execute reprocess-embeddings operation")

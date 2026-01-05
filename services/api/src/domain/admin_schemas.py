@@ -188,3 +188,22 @@ class ReprocessAllResponse(BaseModel):
     videos_queued: int = Field(..., description="Number of videos queued for reprocessing")
     videos_skipped: int = Field(..., description="Number of videos skipped (already processing)")
     message: str = Field(..., description="Human-readable status message")
+
+
+class ReprocessEmbeddingsRequest(BaseModel):
+    """Request for reprocessing embeddings with latest methods."""
+
+    scope: str = Field(..., description="Scope: 'video', 'owner', or 'all'")
+    video_id: Optional[str] = Field(None, description="Video ID (required for scope='video')")
+    owner_id: Optional[str] = Field(None, description="Owner ID (required for scope='owner')")
+    force: bool = Field(False, description="Force regeneration even if embeddings exist")
+
+
+class ReprocessEmbeddingsResponse(BaseModel):
+    """Response for reprocess embeddings operation."""
+
+    status: str = Field(..., description="Operation status ('queued')")
+    spec_version: str = Field(..., description="Embedding spec version being used")
+    scope: str = Field(..., description="Reprocessing scope")
+    video_count: Optional[int] = Field(None, description="Estimated number of videos to reprocess")
+    message: str = Field(..., description="Human-readable status message")

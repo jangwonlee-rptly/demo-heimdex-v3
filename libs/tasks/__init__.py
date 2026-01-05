@@ -3,10 +3,12 @@ from .video_processing import process_video
 from .scene_export import export_scene_as_short
 from .highlight_export import process_highlight_export
 from .reference_photo import process_reference_photo
+from .reprocess_embeddings import reprocess_embeddings
 
 __all__ = [
     "process_video",
     "export_scene_as_short",
     "process_highlight_export",
     "process_reference_photo",
+    "reprocess_embeddings",
 ]

@@ -1,0 +1,251 @@
+[2026-01-06 00:55] Frontend UX Improvements: People Navigation, Person Detection, Photo Thumbnails & Inline Highlighting
+File: devlog/2601060055.txt
+
+== What we worked on ==
+- Fixed People page navigation overlap (applied pt-20 matching dashboard/search)
+- Implemented "detect person anywhere in query" with robust word-boundary safety
+- Added implicit query transformation to backend-compatible format (person:<name>, <content>)
+- Implemented visual inline highlighting of detected person names in search input
+- Added photo thumbnail previews (instant local + persisted signed URLs)
+- Updated People UI with responsive thumbnail grid
+
+== Changes made ==
+services/frontend/src/app/people/page.tsx:
+- Fixed nav overlap: Applied pt-20 pb-12 padding + background effects (lines 120-127)
+- Added state for instant photo previews (uploadingPreviews) and signed URLs (signedUrls)
+- Implemented URL.createObjectURL() for instant preview during upload
+- Added useEffect to generate Supabase signed URLs for persisted photos (3600s expiry)
+- Added useEffect to cleanup object URLs on unmount (prevent memory leaks)
+- Replaced filename-only list with responsive 2-3 column thumbnail grid
+- Thumbnails show: status badge overlay, quality score, error messages, loading skeleton
+
+services/frontend/src/app/search/page.tsx:
+- Imported person detection utilities from @/lib/person-detection
+- Changed detectedPerson state type to PersonDetectionResult | null
+- Replaced start-only detection with detectPersonInQuery() (anywhere in query)
+- Updated handleSearch() to transform query via transformQueryForBackend()
+- Added dev-mode logging for query transformation debugging
+- Updated person detection badge UI to access detectedPerson.person.* fields
+- Added "auto-boost" hint badge when person ready
+- Implemented inline visual highlighting using overlay technique (lines 325-378):
+  - Conditional overlay layer (only when person detected)
+  - Input transparency only when person detected (fixed visibility bug)
+  - Highlight span with soft cyan bg + glow effect
+  - aria-hidden overlay, fully functional input
+
+services/frontend/src/lib/person-detection.ts (NEW - 164 lines):
+- PersonDetectionResult interface (person, matchStart, matchEnd, matchedText)
+- isWordBoundary() - checks whitespace, punctuation, CJK characters
+- isCJKChar() - detects Chinese/Japanese/Korean Unicode ranges (0x4e00-0x9fff, etc.)
+- isCJKName() - determines if name >50% CJK characters
+- findNameOccurrences() - finds all matches with boundary enforcement
+- detectPersonInQuery() - main detection (longest-match-first, leftmost priority)
+- transformQueryForBackend() - removes person name, prepends person:<name>,
+
+services/frontend/src/lib/i18n/translations.ts:
+- Added autoBoostHint EN: "Results will be automatically boosted"
+- Added autoBoostHint KO: "결과가 자동으로 향상됩니다"
+
+services/frontend/src/lib/i18n/types.ts:
+- Added autoBoostHint: string to people interface
+
+== Problems encountered ==
+Initial Implementation Issues:
+1. Person detection only worked at query start (not mid/end of query)
+2. People page header hidden under fixed nav (inconsistent with other pages)
+3. Photo list showed only filenames (no visual preview)
+4. No visual feedback during typing (detection only visible after badge appears)
+
+Inline Highlighting Bug:
+5. First implementation made input text always transparent
+6. User reported: "text is not visible anymore... can see text when highlighted"
+7. Root cause: overlay rendered for ALL queries, input always transparent
+8. Symptom: typing "이재명이 정책 발표하는 장면" showed invisible text
+
+== How we tried to solve it ==
+Person Detection Refactoring:
+- Extracted detection logic to dedicated utility module (person-detection.ts)
+- Implemented proper word-boundary checking for Latin names (spaces, punctuation)
+- Implemented CJK substring matching (no strict word boundaries needed)
+- Added longest-match-first strategy (sort by name.length descending)
+- Added leftmost-priority (if multiple people match, choose earliest occurrence)
+
+Example detection logic:
+  Input: "workout with j lee at gym"
+  Detection: finds "j lee" at index 13-18
+  Boundary check (Latin): space before + space after = VALID
+
+  Input: "jlee workout"
+  Detection: finds "jlee" candidate
+  Boundary check: no space before 'j', embedded in word = INVALID
+
+Query Transformation:
+- On submit, if person detected:
+  - Original: "workout with j lee at gym"
+  - Transformed: "person:J Lee, workout with at gym"
+- Backend receives person:<name>, format for optimal retrieval
+
+Photo Thumbnails:
+- Layer 1 (instant): URL.createObjectURL(file) during upload
+- Layer 2 (persisted): Supabase storage signed URLs (bucket: 'videos')
+- Caching: signedUrls state keyed by photo.id, regenerate on modal open
+- Cleanup: revoke object URLs on component unmount
+
+Inline Highlighting (Overlay Technique):
+Attempt 1 (BROKEN):
+- Overlay always rendered (even when no person detected)
+- Input always transparent (color: transparent)
+- Result: text invisible when no detection
+
+Attempt 2 (FIXED):
+- Overlay conditionally rendered (only when detectedPerson exists)
+- Input transparency conditional (only when detectedPerson exists)
+- Overlay text color: text-surface-200 (matches input theme)
+- Highlight span: bg-accent-cyan/20, text-accent-cyan, rounded, glow
+- Result: normal typing visible, highlight appears on detection
+
+== How we solved it / Current status ==
+Detection Algorithm (Latin vs CJK):
+Latin names ("J Lee"):
+  - Enforce strict word boundaries (\s, punctuation, start/end)
+  - Prevent false positives: "jlee" does NOT match "J Lee"
+  - Handle connectors: "with J Lee", "J Lee and", etc.
+
+CJK names ("이장원"):
+  - Allow continuous substring matching
+  - No spaces required between CJK characters
+  - Still use longest-match-first to avoid partial matches
+
+Inline Highlighting Architecture:
+```
+Container (position: relative)
+  ├─ Overlay Layer (detectedPerson only)
+  │  ├─ Text before match (plain)
+  │  ├─ Match span (highlighted)
+  │  └─ Text after match (plain)
+  │  Props: aria-hidden, pointer-events-none, position-absolute
+  │
+  └─ Input Layer
+     Props: transparent bg/color ONLY when detectedPerson
+            visible otherwise, caret-color always cyan
+```
+
+Query Transformation Examples:
+1. "j lee doing pushups" → "person:J Lee, doing pushups"
+2. "workout with j lee at gym" → "person:J Lee, workout with at gym"
+3. "이장원이 하는 푸쉬업" → "person:이장원, 이 하는 푸쉬업"
+4. "j lee" → "person:J Lee"
+5. "jlee workout" → "jlee workout" (no transformation, no detection)
+
+Photo Thumbnails UI:
+- Grid: 2 cols mobile, 3 cols desktop (aspect-square)
+- Status overlay: top-right badge (UPLOADED/PROCESSING/READY/FAILED)
+- Quality score: bottom-left badge (if READY)
+- Error message: full overlay with red text (if FAILED)
+- Loading: skeleton with spinner (during signed URL generation)
+
+Testing Status:
+✓ Docker build successful (13.6s, no type errors)
+✓ All TypeScript compilation passed
+✓ i18n types updated (autoBoostHint added)
+✓ Next.js production build completed
+✓ Visibility bug fixed (text visible by default)
+
+== Next steps / TODOs ==
+Immediate (ready for deployment):
+- [ ] Manual smoke test in browser:
+  - [ ] /people page header visible (not hidden)
+  - [ ] Upload photos → instant previews appear
+  - [ ] Photo thumbnails load after processing
+  - [ ] Search: type "workout with j lee" → highlight appears
+  - [ ] Search: type "jlee" → NO highlight (boundary rule)
+  - [ ] Cursor behavior normal during typing
+  - [ ] Copy/paste works correctly
+
+Short-term enhancements:
+- [ ] Add connector word stripping ("with", "and", "랑", "과" removal)
+- [ ] Add delete photo button in People UI
+- [ ] Add photo reordering (drag-to-reorder)
+- [ ] Implement client-side image resize before upload (512-768px max)
+- [ ] Add EXIF orientation handling (prevent rotated thumbnails)
+
+Long-term improvements:
+- [ ] Auto-refresh signed URLs before 1-hour expiry
+- [ ] Add 4-column tablet layout for photo grid
+- [ ] Support multiple person highlights (if backend supports it)
+- [ ] Add RTL language support for inline highlighting
+- [ ] Extract overlay technique to reusable component
+
+Configuration cleanup:
+- [ ] Move storage bucket name to env config (currently hardcoded 'videos')
+- [ ] Add configurable signed URL expiry time
+- [ ] Add configurable thumbnail dimensions
+
+== Impact ==
+Severity: User experience enhancement (major UX improvement)
+Scope: Search page + People page
+User Impact:
+  - Person detection now works anywhere in query (not just at start)
+  - Instant visual feedback via inline highlighting
+  - Photo management more intuitive with visual thumbnails
+  - Reduced cognitive load (implicit NLP, no special syntax)
+Developer Impact:
+  - Reusable person detection utilities (person-detection.ts)
+  - Clean overlay technique (reference for future features)
+  - Proper TypeScript types throughout
+
+Code Quality:
+  - Single source of truth for detection logic
+  - Boundary rules enforced consistently
+  - Proper memory cleanup (URL.revokeObjectURL)
+  - Accessibility preserved (aria-hidden overlay)
+  - No new dependencies added
+
+== Lessons learned ==
+1. Overlay technique for inline highlighting is clean but requires careful state management
+   - Conditional rendering prevents unnecessary DOM updates
+   - Transparency must be conditional (not always on)
+
+2. Word boundary detection differs by language script
+   - Latin: strict boundaries (spaces, punctuation)
+   - CJK: continuous substring matching (no space delimiters)
+   - Can't use \b regex for mixed-script text
+
+3. Visual feedback reinforces implicit NLP behavior
+   - Highlight shows "system understands" without changing user input
+   - Reduces anxiety about whether detection worked
+   - Premium feel with subtle glow effect
+
+4. Signed URLs need expiry management
+   - 1-hour expiry is reasonable for modal sessions
+   - Longer sessions may need refresh logic
+   - Cache by photo.id to avoid redundant generation
+
+5. TypeScript types catch i18n errors early
+   - Adding autoBoostHint to translations.ts without types.ts = build error
+   - Immediate feedback prevents production issues
+
+6. Docker-first workflow enables consistent testing
+   - No "works on my machine" issues
+   - Build errors caught before deployment
+   - Reproducible across environments
+
+== Related files ==
+This session:
+- devlog/2601060055.txt (this file)
+- services/frontend/src/app/people/page.tsx (nav fix + thumbnails)
+- services/frontend/src/app/search/page.tsx (detection + highlighting)
+- services/frontend/src/lib/person-detection.ts (NEW - detection utilities)
+- services/frontend/src/lib/i18n/translations.ts (autoBoostHint keys)
+- services/frontend/src/lib/i18n/types.ts (autoBoostHint type)
+
+Previous related work:
+- devlog/2601052239.txt (embedding serialization systematic fix)
+- services/api/src/adapters/database.py (deserialize_embedding helper)
+- services/worker/src/adapters/database.py (deserialize_embedding helper)
+
+Design patterns:
+- Overlay technique for inline text highlighting (search input)
+- Dual-layer preview strategy (instant local + persisted remote)
+- Longest-match-first with leftmost priority (person detection)
+- Conditional transparency for visual effects (overlay visibility)

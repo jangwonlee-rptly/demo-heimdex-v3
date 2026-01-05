@@ -79,11 +79,12 @@ def bootstrap(settings: Optional[Settings] = None) -> WorkerContext:
         export_scene_as_short,
         process_highlight_export,
         process_reference_photo,
+        reprocess_embeddings,
     )
 
     logger.info(
         "Imported actors: process_video, export_scene_as_short, "
-        "process_highlight_export, process_reference_photo"
+        "process_highlight_export, process_reference_photo, reprocess_embeddings"
     )
 
     # Create worker context

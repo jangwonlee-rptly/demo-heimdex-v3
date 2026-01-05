@@ -1173,6 +1173,34 @@ class Database:
             videos.append(Video(**row))
         return videos
 
+    def get_videos_for_owner_reprocess(self, owner_id: UUID) -> list[Video]:
+        """Get all videos for an owner for reprocessing.
+
+        Returns videos for a specific owner that are not currently being processed.
+
+        Args:
+            owner_id: The UUID of the owner
+
+        Returns:
+            list[Video]: A list of videos eligible for reprocessing for this owner.
+        """
+        response = (
+            self.client.table("videos")
+            .select("*")
+            .eq("owner_id", str(owner_id))
+            .neq("status", VideoStatus.PROCESSING.value)
+            .order("created_at", desc=False)
+            .execute()
+        )
+
+        videos = []
+        for row in response.data:
+            row["id"] = UUID(row["id"])
+            row["owner_id"] = UUID(row["owner_id"])
+            row["status"] = VideoStatus(row["status"])
+            videos.append(Video(**row))
+        return videos
+
     # Admin Metrics operations
     def get_admin_overview_metrics(self) -> dict:
         """Get overview metrics for admin dashboard.

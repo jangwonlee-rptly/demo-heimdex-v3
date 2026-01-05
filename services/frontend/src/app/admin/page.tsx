@@ -95,7 +95,7 @@ export default function AdminPage() {
   };
 
   const handleReprocessAll = async () => {
-    if (!confirm('Are you sure you want to reprocess ALL videos? This will clear existing data and re-queue all videos for processing.')) {
+    if (!confirm('Are you sure you want to reprocess ALL videos using the latest embedding methods? This will regenerate embeddings for all videos in the system. The process is idempotent and safe to re-run.')) {
       return;
     }
 
@@ -103,13 +103,25 @@ export default function AdminPage() {
     setReprocessResult(null);
 
     try {
-      const result = await apiRequest<{ status: string; videos_queued: number; videos_skipped: number; message: string }>(
-        '/admin/reprocess-all',
-        { method: 'POST' }
+      const result = await apiRequest<{
+        status: string;
+        spec_version: string;
+        scope: string;
+        video_count: number;
+        message: string
+      }>(
+        '/admin/reprocess-embeddings',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            scope: 'all',
+            force: false,
+          }),
+        }
       );
       setReprocessResult({
         success: true,
-        message: result.message,
+        message: `${result.message} (Spec: ${result.spec_version})`,
       });
     } catch (err) {
       setReprocessResult({
@@ -167,8 +179,9 @@ export default function AdminPage() {
                   ? 'bg-gray-400 cursor-not-allowed'
                   : 'bg-orange-600 hover:bg-orange-700'
               }`}
+              title="Regenerate embeddings using the latest embedding methods"
             >
-              {reprocessing ? 'Reprocessing...' : 'Reprocess All Videos'}
+              {reprocessing ? 'Reprocessing...' : 'Reprocess Embeddings (All)'}
             </button>
             {reprocessResult && (
               <div

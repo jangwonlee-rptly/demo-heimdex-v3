@@ -1062,6 +1062,184 @@ class Database:
 
         return response.data[0]
 
+    # ========================================================================
+    # REPROCESSING SUPPORT METHODS
+    # ========================================================================
+
+    def get_videos_for_reprocess(
+        self,
+        owner_id: Optional[UUID] = None,
+        since: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get videos for reprocessing.
+
+        Args:
+            owner_id: Optional filter by owner (None = all videos)
+            since: Optional filter by updated_at timestamp
+
+        Returns:
+            list[dict]: List of video records
+        """
+        query = self.client.table("videos").select("*")
+
+        if owner_id:
+            query = query.eq("owner_id", str(owner_id))
+
+        if since:
+            query = query.gte("updated_at", since.isoformat())
+
+        # Order by created_at to process older videos first
+        query = query.order("created_at", desc=False)
+
+        response = query.execute()
+        return response.data if response.data else []
+
+    def get_scenes_for_video(self, video_id: UUID) -> list[dict]:
+        """Get all scenes for a video.
+
+        Args:
+            video_id: UUID of the video
+
+        Returns:
+            list[dict]: List of scene records
+        """
+        response = (
+            self.client.table("video_scenes")
+            .select("*")
+            .eq("video_id", str(video_id))
+            .order("scene_number", desc=False)
+            .execute()
+        )
+        return response.data if response.data else []
+
+    def get_persons_for_owner(self, owner_id: UUID) -> list[dict]:
+        """Get all persons for an owner.
+
+        Args:
+            owner_id: UUID of the owner
+
+        Returns:
+            list[dict]: List of person records
+        """
+        response = (
+            self.client.table("persons")
+            .select("*")
+            .eq("owner_id", str(owner_id))
+            .execute()
+        )
+        return response.data if response.data else []
+
+    def get_person_photos(self, person_id: UUID) -> list[dict]:
+        """Get all photos for a person.
+
+        Args:
+            person_id: UUID of the person
+
+        Returns:
+            list[dict]: List of photo records
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("*")
+            .eq("person_id", str(person_id))
+            .execute()
+        )
+        return response.data if response.data else []
+
+    def get_person_photos_ready(self, person_id: UUID) -> list[dict]:
+        """Get all READY photos for a person.
+
+        Args:
+            person_id: UUID of the person
+
+        Returns:
+            list[dict]: List of READY photo records with embeddings
+        """
+        response = (
+            self.client.table("person_reference_photos")
+            .select("*")
+            .eq("person_id", str(person_id))
+            .eq("state", "READY")
+            .not_.is_("embedding", "null")
+            .execute()
+        )
+
+        if not response.data:
+            return []
+
+        # Deserialize embeddings
+        for photo in response.data:
+            if "embedding" in photo and photo["embedding"]:
+                photo["embedding"] = deserialize_embedding(photo["embedding"])
+
+        return response.data
+
+    def get_scene_person_embeddings(self, scene_id: UUID) -> list[dict]:
+        """Get all person embeddings for a scene.
+
+        Args:
+            scene_id: UUID of the scene
+
+        Returns:
+            list[dict]: List of embedding records
+        """
+        response = (
+            self.client.table("scene_person_embeddings")
+            .select("*")
+            .eq("scene_id", str(scene_id))
+            .execute()
+        )
+        return response.data if response.data else []
+
+    def upsert_scene_person_embedding(
+        self,
+        scene_id: UUID,
+        kind: str,
+        ordinal: int,
+        embedding: list[float],
+    ) -> None:
+        """Upsert scene person embedding (convenience wrapper).
+
+        This is a simpler interface for reprocessing that doesn't require
+        passing owner_id and video_id (we look them up).
+
+        Args:
+            scene_id: UUID of the scene
+            kind: Embedding kind (e.g., "thumbnail")
+            ordinal: Ordinal within kind
+            embedding: 512-dimensional CLIP embedding
+        """
+        # Get scene to find video_id and owner_id
+        scene = self.get_scene_by_id(scene_id)
+        if not scene:
+            raise ValueError(f"Scene {scene_id} not found")
+
+        video_id = UUID(scene["video_id"])
+        video = self.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found")
+
+        owner_id = UUID(video["owner_id"])
+
+        # Use existing method
+        self.create_scene_person_embedding(
+            owner_id=owner_id,
+            video_id=video_id,
+            scene_id=scene_id,
+            embedding=embedding,
+            kind=kind,
+            ordinal=ordinal,
+        )
+
+    def index_scene_to_opensearch(self, scene: dict) -> None:
+        """Index a scene to OpenSearch (wrapper for reprocessing).
+
+        Args:
+            scene: Scene record dict
+        """
+        if self.opensearch:
+            self._index_scene_to_opensearch(scene)
+
 
 # No global database instance - Database should be created via dependency injection
 # in create_worker_context() with explicit configuration parameters
