@@ -246,7 +246,7 @@ async def create_highlight_export(
     )
 
     # Enqueue worker task
-    task_queue.enqueue_highlight_export(job_id=job.id, db=db)
+    task_queue.enqueue_highlight_export(job_id=job.id)
 
     return HighlightExportEnqueueResponse(
         job_id=str(job.id),

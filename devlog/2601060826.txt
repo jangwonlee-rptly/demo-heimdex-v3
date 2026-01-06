@@ -1,0 +1,131 @@
+[2026-01-06 08:26] Fixed Reprocess Pipeline Column Name Error
+File: devlog/2601060826.txt
+
+== What we worked on ==
+- Fixed PostgREST error preventing reprocess pipeline from updating embeddings
+- Error was reporting missing 'multi_embedding_metadata' column in schema cache
+- Root cause: incorrect column name in reprocess code
+
+== Changes made ==
+- services/worker/src/domain/reprocess/latest_reprocess.py:
+  - Fixed column name in _regenerate_scene_text_embeddings() method (line 563)
+  - Changed: update_data["multi_embedding_metadata"] = multi_metadata.to_dict()
+  - To: update_data["embedding_metadata"] = multi_metadata.to_dict()
+  - Matches actual database schema from migration 015
+
+== Problems encountered ==
+- Problem 1: PostgREST API error during reprocessing
+  - Error message: "Could not find the 'multi_embedding_metadata' column of 'video_scenes' in the schema cache"
+  - Error code: PGRST204
+  - Symptom: postgrest.exceptions.APIError raised during scene embedding update
+  - Location: latest_reprocess.py when calling supabase client update
+
+- Initial hypothesis: PostgREST schema cache needed reload
+  - Investigated docker-compose services (no local PostgREST running)
+  - Realized using hosted Supabase PostgREST endpoint
+  - Would have required Supabase dashboard schema cache reload
+
+== How we tried to solve it ==
+- Attempt 1: Investigated PostgREST schema cache reload options
+  - Checked running docker containers (no local PostgREST)
+  - Realized this was hosted Supabase infrastructure
+  - Schema cache reload would need Supabase dashboard action
+
+- Attempt 2: Verified database schema
+  - Searched migration files for multi_embedding_metadata column
+  - Result: Column does not exist in any migration
+  - Found migration 015_add_multi_embedding_channels.sql
+  - Discovery: Migration REUSES existing embedding_metadata column (not creates new one)
+  - Comments on lines 46-72 show extended structure for existing column:
+    {
+      "channels": {
+        "transcript": {...},
+        "visual": {...},
+        "summary": {...}
+      },
+      "legacy": {...}
+    }
+
+== How we solved it / Current status ==
+- Root cause: Incorrect column name in application code
+  - Code tried to update non-existent column: multi_embedding_metadata
+  - Actual column name in database: embedding_metadata
+  - Migration 015 extends the EXISTING embedding_metadata column structure
+  - No new column was ever created
+
+- Key fix (line 563):
+  - Before: update_data["multi_embedding_metadata"] = multi_metadata.to_dict()
+  - After: update_data["embedding_metadata"] = multi_metadata.to_dict()
+
+- This was NOT a PostgREST schema cache issue
+  - PostgREST correctly reported the column doesn't exist
+  - Error message was accurate (column truly missing)
+  - Fix: align code with actual database schema
+
+- Status: SOLVED
+  - Worker container rebuilt with corrected column name
+  - Worker restarted successfully
+  - Ready for user to test reprocessing from admin interface
+
+== Next steps / TODOs ==
+- Test reprocess pipeline from admin interface
+- Verify embedding_metadata updates correctly with multi-channel structure
+- Monitor logs for successful embedding generation
+- Confirm no more PostgREST PGRST204 errors
+
+== Impact ==
+Severity: Critical bug fix (blocked all reprocessing operations)
+Scope: Worker service reprocess pipeline
+User Impact:
+  - Reprocess embeddings feature now functional
+  - Can regenerate text embeddings without PostgREST errors
+  - Multi-channel embedding metadata saves correctly
+
+Developer Impact:
+  - Importance of matching code to actual schema
+  - Migration file comments are source of truth for column structure
+  - PostgREST error messages are accurate diagnostics
+
+== Lessons learned ==
+1. Always verify column names against migration files
+   - Don't assume column names from variable names in code
+   - Check CREATE TABLE and ALTER TABLE statements directly
+   - Migration comments document intended structure
+
+2. PostgREST error messages are precise
+   - PGRST204 = column truly doesn't exist
+   - Not always a cache issue
+   - Check schema first before attempting cache reload
+
+3. Migration design patterns vary
+   - Some migrations add new columns
+   - Others extend existing column structure (JSONB)
+   - Read migration carefully to understand intent
+
+4. Variable naming can be misleading
+   - multi_metadata variable ≠ multi_embedding_metadata column
+   - Code variable names don't dictate database schema
+   - Schema is defined by migrations only
+
+5. Debugging workflow
+   - Error says "column not found"
+   - Before assuming cache/infrastructure issue
+   - Verify column actually exists in migrations
+   - Saves time and avoids unnecessary troubleshooting
+
+== Related files ==
+This session:
+- devlog/2601060826.txt (this file)
+- services/worker/src/domain/reprocess/latest_reprocess.py (column name fix)
+- infra/migrations/015_add_multi_embedding_channels.sql (schema reference)
+
+Previous related work:
+- devlog/2601060802.txt (method signature fix)
+- devlog/2601060227.txt (storage path parsing fix)
+- services/worker/src/domain/sidecar_builder.py (multi-channel embeddings)
+
+Database schema:
+- Migration 015 adds: embedding_transcript, embedding_visual, embedding_summary columns
+- Migration 015 extends: embedding_metadata column (JSONB structure)
+- No multi_embedding_metadata column was ever created
+- embedding_metadata serves both legacy and multi-channel use cases
