@@ -1,0 +1,112 @@
+[2026-01-07 15:16] Fixed Highlight Export API Method Signature Error
+File: devlog/2601071516.txt
+
+== What we worked on ==
+- Fixed TypeError preventing highlight export from working in production
+- Error occurred when user tried to export multiple scenes from deployed API service
+- Root cause: Invalid parameter passed to task queue enqueue method
+
+== Changes made ==
+- services/api/src/routes/highlights.py:
+  - Fixed enqueue_highlight_export() call (line 249)
+  - Changed: task_queue.enqueue_highlight_export(job_id=job.id, db=db)
+  - To: task_queue.enqueue_highlight_export(job_id=job.id)
+  - Removed invalid 'db' parameter that method doesn't accept
+
+== Problems encountered ==
+- Problem 1: TypeError during highlight export
+  - Error message: "TypeError: TaskQueue.enqueue_highlight_export() got an unexpected keyword argument 'db'"
+  - Location: services/api/src/routes/highlights.py:249
+  - Symptom: HTTP 500 Internal Server Error when POST /v1/highlights/export
+  - Context: User successfully created highlight export job (logged job_id f6a7917a-0f7c-460d-99a4-07a7594bca58)
+  - Failure: Occurred immediately after job creation, during task enqueue step
+
+== How we tried to solve it ==
+- Investigation approach:
+  - Read error traceback to identify exact failure point (line 249)
+  - Searched for enqueue_highlight_export method definition
+  - Found method signature in services/api/src/adapters/queue.py:128
+  - Compared method signature with call site
+
+- Discovery:
+  - Method signature: def enqueue_highlight_export(self, job_id: UUID) -> None:
+  - Only accepts one parameter: job_id
+  - No 'db' parameter in signature
+  - Call site was incorrectly passing db=db
+
+== How we solved it / Current status ==
+- Root cause: Method call signature mismatch
+  - enqueue_highlight_export() only needs job_id
+  - Worker task retrieves database connection independently
+  - Passing db parameter was incorrect and unnecessary
+
+- Key fix (line 249):
+  - Before: task_queue.enqueue_highlight_export(job_id=job.id, db=db)
+  - After: task_queue.enqueue_highlight_export(job_id=job.id)
+
+- Why this works:
+  - The worker task (process_highlight_export actor) creates its own database connection
+  - Job ID is sufficient to look up job details and scenes in worker
+  - API service only needs to enqueue the job, not pass database connection
+
+- Status: SOLVED
+  - API container rebuilt with corrected method call
+  - API service restarted successfully
+  - Ready for user to test highlight export from UI
+
+== Next steps / TODOs ==
+- Test highlight export from UI with multiple scenes
+- Verify job is enqueued successfully (check logs for "Enqueueing highlight export task")
+- Monitor worker logs for successful video processing
+- Confirm exported video is accessible from job status endpoint
+
+== Impact ==
+Severity: Critical bug fix (blocked all highlight export operations)
+Scope: API service highlight export endpoint
+User Impact:
+  - Highlight export feature now functional
+  - Can export multiple scenes to single video file
+  - No more 500 errors during export request
+
+Developer Impact:
+  - Importance of matching method signatures exactly
+  - Task queue methods have specific parameter requirements
+  - Worker tasks manage their own database connections
+
+== Lessons learned ==
+1. Always verify method signatures before calling
+   - Check parameter names and types
+   - Don't assume parameters from other similar methods
+   - IDE autocomplete would have caught this error
+
+2. Task queue pattern separates concerns
+   - API service enqueues job (minimal info: job_id)
+   - Worker retrieves full context independently
+   - No need to pass database connections across service boundaries
+
+3. Error messages are precise
+   - "got an unexpected keyword argument 'db'" directly identified the issue
+   - Stack trace pointed to exact line number
+   - No ambiguity in diagnosis
+
+4. Production errors reveal integration issues
+   - Code may compile/run locally but fail in production
+   - Method signature mismatches only caught at runtime (Python)
+   - Automated tests would catch this before deployment
+
+== Related files ==
+This session:
+- devlog/2601071516.txt (this file)
+- services/api/src/routes/highlights.py (method call fix)
+- services/api/src/adapters/queue.py (method signature reference)
+
+Previous related work:
+- devlog/2601060826.txt (reprocess pipeline column name fix)
+- devlog/2601060802.txt (reprocess method signature fix)
+- services/worker/src/domain/highlight_export.py (worker implementation)
+
+Architecture:
+- API service creates highlight_export_jobs record
+- API service enqueues Dramatiq task with job_id only
+- Worker task retrieves job details and processes video
+- Worker updates job status and stores result in Supabase storage

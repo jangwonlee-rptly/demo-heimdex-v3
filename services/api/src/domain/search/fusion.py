@@ -21,9 +21,12 @@ References:
 - Cormack, Clarke & Büttcher (2009) "Reciprocal Rank Fusion outperforms
   Condorcet and individual Rank Learning Methods"
 """
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ScoreType(str, Enum):
