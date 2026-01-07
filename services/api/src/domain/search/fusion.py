@@ -675,7 +675,7 @@ def multi_channel_minmax_fuse(
     # Handle edge case: no candidates at all
     all_candidates = [c for candidates in channel_candidates.values() for c in candidates]
     if not all_candidates:
-        return []
+        return [], None
 
     # Build per-channel normalized score lookups
     channel_norm_by_id: dict[str, dict[str, float]] = {}
@@ -746,7 +746,7 @@ def multi_channel_minmax_fuse(
         }
     else:
         # No active channels - return empty
-        return []
+        return [], None
 
     # Get all unique scene IDs across all channels
     all_ids = set()
@@ -889,7 +889,7 @@ def multi_channel_rrf_fuse(
     # Handle edge case
     all_candidates = [c for candidates in channel_candidates.values() for c in candidates]
     if not all_candidates:
-        return []
+        return [], None
 
     # Build per-channel lookup
     channel_by_id: dict[str, dict[str, Candidate]] = {}
