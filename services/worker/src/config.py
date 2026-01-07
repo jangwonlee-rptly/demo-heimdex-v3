@@ -82,7 +82,7 @@ class Settings(BaseSettings):
 
     # Channel-specific settings
     embedding_visual_include_tags: bool = True  # Include tags in visual channel embedding
-    embedding_summary_enabled: bool = False  # Enable summary channel (set to True when summary field is implemented)
+    embedding_summary_enabled: bool = True  # Enable summary channel (uses visual_summary field)
 
     # Embedding retry/backoff configuration (safety)
     embedding_max_retries: int = 3  # Max retry attempts per channel on transient failures

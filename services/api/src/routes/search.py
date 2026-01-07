@@ -1211,6 +1211,26 @@ async def search_scenes(
                     for ch, ranges in fusion_metadata.channel_score_ranges.items()
                 }
 
+    # Build debug info for candidate counts and effective weights
+    channel_candidate_counts_response = None
+    effective_weights_response = None
+
+    if settings.search_debug and use_multi_dense and 'channel_candidates' in locals():
+        # Map internal channel names to user-facing names
+        from ..domain.search.weights import map_to_user_keys
+
+        channel_candidate_counts_response = {
+            list(map_to_user_keys({ch: 1}).keys())[0] if ch.startswith("dense_") else ch: len(candidates)
+            for ch, candidates in channel_candidates.items()
+        }
+
+        # Get effective weights after redistribution (from fusion metadata if available)
+        if 'fusion_metadata' in locals() and fusion_metadata and hasattr(fusion_metadata, 'effective_weights'):
+            effective_weights_response = map_to_user_keys(fusion_metadata.effective_weights)
+        elif 'active_weights_fusion' in locals():
+            # Fallback: use the weights passed to fusion
+            effective_weights_response = map_to_user_keys(active_weights_fusion)
+
     # Build response
     response = SearchResponse(
         query=request.query,
@@ -1225,6 +1245,8 @@ async def search_scenes(
         channels_empty=channels_empty_response if settings.search_debug else None,
         channel_score_ranges=channel_score_ranges_response if settings.search_debug else None,
         visual_mode_used=visual_mode if settings.search_debug else None,
+        channel_candidate_counts=channel_candidate_counts_response,
+        effective_weights_after_redistribution=effective_weights_response,
     )
 
     # Log search with metadata

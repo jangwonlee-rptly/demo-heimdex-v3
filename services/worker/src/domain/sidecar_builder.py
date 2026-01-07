@@ -1042,7 +1042,7 @@ class SidecarBuilder:
                 transcript_segment=transcript_segment,
                 visual_description=visual_description or "",
                 tags=tags,
-                summary=None,  # Summary field not yet implemented
+                summary=visual_summary,  # Use visual_summary (UI-visible field)
                 scene_index=scene.index,
                 language=language,
             )

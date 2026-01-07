@@ -106,6 +106,8 @@ def needs_backfill(scene: dict, force_regenerate: bool) -> tuple[bool, str]:
     """
     Determine if a scene needs v3-multi embedding backfill.
 
+    Idempotent: Only regenerates missing channel embeddings unless force_regenerate=True.
+
     Args:
         scene: Scene dictionary from database
         force_regenerate: Force regeneration even if already present
@@ -113,25 +115,44 @@ def needs_backfill(scene: dict, force_regenerate: bool) -> tuple[bool, str]:
     Returns:
         Tuple of (needs_backfill: bool, reason: str)
     """
-    # Check if already has v3-multi embeddings
-    if not force_regenerate:
-        embedding_version = scene.get("embedding_version")
-        if embedding_version == "v3-multi":
-            # Check if at least one channel embedding exists
-            has_transcript = scene.get("embedding_transcript") is not None
-            has_visual = scene.get("embedding_visual") is not None
-            if has_transcript or has_visual:
-                return False, "already_has_v3_embeddings"
+    if force_regenerate:
+        return True, "force_regenerate"
 
     # Check if scene has any content to embed
     transcript = scene.get("transcript_segment") or ""
     visual_description = scene.get("visual_description") or ""
     tags = scene.get("tags") or []
+    visual_summary = scene.get("visual_summary") or ""
 
-    if not transcript.strip() and not visual_description.strip() and not tags:
+    has_any_content = (
+        transcript.strip()
+        or visual_description.strip()
+        or tags
+        or visual_summary.strip()
+    )
+
+    if not has_any_content:
         return False, "no_content_to_embed"
 
-    return True, "needs_v3_embeddings"
+    # Check if already has v3-multi embeddings for ALL channels with content
+    embedding_version = scene.get("embedding_version")
+    if embedding_version == "v3-multi":
+        # Check each channel: if content exists, embedding should exist
+        needs_update = False
+
+        if transcript.strip() and scene.get("embedding_transcript") is None:
+            needs_update = True  # Missing transcript embedding
+
+        if (visual_description.strip() or tags) and scene.get("embedding_visual") is None:
+            needs_update = True  # Missing visual embedding
+
+        if visual_summary.strip() and scene.get("embedding_summary") is None:
+            needs_update = True  # Missing summary embedding
+
+        if not needs_update:
+            return False, "already_has_all_v3_embeddings"
+
+    return True, "missing_embeddings"
 
 
 def backfill_scene(
@@ -173,6 +194,9 @@ def backfill_scene(
             )
             return True, "dry_run_success"
 
+        # Extract visual_summary for summary embedding
+        visual_summary = scene.get("visual_summary") or ""
+
         # Generate embeddings using sidecar_builder methods
         (
             embedding_transcript,
@@ -183,7 +207,7 @@ def backfill_scene(
             transcript_segment=transcript_segment,
             visual_description=visual_description,
             tags=tags,
-            summary=None,  # Summary not implemented yet
+            summary=visual_summary,  # Use visual_summary (UI-visible field)
             scene_index=scene_index,
             language=language,
         )

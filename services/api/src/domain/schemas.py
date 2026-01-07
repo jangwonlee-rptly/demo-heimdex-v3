@@ -411,6 +411,20 @@ class SearchResponse(BaseModel):
         description="Visual search mode used: 'recall' | 'rerank' | 'skip'"
     )
 
+    # Debug fields for candidate counts and effective weights
+    channel_candidate_counts: Optional[dict[str, int]] = Field(
+        None,
+        description="Number of candidates retrieved per channel before fusion. "
+                    "Example: {'transcript': 150, 'visual': 80, 'summary': 0, 'lexical': 200}. "
+                    "Debug only (shown when search_debug=True)."
+    )
+    effective_weights_after_redistribution: Optional[dict[str, float]] = Field(
+        None,
+        description="Final weights used after empty channel redistribution. "
+                    "Shows actual fusion weights applied (may differ from requested if channels were empty). "
+                    "Debug only (shown when search_debug=True)."
+    )
+
 
 class VideoDetailsResponse(BaseModel):
     """Schema for detailed video information with all scenes."""

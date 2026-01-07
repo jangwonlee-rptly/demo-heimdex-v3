@@ -1,0 +1,60 @@
+[2026-01-07 06:43] Fixed critical fusion bugs causing search failures
+File: devlog/2601070643.txt
+
+== What we worked on ==
+- Debugged and fixed multiple errors in the hybrid search fusion system
+- Addressed issues that occurred when users adjusted search weights
+- Fixed function return type inconsistencies in the fusion module
+
+== Changes made ==
+- services/api/src/domain/search/fusion.py:
+  - Added missing logger import and initialization (lines 24, 29)
+  - Fixed return type for multi_channel_minmax_fuse edge cases (lines 678, 749)
+  - Fixed return type for multi_channel_rrf_fuse edge case (line 892)
+
+== Problems encountered ==
+- Problem 1: NameError in fusion module
+  - Error: `NameError: name 'logger' is not defined` at line 719
+  - Occurred when adjusting search weights and performing video search
+  - The logger.warning() call existed but logger was never imported
+
+- Problem 2: ValueError during weight adjustment
+  - Error: `ValueError: not enough values to unpack (expected 2, got 0)`
+  - Occurred at search.py:801 when calling multi_channel_minmax_fuse()
+  - Triggered when setting one weight to maximum, causing other channels to become inactive
+  - Function was returning [] instead of ([], None) in edge cases
+
+== How we tried to solve it ==
+- Attempt 1: Located the error in fusion.py using grep to find logger.warning usage
+  - Command: grep -n "logger\.warning" to find usage at line 719
+  - Confirmed logger was never imported by checking imports section
+
+- Attempt 2: Traced through multi_channel_minmax_fuse function flow
+  - Read function signature showing return type: tuple[list[FusedCandidate], Optional[FusionMetadata]]
+  - Found early return statements that returned [] instead of ([], None)
+  - Searched for all similar patterns using grep "return \[\]$"
+
+== How we solved it / Current status ==
+- Solution 1 (Logger issue):
+  - Root cause: Missing import statement for logging module
+  - Fix: Added `import logging` and `logger = logging.getLogger(__name__)` at top of file
+  - Impact: Logger now properly initialized for warning messages when channels have flat score distributions
+
+- Solution 2 (Return type issue):
+  - Root cause: Function signature declares tuple return type, but edge cases returned single list
+  - Fix: Changed three return statements from `return []` to `return [], None`:
+    1. Line 678: No candidates at all edge case
+    2. Line 749: No active channels after weight redistribution
+    3. Line 892: Similar edge case in multi_channel_rrf_fuse function
+  - Impact: Proper tuple unpacking now works when extreme weight adjustments cause all channels to be excluded
+
+- Status: SOLVED
+  - Both errors are fixed
+  - Search should now handle extreme weight configurations gracefully
+  - Empty results properly return as ([], None) tuple for consistent unpacking
+
+== Next steps / TODOs ==
+- Test search with various weight configurations to verify fixes
+- Consider adding validation to prevent all channels from being excluded
+- Review other fusion functions for similar return type inconsistencies
+- Consider whether warning when all channels are excluded would be useful for users
