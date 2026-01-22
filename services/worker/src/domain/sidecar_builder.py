@@ -772,6 +772,11 @@ class SidecarBuilder:
             stats.keyframes_extracted = len(keyframe_paths)
 
             if keyframe_paths:
+                # Define thumbnail storage path early (needed regardless of frame quality)
+                thumbnail_storage_path = (
+                    f"{owner_id}/{video_id}/thumbnails/scene_{scene.index}.jpg"
+                )
+
                 # Rank frames by quality (best first)
                 ranked_frames = self.frame_quality_checker.rank_frames_by_quality(keyframe_paths)
                 stats.best_frame_found = len(ranked_frames) > 0
@@ -783,11 +788,6 @@ class SidecarBuilder:
                         self.settings.visual_semantics_max_frame_retries
                     )
                     best_frame_path = ranked_frames[0][0]  # Keep best for thumbnail
-
-                    # Define thumbnail storage path early for CLIP embedding
-                    thumbnail_storage_path = (
-                        f"{owner_id}/{video_id}/thumbnails/scene_{scene.index}.jpg"
-                    )
 
                     # Generate CLIP visual embedding from best frame (if enabled)
                     if self.settings.clip_enabled and best_frame_path:
@@ -935,7 +935,7 @@ class SidecarBuilder:
 
                 # Upload thumbnail (use best frame if available, otherwise first)
                 thumbnail_frame = best_frame_path or keyframe_paths[0]
-                # thumbnail_storage_path already defined above (line 773)
+                # thumbnail_storage_path already defined when keyframes were extracted
                 thumbnail_url = self.storage.upload_file(
                     thumbnail_frame,
                     thumbnail_storage_path,

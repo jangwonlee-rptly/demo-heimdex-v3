@@ -585,8 +585,7 @@ class VideoProcessor:
                         local_path = Path(tmpdir) / f"scene_{scene_index}.jpg"
 
                         # Download from storage
-                        thumbnail_data = self.storage.download_file(thumbnail_storage_path)
-                        local_path.write_bytes(thumbnail_data)
+                        self.storage.download_file(thumbnail_storage_path, local_path)
 
                         # Generate CLIP embedding
                         embedding, metadata = self.clip_embedder.create_visual_embedding(
