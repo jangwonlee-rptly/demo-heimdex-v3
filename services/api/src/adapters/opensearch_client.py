@@ -269,7 +269,7 @@ class OpenSearchClient:
                                 ],
                                 "type": "best_fields",
                                 "operator": "or",
-                                "minimum_should_match": "2<75%",
+                                "minimum_should_match": "2<50%",  # Relaxed: 50% of terms for 3+ word queries
                             }
                         }
                     ],
